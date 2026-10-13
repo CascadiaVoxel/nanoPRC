@@ -23,7 +23,7 @@
 #include <math.h>
 #include <string.h>
 
-//#define PRC_DEBUG_EARCLIP 1
+#define PRC_DEBUG_EARCLIP 1
 #define CHECK_SURFACE_PROJECTION 1
 
 #define CURVE_SAMPLES 32
@@ -1509,7 +1509,6 @@ prc_get_curve_sample_info(prc_context *ctx, prc_ptr_curve *ptr_curve,
     }
     return 0;
 }
-
 static int
 prc_sample_compressed_curve(prc_context *ctx, prc_data *data,
     prc_compressed_curve *curve, double curve_tolerance, prc_exact_geom_wire_data *wire_data)
@@ -1609,6 +1608,7 @@ prc_sample_compressed_curve(prc_context *ctx, prc_data *data,
     }
     return 0;
 }
+
 
 /* Sample curve but dealing with the compressed curve case. It would be
    nice to reduce replicated code with the non-compressed case */
@@ -5013,9 +5013,10 @@ prc_tessellate_compressed_face(prc_context *ctx, prc_data *data, uint32_t shell_
 {
     int code = 0;
     uint8_t free_ana = 0;
-    prc_surf_plane plane = { 0 };
     prc_topo_face synthetic_face = { 0 };
     prc_type_surf synthetic_surface = { 0 };
+
+    synthetic_face.is_synthetic = 1;
 
     switch (topo_face->tag)
     {
@@ -5432,7 +5433,6 @@ prc_tessellate_compressed_face(prc_context *ctx, prc_data *data, uint32_t shell_
 
         case PRC_HCG_AnaPlane:
         {
-            uint32_t j;
             prc_hcg_ana_plane hcg_ana_plane = topo_face->hcg_ana_plane;
             double x_unit_plane_normal = hcg_ana_plane.x;
             double y_unit_plane_normal = hcg_ana_plane.y;
@@ -5440,6 +5440,7 @@ prc_tessellate_compressed_face(prc_context *ctx, prc_data *data, uint32_t shell_
             prc_content_compressed_face *face = &hcg_ana_plane.face;
             uint8_t orientation_surface_with_shell = face->orientation_surface_with_shell;
             uint8_t is_an_iso_face = face->is_an_iso_face;
+            prc_surf_plane plane = { 0 };
 
             free_ana = 1;
             if (is_an_iso_face)
@@ -5448,7 +5449,7 @@ prc_tessellate_compressed_face(prc_context *ctx, prc_data *data, uint32_t shell_
                 return PRC_ERROR_PARSE;
             }
 
-            prc_content_compressed_ana_face *ana_face = &hcg_ana_plane.face.ana_face;
+            prc_content_compressed_ana_face *ana_face = &face->ana_face;
 
             /* Now we need to build a synthetic uncompressed plane with loops */
             uint32_t num_loop = 0;
@@ -5509,6 +5510,84 @@ prc_tessellate_compressed_face(prc_context *ctx, prc_data *data, uint32_t shell_
         case PRC_HCG_AnaTorus:
         {
             prc_hcg_ana_torus hcg_ana_torus = topo_face->hcg_ana_torus;
+            prc_vec3 torus_center, x_axis, y_axis;
+            prc_content_compressed_face *face = &hcg_ana_torus.face;
+            uint8_t orientation_surface_with_shell = face->orientation_surface_with_shell;
+            uint8_t is_an_iso_face = face->is_an_iso_face;
+            prc_surf_torus torus = { 0 };
+
+            free_ana = 1;
+            if (is_an_iso_face)
+            {
+                prc_error(ctx, PRC_ERROR_PARSE, "Analytic plane face is an ISO face in prc_tessellate_compressed_face\n");
+                return PRC_ERROR_PARSE;
+            }
+
+            prc_content_compressed_ana_face *ana_face = &face->ana_face;
+
+            /* Now we need to build a synthetic uncompressed torus with loops */
+            uint32_t num_loop = 0;
+
+            synthetic_surface.surface_type = PRC_TYPE_SURF_Torus;
+            torus.tag = PRC_TYPE_SURF_Torus;
+            synthetic_surface.surf_torus = &torus;
+            prc_get_compressed_point(ctx, &hcg_ana_torus.center, &torus_center);
+            prc_get_compressed_point(ctx, &hcg_ana_torus.x_axis, &x_axis);
+            y_axis = hcg_ana_torus.y_axis;
+
+            torus.major_radius = prc_vec_length(x_axis);
+            torus.minor_radius = prc_vec_length(y_axis);
+
+            /* The non-compressed one is centered at the origin */
+            if (prc_vec_length(torus_center) == 0)
+            {
+                torus.transform.behavior = 0;
+                torus.exact_geom_transform.is_identity = 1;
+            }
+            else
+            {
+                /* Need to translate the torus */
+                torus.has_transform = 1;
+                torus.transform.behavior = PRC_TRANSFORMATION_Translate;
+                torus.transform.translation = torus_center;
+            }
+
+            torus.parameterization.u_param_coeff_a = 1;
+            torus.parameterization.v_param_coeff_a = 1;
+            torus.parameterization.u_param_coeff_b = 0;
+            torus.parameterization.v_param_coeff_b = 0;
+            torus.parameterization.swap_uv = 0;
+            torus.parameterization.surface_domain.max_uv.x = 2 * PRC_PI;
+            torus.parameterization.surface_domain.max_uv.y = 2 * PRC_PI;
+            torus.parameterization.surface_domain.min_uv.x = 0;
+            torus.parameterization.surface_domain.min_uv.y = 0;
+
+            synthetic_face.has_tolerance = 0;
+            synthetic_face.surface_geometry.is_referenced = 0;
+            synthetic_face.surface_geometry.surface = synthetic_surface;
+            synthetic_face.is_trimmed = 0;
+            synthetic_face.tag = PRC_TYPE_TOPO_Face;
+            synthetic_face.index_of_outer_loop = -1;
+            synthetic_face.number_of_loops = ana_face->trim_loop_count;
+
+            /* Now the trimming data */
+            if (ana_face->is_trimmed)
+            {
+                code = prc_convert_ana_loops_to_std_loops(ctx, &synthetic_face, ana_face, compressed_data);
+                if (code < 0)
+                {
+                    prc_error(ctx, code, "Failed in prc_convert_ana_loops_to_std_loops\n");
+                    goto free_ana;
+                }
+            }
+
+            code = prc_tessellate_surface(ctx, data, shell_index, face_index, &synthetic_face,
+                face->orientation_surface_with_shell, NULL, NULL);
+            if (code < 0)
+            {
+                prc_error(ctx, code, "Failed in prc_tessellate_surface for PRC_HCG_AnaPlane\n");
+                goto free_ana;
+            }
             break;
         }
 
@@ -6116,6 +6195,26 @@ prc_assign_outer_loop_by_nesting(prc_context *ctx, uint32_t num_loops, prc_loop_
     return 0;
 }
 
+static double
+prc_uv_loop_max_x(const prc_loop_samples *loop)
+{
+    uint32_t count = (loop->num_samples > 0) ? (loop->num_samples - 1) : 0;
+    double max_x;
+    uint32_t i;
+
+    if (count == 0)
+        return 0.0;
+
+    max_x = loop->uv_samples[0].x;
+    for (i = 1; i < count; i++)
+    {
+        if (loop->uv_samples[i].x > max_x)
+            max_x = loop->uv_samples[i].x;
+    }
+
+    return max_x;
+}
+
 /* Here if we have multiple loops we may need to assign them as inner or outer
    loops. This seems very messy in the specification so this may need some work
    here */
@@ -6180,11 +6279,136 @@ prc_assign_loop_inner_outer(prc_context *ctx, prc_topo_face *topo_face, uint8_t 
             case PRC_TYPE_SURF_Cone:
             case PRC_TYPE_SURF_Cylinder:
             case PRC_TYPE_SURF_Sphere:
-            case PRC_TYPE_SURF_Torus:
             {
                 if (any_wraps)
                     break;
 
+                return prc_assign_outer_loop_by_nesting(ctx, num_loops, loop_samples);
+            }
+
+            /* For a Torus we could have concentric wrapping rings. We must
+               set the outer loop role to the larger bounding domain or greater
+               radius profile */
+            case PRC_TYPE_SURF_Torus:
+            {
+                if (any_wraps)
+                {
+                    uint32_t outer_idx = 0;
+                    uint32_t k;
+
+                    // 1. DYNAMIC AXIS DETECTION: Check if loops wrap V (1) or U (0)
+                    // We check loop 0 as a representative baseline sample
+                    uint8_t active_wrap_axis = (loop_samples[0].wind_v != 0) ? 1 : 0;
+
+                    if (active_wrap_axis == 0)
+                    {
+                        /* For U-wrapping loops: the loop closer to V = 0
+                            defines the wide outer radius footprint of the tube */
+                        double min_v_val = loop_samples[0].uv_samples[0].y;
+                        uint32_t s_count0 = (loop_samples[0].num_samples > 0) ? (loop_samples[0].num_samples - 1) : 0;
+
+                        for (uint32_t i = 1; i < s_count0; i++)
+                        {
+                            if (loop_samples[0].uv_samples[i].y < min_v_val)
+                                min_v_val = loop_samples[0].uv_samples[i].y;
+                        }
+
+                        for (k = 1; k < num_loops; k++)
+                        {
+                            uint32_t s_count_k = (loop_samples[k].num_samples > 0) ? (loop_samples[k].num_samples - 1) : 0;
+                            if (s_count_k == 0) continue;
+
+                            double test_min_v = loop_samples[k].uv_samples[0].y;
+                            for (uint32_t i = 1; i < s_count_k; i++)
+                            {
+                                if (loop_samples[k].uv_samples[i].y < test_min_v)
+                                    test_min_v = loop_samples[k].uv_samples[i].y;
+                            }
+
+                            if (test_min_v < min_v_val)
+                            {
+                                min_v_val = test_min_v;
+                                outer_idx = k;
+                            }
+                        }
+                    }
+                    else
+                    {
+                        /* For V-wrapping loops: the loop closer to U = 0
+                            defines the outer bounding base anchor */
+                        double min_u_val = loop_samples[0].uv_samples[0].x;
+                        uint32_t s_count0 = (loop_samples[0].num_samples > 0) ? (loop_samples[0].num_samples - 1) : 0;
+
+                        for (uint32_t i = 1; i < s_count0; i++)
+                        {
+                            if (loop_samples[0].uv_samples[i].x < min_u_val)
+                                min_u_val = loop_samples[0].uv_samples[i].x;
+                        }
+
+                        for (k = 1; k < num_loops; k++)
+                        {
+                            uint32_t s_count_k = (loop_samples[k].num_samples > 0) ? (loop_samples[k].num_samples - 1) : 0;
+                            if (s_count_k == 0) continue;
+
+                            double test_min_u = loop_samples[k].uv_samples[0].x;
+                            for (uint32_t i = 1; i < s_count_k; i++)
+                            {
+                                if (loop_samples[k].uv_samples[i].x < test_min_u)
+                                    test_min_u = loop_samples[k].uv_samples[i].x;
+                            }
+
+                            if (test_min_u < min_u_val)
+                            {
+                                min_u_val = test_min_u;
+                                outer_idx = k;
+                            }
+                        }
+                    }
+
+                    // 2. ASSIGN OUTER FLAG: Inform the tessellator who the base anchor is
+                    loop_samples[outer_idx].is_outer_loop = 1;
+
+                    // 3. ENFORCE OPPOSITE WINDING: Flip the inner loop if it runs parallel
+                    if (num_loops == 2)
+                    {
+                        uint32_t inner_idx = (outer_idx == 0) ? 1 : 0;
+                        int32_t wind_outer = active_wrap_axis ? loop_samples[outer_idx].wind_v : loop_samples[outer_idx].wind_u;
+                        int32_t wind_inner = active_wrap_axis ? loop_samples[inner_idx].wind_v : loop_samples[inner_idx].wind_u;
+
+                        if (wind_outer == wind_inner)
+                        {
+                            // 1. EXTRACT THE BODY COUNT: Isolate the unique vertices by ignoring the end slot
+                            uint32_t body_count = loop_samples[inner_idx].num_samples - 1;
+
+                            // 2. REVERSE THE 3D WORLD COORDINATE BODY ELEMENTS
+                            for (uint32_t i = 0; i < body_count / 2; i++)
+                            {
+                                prc_vec3 temp = loop_samples[inner_idx].samples[i];
+                                loop_samples[inner_idx].samples[i] = loop_samples[inner_idx].samples[body_count - 1 - i];
+                                loop_samples[inner_idx].samples[body_count - 1 - i] = temp;
+                            }
+
+                            // 3. REVERSE THE 2D UV PARAMETRIC COORDINATE BODY ELEMENTS
+                            for (uint32_t i = 0; i < body_count / 2; i++)
+                            {
+                                prc_vec2 temp = loop_samples[inner_idx].uv_samples[i];
+                                loop_samples[inner_idx].uv_samples[i] = loop_samples[inner_idx].uv_samples[body_count - 1 - i];
+                                loop_samples[inner_idx].uv_samples[body_count - 1 - i] = temp;
+                            }
+
+                            // 4. SYNCHRONIZE THE END CAP DUPLICATE: 
+                            // Re-copy the newly assigned start point back to the very last index slot
+                            uint32_t last_slot_idx = loop_samples[inner_idx].num_samples - 1;
+                            loop_samples[inner_idx].samples[last_slot_idx] = loop_samples[inner_idx].samples[0];
+                            loop_samples[inner_idx].uv_samples[last_slot_idx] = loop_samples[inner_idx].uv_samples[0];
+
+                            // 5. Update the winding states natively
+                            loop_samples[inner_idx].wind_u = -loop_samples[inner_idx].wind_u;
+                            loop_samples[inner_idx].wind_v = -loop_samples[inner_idx].wind_v;
+                        }
+                    }
+                    break;
+                }
                 return prc_assign_outer_loop_by_nesting(ctx, num_loops, loop_samples);
             }
 
@@ -6596,10 +6820,61 @@ prc_map_loops_to_surface(prc_context *ctx, prc_topo_face *topo_face, uint8_t ori
                 curr_loop->wind_u = prc_unwrap_angular_component(curr_loop->uv_samples, num_samples, 0);
                 curr_loop->wind_v = prc_unwrap_angular_component(curr_loop->uv_samples, num_samples, 1);
 
+                /*   Align multiple loops to the same 2*PI phase period box  */
+                if (k > 0)
+                {
+                    // Use a point midway through the loops to check the true phase box alignment
+                    uint32_t mid_idx = num_samples / 2;
+                    uint32_t base_mid_idx = loop_samples[0].num_samples / 2;
+
+                    // Find the midway U position of the base loop (Loop 0)
+                    double base_u_mid = loop_samples[0].uv_samples[base_mid_idx].x;
+
+                    // Find the midway U position of the current loop
+                    double current_u_mid = curr_loop->uv_samples[mid_idx].x;
+
+                    // Calculate how many full 2*PI phases separate the bodies of these loops
+                    double phase_diff = current_u_mid - base_u_mid;
+                    double shifts = lround(phase_diff / (2.0 * PRC_PI));
+
+                    if (shifts != 0)
+                    {
+                        // Shift all samples of this loop back into alignment with Loop 0
+                        for (j = 0; j < num_samples; j++)
+                        {
+                            curr_loop->uv_samples[j].x -= shifts * (2.0 * PRC_PI);
+                        }
+                    }
+                }
+
                 for (j = 0; j < num_samples; j++)
                 {
                     curr_loop->uv_samples[j].x = (curr_loop->uv_samples[j].x - torus->parameterization.u_param_coeff_b) / u_coeff_a;
                     curr_loop->uv_samples[j].y = (curr_loop->uv_samples[j].y - torus->parameterization.v_param_coeff_b) / v_coeff_a;
+
+#if CHECK_SURFACE_PROJECTION
+                    prc_vec3 test_xyz, test2_xyz;
+                    prc_surface_params torus_eval_params = { 0 };
+                    torus_eval_params.surface_params = (void *)torus;
+                    // Reconstruct the actual u and v that the surface expects after tuning:
+                    double eval_u = (curr_loop->uv_samples[j].x * u_coeff_a) + torus->parameterization.u_param_coeff_b;
+                    double eval_v = (curr_loop->uv_samples[j].y * v_coeff_a) + torus->parameterization.v_param_coeff_b;
+
+                    test_xyz = prc_evaluate_surf_torus(ctx, &torus_eval_params, eval_u, eval_v);
+
+                    /* We need to apply the transformation to curve xyz as test_xyz does have that applied it */
+                    if (torus->has_transform && !torus->exact_geom_transform.is_identity)
+                    {
+                        test2_xyz = prc_exact_geom_apply_transform(ctx, &torus->exact_geom_transform, curr_loop->samples[j]);
+                    }
+                    else
+                    {
+                        test2_xyz = curr_loop->samples[j];
+                    }
+                    fprintf(stderr, " PRC_TYPE_SURF_Torus projection: curve_sample=%u KnownSurface_xyz = (%.3f,%.3f,%.3f) Surface_uv_from_projection = (%.3f,%.3f) Surface_XYZ_from_uv = (%.3f,%.3f,%.3f) (delta=(%.3f,%.3f,%.3f)\n",
+                        j, test2_xyz.x, test2_xyz.y, test2_xyz.z, curr_loop->uv_samples[j].x, curr_loop->uv_samples[j].y,
+                        test_xyz.x, test_xyz.y, test_xyz.z, test2_xyz.x - test_xyz.x, test2_xyz.y - test_xyz.y, test2_xyz.z - test_xyz.z);
+#endif
                 }
             }
             break;
@@ -7385,26 +7660,6 @@ prc_uv_polygon_signed_area(uint32_t count, const prc_vec2 *pts)
     }
 
     return area;
-}
-
-static double
-prc_uv_loop_max_x(const prc_loop_samples *loop)
-{
-    uint32_t count = (loop->num_samples > 0) ? (loop->num_samples - 1) : 0;
-    double max_x;
-    uint32_t i;
-
-    if (count == 0)
-        return 0.0;
-
-    max_x = loop->uv_samples[0].x;
-    for (i = 1; i < count; i++)
-    {
-        if (loop->uv_samples[i].x > max_x)
-            max_x = loop->uv_samples[i].x;
-    }
-
-    return max_x;
 }
 
 /* Stores count points (dropping any closing duplicate is the caller's job)
@@ -9194,6 +9449,45 @@ prc_tessellate_trimmed_face(prc_context *ctx, prc_data *data, uint32_t shell_ind
     cell_count_u = grid.wrap_u ? grid.vertex_samples_u : (grid.vertex_samples_u - 1);
     cell_count_v = grid.wrap_v ? grid.vertex_samples_v : (grid.vertex_samples_v - 1);
 
+    /* True outer boundary for the fringe fill: the surface's own trim loop
+   (already flagged is_outer_loop) for the closed case, or a synthetic
+   seam-cut ring folding the wrapping loop(s) into an ordinary polygon */
+    if (has_wrapping_loop)
+    {
+        code = prc_build_periodic_outer_loop(ctx, num_loops, loop_samples, wrap_axis, sampling_info, &true_outer_loop);
+        if (code < 0)
+        {
+            prc_free(ctx, grid.uv);
+            prc_free(ctx, grid.verts);
+            prc_free(ctx, cell_inside);
+            prc_free(ctx, kept_triangles);
+            prc_free_loop_array(ctx, traced_loops, num_traced);
+            return code;
+        }
+    }
+    else
+    {
+        for (k = 0; k < num_loops; k++)
+        {
+            if (loop_samples[k].is_outer_loop)
+            {
+                true_outer_loop = loop_samples[k];
+                true_outer_index = k;
+                break;
+            }
+        }
+        if (true_outer_index == (uint32_t)-1)
+        {
+            prc_free(ctx, grid.uv);
+            prc_free(ctx, grid.verts);
+            prc_free(ctx, cell_inside);
+            prc_free(ctx, kept_triangles);
+            prc_free_loop_array(ctx, traced_loops, num_traced);
+            prc_error(ctx, PRC_ERROR_INTERNAL, "No outer loop found in prc_tessellate_trimmed_face\n");
+            return PRC_ERROR_INTERNAL;
+        }
+    }
+
     {
         uint8_t *cell_inside_raw = (uint8_t *)prc_calloc(ctx, cell_count_u * cell_count_v, sizeof(uint8_t));
 
@@ -9210,6 +9504,20 @@ prc_tessellate_trimmed_face(prc_context *ctx, prc_data *data, uint32_t shell_ind
             return PRC_ERROR_MEMORY;
         }
 
+        /* DYNAMIC BOUNDS CALCULATION: Extract active limits from unrolled seam shape */
+        double min_trim_u = true_outer_loop.uv_samples[0].x;
+        double max_trim_u = true_outer_loop.uv_samples[0].x;
+        double min_trim_v = true_outer_loop.uv_samples[0].y;
+        double max_trim_v = true_outer_loop.uv_samples[0].y;
+
+        for (k = 1; k < true_outer_loop.num_samples; k++)
+        {
+            if (true_outer_loop.uv_samples[k].x < min_trim_u) min_trim_u = true_outer_loop.uv_samples[k].x;
+            if (true_outer_loop.uv_samples[k].x > max_trim_u) max_trim_u = true_outer_loop.uv_samples[k].x;
+            if (true_outer_loop.uv_samples[k].y < min_trim_v) min_trim_v = true_outer_loop.uv_samples[k].y;
+            if (true_outer_loop.uv_samples[k].y > max_trim_v) max_trim_v = true_outer_loop.uv_samples[k].y;
+        }
+
         for (j = 0; j < cell_count_v; j++)
         {
             for (i = 0; i < cell_count_u; i++)
@@ -9217,16 +9525,43 @@ prc_tessellate_trimmed_face(prc_context *ctx, prc_data *data, uint32_t shell_ind
                 uint32_t vnext_i = (i + 1 == grid.vertex_samples_u && grid.wrap_u) ? 0 : (i + 1);
                 uint32_t vnext_j = (j + 1 == grid.vertex_samples_v && grid.wrap_v) ? 0 : (j + 1);
                 uint32_t i00 = j * grid.vertex_samples_u + i;
-                uint32_t i10 = j * grid.vertex_samples_u + vnext_i;
                 uint32_t i11 = vnext_j * grid.vertex_samples_u + vnext_i;
-                uint32_t i01 = vnext_j * grid.vertex_samples_u + i;
 
-                if (prc_point_inside_trimmed_region(num_loops, loop_samples, grid.uv[i00]) &&
-                    prc_point_inside_trimmed_region(num_loops, loop_samples, grid.uv[i10]) &&
-                    prc_point_inside_trimmed_region(num_loops, loop_samples, grid.uv[i11]) &&
-                    prc_point_inside_trimmed_region(num_loops, loop_samples, grid.uv[i01]))
+                if (has_wrapping_loop)
                 {
-                    cell_inside_raw[j * cell_count_u + i] = 1;
+                    if (wrap_axis == 0) // Loops wrap U-axis
+                    {
+                        double v0 = grid.uv[i00].y;
+                        double v1 = grid.uv[i11].y;
+
+                        // Restrict grid cell acceptance strictly between trimming limits
+                        if (v0 >= min_trim_v - 0.001 && v1 <= max_trim_v + 0.001)
+                        {
+                            cell_inside_raw[j * cell_count_u + i] = 1;
+                        }
+                    }
+                    else // Loops wrap V-axis
+                    {
+                        double u0 = grid.uv[i00].x;
+                        double u1 = grid.uv[i11].x;
+
+                        if (u0 >= min_trim_u - 0.001 && u1 <= max_trim_u + 0.001)
+                        {
+                            cell_inside_raw[j * cell_count_u + i] = 1;
+                        }
+                    }
+                }
+                else
+                {
+                    uint32_t i10 = j * grid.vertex_samples_u + vnext_i;
+                    uint32_t i01 = vnext_j * grid.vertex_samples_u + i;
+                    if (prc_point_inside_trimmed_region(num_loops, loop_samples, grid.uv[i00]) &&
+                        prc_point_inside_trimmed_region(num_loops, loop_samples, grid.uv[i10]) &&
+                        prc_point_inside_trimmed_region(num_loops, loop_samples, grid.uv[i11]) &&
+                        prc_point_inside_trimmed_region(num_loops, loop_samples, grid.uv[i01]))
+                    {
+                        cell_inside_raw[j * cell_count_u + i] = 1;
+                    }
                 }
             }
         }
@@ -9244,7 +9579,7 @@ prc_tessellate_trimmed_face(prc_context *ctx, prc_data *data, uint32_t shell_ind
            ear-clipping. The subdivision fringe doesn't trace an outline or
            ear-clip at all, so it needs none of this -- it just subdivides
            every cell the raw classification didn't already accept whole */
-        if (use_subdivision_fringe)
+        if (use_subdivision_fringe || has_wrapping_loop)
         {
             memcpy(cell_inside, cell_inside_raw, cell_count_u * cell_count_v * sizeof(uint8_t));
         }
@@ -9275,8 +9610,28 @@ prc_tessellate_trimmed_face(prc_context *ctx, prc_data *data, uint32_t shell_ind
                 }
             }
         }
+
+        {
+            uint32_t raw_inside_count = 0;
+            uint32_t eroded_inside_count = 0;
+            uint32_t k_cell;
+
+            for (k_cell = 0; k_cell < cell_count_u * cell_count_v; k_cell++) {
+                if (cell_inside_raw[k_cell]) raw_inside_count++;
+                if (cell_inside[k_cell]) eroded_inside_count++;
+            }
+
+            fprintf(stderr, "=== CRITICAL GRID MATRIX DIAGNOSTIC ===\n");
+            fprintf(stderr, "Grid Properties -> wrap_u: %u, wrap_v: %u\n", grid.wrap_u, grid.wrap_v);
+            fprintf(stderr, "Input Flags     -> has_wrapping_loop: %u, wrap_axis: %u\n", has_wrapping_loop, wrap_axis);
+            fprintf(stderr, "Cell Space Counts -> cell_count_u: %u, cell_count_v: %u\n", cell_count_u, cell_count_v);
+            fprintf(stderr, "Raw Classifications Kept: %u\n", raw_inside_count);
+            fprintf(stderr, "Eroded Classifications Kept (cell_inside): %u\n", eroded_inside_count);
+            fprintf(stderr, "========================================\n");
+        }
+
         prc_free(ctx, cell_inside_raw);
-    }
+    };
 
     for (j = 0; j < cell_count_v; j++)
     {
@@ -9317,7 +9672,7 @@ prc_tessellate_trimmed_face(prc_context *ctx, prc_data *data, uint32_t shell_ind
         }
     }
 
-    if (use_subdivision_fringe)
+    if (use_subdivision_fringe || has_wrapping_loop)
     {
         for (j = 0; j < cell_count_v; j++)
         {
@@ -9375,49 +9730,47 @@ prc_tessellate_trimmed_face(prc_context *ctx, prc_data *data, uint32_t shell_ind
         return code;
     }
 
-    /* True outer boundary for the fringe fill: the surface's own trim loop
-       (already flagged is_outer_loop) for the closed case, or a synthetic
-       seam-cut ring folding the wrapping loop(s) into an ordinary polygon */
     if (has_wrapping_loop)
     {
-        code = prc_build_periodic_outer_loop(ctx, num_loops, loop_samples, wrap_axis, sampling_info, &true_outer_loop);
-        if (code < 0)
-        {
-            prc_free(ctx, grid.uv);
-            prc_free(ctx, grid.verts);
-            prc_free(ctx, cell_inside);
-            prc_free(ctx, kept_triangles);
-            prc_free_loop_array(ctx, traced_loops, num_traced);
-            return code;
-        }
+        uint32_t count_a = (loop_samples[0].num_samples > 0) ? (loop_samples[0].num_samples - 1) : 0;
+        fprintf(stderr, "=== SEAM TRANSITION DIAGNOSTIC ===\n");
+        fprintf(stderr, "Outer Loop End [Index %u]: UV = (%.6f, %.6f)\n",
+            count_a - 1, true_outer_loop.uv_samples[count_a - 1].x, true_outer_loop.uv_samples[count_a - 1].y);
+        fprintf(stderr, "Seam Jump Start [Index %u]: UV = (%.6f, %.6f)\n",
+            count_a, true_outer_loop.uv_samples[count_a].x, true_outer_loop.uv_samples[count_a].y);
+        fprintf(stderr, "Inner Loop Start [Index %u]: UV = (%.6f, %.6f)\n",
+            count_a + 1, true_outer_loop.uv_samples[count_a + 1].x, true_outer_loop.uv_samples[count_a + 1].y);
+        fprintf(stderr, "==================================\n");
     }
-    else
+
+   /* ====================================================================
+   DIAGNOSTIC DEBUG: Print the unrolled polygon shape right before ear-clipping
+   ==================================================================== */
+    if (has_wrapping_loop)
     {
-        for (k = 0; k < num_loops; k++)
+        uint32_t sample_count = true_outer_loop.num_samples;
+        fprintf(stderr, "=== DIAGNOSTIC: UNROLLED PERIODIC OUTER LOOP POLYGON ===\n");
+        fprintf(stderr, "Total vertices in unrolled ring: %u\n", sample_count);
+        for (uint32_t d = 0; d < sample_count; d++)
         {
-            if (loop_samples[k].is_outer_loop)
-            {
-                true_outer_loop = loop_samples[k];
-                true_outer_index = k;
-                break;
-            }
+            fprintf(stderr, "  Vertex [%u]: UV = (%.6f, %.6f)\n",
+                d, true_outer_loop.uv_samples[d].x, true_outer_loop.uv_samples[d].y);
         }
-        if (true_outer_index == (uint32_t)-1)
-        {
-            prc_free(ctx, grid.uv);
-            prc_free(ctx, grid.verts);
-            prc_free(ctx, cell_inside);
-            prc_free(ctx, kept_triangles);
-            prc_free_loop_array(ctx, traced_loops, num_traced);
-            prc_error(ctx, PRC_ERROR_INTERNAL, "No outer loop found in prc_tessellate_trimmed_face\n");
-            return PRC_ERROR_INTERNAL;
-        }
+        fprintf(stderr, "========================================================\n");
     }
 
     /* Assemble: [true outer ring] + [traced kept-grid outline(s), holes] +
        [any additional non-wrapping loop not already the outer boundary,
        also a hole -- e.g. a drilled hole inside the trimmed region] */
-    combined_num_loops = 1 + num_traced;
+    if (has_wrapping_loop)
+    {
+        combined_num_loops = 1;
+    }
+    else
+    {
+        combined_num_loops = 1 + num_traced;
+    }
+
     for (k = 0; k < num_loops; k++)
     {
         if (loop_samples[k].wind_u != 0 || loop_samples[k].wind_v != 0 || k == true_outer_index ||
@@ -9443,11 +9796,14 @@ prc_tessellate_trimmed_face(prc_context *ctx, prc_data *data, uint32_t shell_ind
     combined_loops[0] = true_outer_loop;
     combined_loops[0].is_outer_loop = 1;
     idx = 1;
-    for (k = 0; k < num_traced; k++)
+    if (!has_wrapping_loop)
     {
-        combined_loops[idx] = traced_loops[k];
-        combined_loops[idx].is_outer_loop = 0;
-        idx++;
+        for (k = 0; k < num_traced; k++)
+        {
+            combined_loops[idx] = traced_loops[k];
+            combined_loops[idx].is_outer_loop = 0;
+            idx++;
+        }
     }
     for (k = 0; k < num_loops; k++)
     {
@@ -9474,6 +9830,11 @@ prc_tessellate_trimmed_face(prc_context *ctx, prc_data *data, uint32_t shell_ind
         prc_error(ctx, code, "Failed in prc_triangulate_planar_loops\n");
         return code;
     }
+
+    fprintf(stderr, "=== MESH CONFIGURATION VERIFICATION ===\n");
+    fprintf(stderr, "Number of kept regular grid triangles: %u\n", num_kept_triangles);
+    fprintf(stderr, "Number of boundary loop vertices for ear-clipping: %u\n", fringe_poly_num_verts);
+    fprintf(stderr, "========================================\n");
 
     tolerance = (sampling_info->precision_u > sampling_info->precision_v) ?
         sampling_info->precision_u : sampling_info->precision_v;

@@ -3145,6 +3145,7 @@ struct prc_topo_face_s
     int32_t index_of_outer_loop;
     prc_ptr_topology *loops;
     prc_unsigned_int neighbor_index;
+    uint8_t is_synthetic; /* Used so that we know when we created one from an ANA or ISO compressed object */
 };
 
 /* Table 189 */

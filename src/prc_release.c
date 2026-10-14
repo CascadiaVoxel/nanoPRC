@@ -2195,12 +2195,71 @@ prc_release_crv_ellipse(prc_context *ctx, prc_crv_ellipse *data)
     prc_release_content_curve(ctx, &data->curve_data);
 }
 
+/* Tables 322 to 327. Fraction and Combination nest further functions, so this
+   recurses. A tag of zero (an optional function that was never read) frees
+   nothing. */
+static void
+prc_release_math_fct_1d(prc_context *ctx, prc_math_fct_1d *data)
+{
+    uint32_t k;
+    if (data == NULL)
+        return;
+    switch (data->tag)
+    {
+    case PRC_TYPE_MATH_FCT_1D_Polynom:
+        if (data->polynom != NULL)
+        {
+            if (data->polynom->coefficients != NULL)
+                prc_free(ctx, data->polynom->coefficients);
+            prc_free(ctx, data->polynom);
+        }
+        break;
+    case PRC_TYPE_MATH_FCT_1D_Trigonometric:
+        if (data->trigonometric != NULL)
+            prc_free(ctx, data->trigonometric);
+        break;
+    case PRC_TYPE_MATH_FCT_1D_Fraction:
+        if (data->fraction != NULL)
+        {
+            prc_release_math_fct_1d(ctx, &data->fraction->numerator);
+            prc_release_math_fct_1d(ctx, &data->fraction->denominator);
+            prc_free(ctx, data->fraction);
+        }
+        break;
+    case PRC_TYPE_MATH_FCT_1D_ArctanCos:
+        if (data->arctancos != NULL)
+            prc_free(ctx, data->arctancos);
+        break;
+    case PRC_TYPE_MATH_FCT_1D_Combination:
+        if (data->combination != NULL)
+        {
+            if (data->combination->coefficients != NULL)
+            {
+                for (k = 0; k < data->combination->number_of_coefficients; k++)
+                {
+                    prc_release_math_fct_1d(ctx, &data->combination->coefficients[k].function);
+                }
+                prc_free(ctx, data->combination->coefficients);
+            }
+            prc_free(ctx, data->combination);
+        }
+        break;
+    default:
+        break;
+    }
+    data->tag = 0;
+    data->polynom = NULL;
+}
+
 static void
 prc_release_crv_equation(prc_context *ctx, prc_crv_equation *data)
 {
     if (data == NULL)
         return;
     prc_release_content_curve(ctx, &data->curve_data);
+    prc_release_math_fct_1d(ctx, &data->x_function);
+    prc_release_math_fct_1d(ctx, &data->y_function);
+    prc_release_math_fct_1d(ctx, &data->z_function);
 }
 
 static void
@@ -2209,6 +2268,12 @@ prc_release_crv_helix01(prc_context *ctx, prc_crv_helix01 *data)
     if (data == NULL)
         return;
     prc_release_content_curve(ctx, &data->curve_data);
+    if (data->type != 0)
+    {
+        prc_release_math_fct_1d(ctx, &data->type1_helix.radius_law);
+        prc_release_math_fct_1d(ctx, &data->type1_helix.z_law);
+        prc_release_math_fct_1d(ctx, &data->type1_helix.theta_law);
+    }
 }
 
 static void

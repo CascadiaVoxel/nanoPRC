@@ -3026,6 +3026,7 @@ struct prc_crv_transform_s
 {
     prc_unsigned_int tag;
     prc_content_curve curve_data;
+    uint8_t has_transform;
     prc_trans_3d transform;
     prc_exact_geom_transform exact_geom_transform;
     prc_parameterization parameterization;

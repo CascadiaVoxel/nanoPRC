@@ -2990,6 +2990,44 @@ prc_parse_crv_equation(prc_context *ctx, prc_bit_state *bit_state,
         return code;
     }
 
+    /* Table 264 declares the transform bare, with no has_transform Boolean.
+       It is gated here, as for the eight other curve types whose tables also
+       declare it bare (Ellipse, Hyperbola, Helix01 and the rest). One
+       third-party file carrying a CRV_Equation decides it: with the Boolean
+       its geometry section is consumed to the end, and read bare the parse
+       fails. */
+    data->has_transform = prc_bitread_bit(ctx, bit_state);
+    if (data->has_transform)
+    {
+        prc_parse_3d_transform(ctx, bit_state, &data->transform);
+    }
+    memset(&data->exact_geom_transform, 0, sizeof(data->exact_geom_transform));
+
+    data->parameterization = prc_parse_parameterization(ctx, bit_state);
+    data->interval = prc_parse_interval(ctx, bit_state);
+
+    code = prc_parse_math_fct_1d(ctx, bit_state, &data->x_function);
+    if (code < 0)
+    {
+        prc_error(ctx, code, "Parsing error in prc_parse_math_fct_1d for x_function\n");
+        return code;
+    }
+    code = prc_parse_math_fct_1d(ctx, bit_state, &data->y_function);
+    if (code < 0)
+    {
+        prc_error(ctx, code, "Parsing error in prc_parse_math_fct_1d for y_function\n");
+        return code;
+    }
+    if (data->curve_data.is_3d_flag)
+    {
+        code = prc_parse_math_fct_1d(ctx, bit_state, &data->z_function);
+        if (code < 0)
+        {
+            prc_error(ctx, code, "Parsing error in prc_parse_math_fct_1d for z_function\n");
+            return code;
+        }
+    }
+
     return 0;
 }
 

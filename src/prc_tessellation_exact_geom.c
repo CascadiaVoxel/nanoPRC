@@ -26,6 +26,8 @@
 #define PRC_DEBUG_EARCLIP 1
 #define CHECK_SURFACE_PROJECTION 1
 
+#define ANA_CURVE_SAMPLE 4
+
 #define CURVE_SAMPLES 32
 #define SURFACE_SAMPLES 32
 /* Temporarily loosened for debugging (was 1e-3) to get a coarser boundary
@@ -4881,7 +4883,7 @@ prc_build_iso_torus_from_circle_data(prc_context *ctx,
 static int
 prc_convert_comp_curve_to_coedge(prc_context *ctx,
     prc_ref_or_compressed_curve *comp_curve, prc_coedge_in_loop *coedge,
-    prc_nano_brep_compressed_data *compressed_data)
+    prc_nano_brep_compressed_data *compressed_data, prc_exact_geom_wire_data *wire_data)
 {
     int code;
     prc_compressed_curve *curve = NULL;
@@ -4929,12 +4931,30 @@ prc_convert_comp_curve_to_coedge(prc_context *ctx,
     topo_single_wire_compress->tag = PRC_TYPE_TOPO_SingleWireBodyCompress;
     topo_single_wire_compress->ref_or_compressed_curve = *comp_curve;
     topo_single_wire_compress->ref_data = compressed_data;
+
+    if (wire_data != NULL)
+    {
+        code = prc_get_compressed_curve(ctx, comp_curve, &curve, compressed_data);
+        if (code < 0)
+        {
+            prc_error(ctx, code, "Failed to get compressed curve in prc_convert_comp_curve_to_coedge\n");
+            return code;
+        }
+        code = prc_sample_compressed_curve(ctx, NULL, curve, 0, wire_data);
+        if (code < 0)
+        {
+            prc_error(ctx, code, "Failed to sample compressed curve in prc_convert_comp_curve_to_coedge\n");
+            return code;
+        }
+    }
+
     return 0;
 }
 
 static int
 prc_convert_compressed_loop_to_std_loop(prc_context *ctx, prc_ana_face_trim_loop *ana_loop,
-    prc_ptr_topology *synthetic_loop, prc_nano_brep_compressed_data *compressed_data)
+    prc_ptr_topology *synthetic_loop,
+    prc_nano_brep_compressed_data *compressed_data, prc_exact_geom_wire_data *wire_data)
 {
     int code;
     uint32_t j;
@@ -4968,7 +4988,8 @@ prc_convert_compressed_loop_to_std_loop(prc_context *ctx, prc_ana_face_trim_loop
     {
         prc_coedge_in_loop *coedge = &synthetic_loop->topo->topo_loop->coedge[j];
         prc_ref_or_compressed_curve *comp_curve = &ana_loop->trim_curves[j];
-        code = prc_convert_comp_curve_to_coedge(ctx, comp_curve, coedge, compressed_data);
+        code = prc_convert_comp_curve_to_coedge(ctx, comp_curve, coedge,
+            compressed_data, wire_data);
         if (code < 0)
         {
             prc_error(ctx, code, "Failed to convert ana loop to std loop in prc_convert_comp_curve_to_coedge\n");
@@ -4980,7 +5001,8 @@ prc_convert_compressed_loop_to_std_loop(prc_context *ctx, prc_ana_face_trim_loop
 
 static int
 prc_convert_ana_loops_to_std_loops(prc_context *ctx, prc_topo_face *synthetic_face,
-    prc_content_compressed_ana_face *ana_face, prc_nano_brep_compressed_data *compressed_data)
+    prc_content_compressed_ana_face *ana_face,
+    prc_nano_brep_compressed_data *compressed_data, prc_exact_geom_wire_data *wire_data)
 {
     int code;
     uint32_t j;
@@ -4995,10 +5017,23 @@ prc_convert_ana_loops_to_std_loops(prc_context *ctx, prc_topo_face *synthetic_fa
 
     for (j = 0; j < num_loops; ++j)
     {
-        code = prc_convert_compressed_loop_to_std_loop(ctx, &ana_face->trim_loop[j],
-            &synthetic_face->loops[j], compressed_data);
+        if (j == 0)
+        {
+            code = prc_convert_compressed_loop_to_std_loop(ctx, &ana_face->trim_loop[j],
+                &synthetic_face->loops[j], compressed_data, wire_data);
+        }
+        else
+        {
+            code = prc_convert_compressed_loop_to_std_loop(ctx, &ana_face->trim_loop[j],
+                &synthetic_face->loops[j], compressed_data, NULL);
+        }
         if (code < 0)
         {
+            if (wire_data->points != NULL)
+            {
+                prc_free(ctx, wire_data->points);
+                wire_data->points = NULL;
+            }
             prc_error(ctx, code, "Failed to convert ana loop to std loop in prc_convert_compressed_loop_to_std_loop\n");
             return code;
         }
@@ -5015,6 +5050,7 @@ prc_tessellate_compressed_face(prc_context *ctx, prc_data *data, uint32_t shell_
     uint8_t free_ana = 0;
     prc_topo_face synthetic_face = { 0 };
     prc_type_surf synthetic_surface = { 0 };
+    prc_exact_geom_wire_data wire_data = { 0 };
 
     synthetic_face.is_synthetic = 1;
 
@@ -5483,7 +5519,8 @@ prc_tessellate_compressed_face(prc_context *ctx, prc_data *data, uint32_t shell_
             /* Now the trimming data */
             if (ana_face->is_trimmed)
             {
-                code = prc_convert_ana_loops_to_std_loops(ctx, &synthetic_face, ana_face, compressed_data);
+                code = prc_convert_ana_loops_to_std_loops(ctx, &synthetic_face,
+                    ana_face, compressed_data, NULL);
                 if (code < 0)
                 {
                     prc_error(ctx, code, "Failed in prc_convert_ana_loops_to_std_loops\n");
@@ -5504,6 +5541,175 @@ prc_tessellate_compressed_face(prc_context *ctx, prc_data *data, uint32_t shell_
         case PRC_HCG_AnaCylinder:
         {
             prc_hcg_ana_cylinder hcg_ana_cylinder = topo_face->hcg_ana_cylinder;
+            prc_vec3 point_on_axis, cylinder_axis_direction;
+            prc_content_compressed_face *face = &hcg_ana_cylinder.face;
+            uint8_t orientation_surface_with_shell = face->orientation_surface_with_shell;
+            uint8_t is_an_iso_face = face->is_an_iso_face;
+            prc_surf_cylinder cylinder = { 0 };
+            prc_vec3 curve_points[ANA_CURVE_SAMPLE];
+
+            free_ana = 1;
+            if (is_an_iso_face)
+            {
+                prc_error(ctx, PRC_ERROR_PARSE, "Analytic plane face is an ISO face in prc_tessellate_compressed_face\n");
+                return PRC_ERROR_PARSE;
+            }
+
+            prc_content_compressed_ana_face *ana_face = &face->ana_face;
+
+            /* Now we need to build a synthetic uncompressed torus with loops */
+            uint32_t num_loop = 0;
+
+            synthetic_surface.surface_type = PRC_TYPE_SURF_Cylinder;
+            cylinder.tag = PRC_TYPE_SURF_Cylinder;
+            synthetic_surface.surf_cylinder = &cylinder;
+            prc_get_compressed_point(ctx, &hcg_ana_cylinder.point, &point_on_axis);
+            prc_get_compressed_point(ctx, &hcg_ana_cylinder.direction, &cylinder_axis_direction);
+
+            /* The radius of the cylinder is found by looking at the curves
+               and obtain an average radius when projected onto the axis */
+            cylinder.parameterization.u_param_coeff_a = 1;
+            cylinder.parameterization.v_param_coeff_a = 1;
+            cylinder.parameterization.u_param_coeff_b = 0;
+            cylinder.parameterization.v_param_coeff_b = 0;
+            cylinder.parameterization.swap_uv = 0;
+            cylinder.parameterization.surface_domain.max_uv.x = 2 * PRC_PI;
+            cylinder.parameterization.surface_domain.max_uv.y = 2 * PRC_PI;
+            cylinder.parameterization.surface_domain.min_uv.x = 0;
+            cylinder.parameterization.surface_domain.min_uv.y = 0;
+
+            synthetic_face.has_tolerance = 0;
+            synthetic_face.surface_geometry.is_referenced = 0;
+            synthetic_face.surface_geometry.surface = synthetic_surface;
+            synthetic_face.is_trimmed = 0;
+            synthetic_face.tag = PRC_TYPE_TOPO_Face;
+            synthetic_face.index_of_outer_loop = -1;
+            synthetic_face.number_of_loops = ana_face->trim_loop_count;
+
+            /* Compute translation and rotation data to get map from a z-axis
+               to the point_on_axis, cylinder_axis_direction form (this will be
+               encoded).  Also compute the inverse of this, so that we can apply
+               this to the curve data points to figure out the radius. We only sample
+               one curve at 4 points to get an idea of the radius. */
+            prc_vec3 z_basis = cylinder_axis_direction;
+
+            // Normalize z_basis
+            double len_z = sqrt(z_basis.x * z_basis.x + z_basis.y * z_basis.y + z_basis.z * z_basis.z);
+            if (len_z > 1e-9)
+            {
+                z_basis.x /= len_z;
+                z_basis.y /= len_z;
+                z_basis.z /= len_z;
+            }
+            else
+            {
+                z_basis.x = 0.0;
+                z_basis.y = 0.0;
+                z_basis.z = 1.0;
+            }
+
+            // Find an arbitrary non-collinear vector to cross with z_basis to find x_basis
+            prc_vec3 arb_vec = { 1.0, 0.0, 0.0 };
+            if (fabs(z_basis.x) > 0.9)
+            {
+                arb_vec.x = 0.0; arb_vec.y = 1.0; arb_vec.z = 0.0;
+            }
+
+            prc_vec3 x_basis, y_basis;
+            // x_basis = arb_vec X z_basis
+            prc_vec_cross(arb_vec, z_basis, &x_basis);
+            double len_x = sqrt(x_basis.x * x_basis.x + x_basis.y * x_basis.y + x_basis.z * x_basis.z);
+            x_basis.x /= len_x;
+            x_basis.y /= len_x;
+            x_basis.z /= len_x;
+
+            // y_basis = z_basis X x_basis
+            prc_vec_cross(z_basis, x_basis, &y_basis);
+
+            // Populate the standard geometry transformation matrix (Canonical -> Model Space)
+            // matching the matrix format expected by prc_exact_geom_set_transform
+            cylinder.has_transform = 1;
+            cylinder.transform.behavior = PRC_TRANSFORMATION_Translate | PRC_TRANSFORMATION_Rotate;
+            cylinder.transform.translation = point_on_axis;
+
+            // Populate the 2-vector rotation matrix array (X and Y basis vectors)
+            cylinder.transform.rotation[0] = x_basis;
+            cylinder.transform.rotation[1] = y_basis;
+            cylinder.transform.scale = 1.0;
+
+            /* =================================================================
+               POPULATE THE INVERSE TRANSFORMATION (Model Space -> Canonical Z-Axis)
+               ================================================================= */
+            prc_trans_3d inv_transform = { 0 };
+            inv_transform.behavior = PRC_TRANSFORMATION_Translate | PRC_TRANSFORMATION_Rotate;
+            inv_transform.scale = 1.0;
+
+            // 1. Inverse Rotation: Transpose of the forward rotation matrix
+            // Row 0 of R^T is Column 0 of R (which is x_basis)
+            inv_transform.rotation[0].x = x_basis.x;
+            inv_transform.rotation[0].y = y_basis.x;
+            inv_transform.rotation[0].z = z_basis.x;
+
+            // Row 1 of R^T is Column 1 of R (which is y_basis)
+            inv_transform.rotation[1].x = x_basis.y;
+            inv_transform.rotation[1].y = y_basis.y;
+            inv_transform.rotation[1].z = z_basis.y;
+
+            // 2. Inverse Translation: T_inv = -R^T * point_on_axis
+            inv_transform.translation.x = -(point_on_axis.x * x_basis.x + point_on_axis.y * x_basis.y + point_on_axis.z * x_basis.z);
+            inv_transform.translation.y = -(point_on_axis.x * x_basis.y + point_on_axis.y * y_basis.y + point_on_axis.z * y_basis.z);
+            inv_transform.translation.z = -(point_on_axis.x * x_basis.z + point_on_axis.y * y_basis.z + point_on_axis.z * z_basis.z);
+
+            // 3. Generate the 4x4 inverse matrix
+            prc_exact_geom_transform inv_geom_matrix;
+            prc_exact_geom_set_transform(ctx, &inv_geom_matrix, &inv_transform);
+
+            /* Now the trimming data */
+            if (ana_face->is_trimmed)
+            {
+                code = prc_convert_ana_loops_to_std_loops(ctx, &synthetic_face,
+                    ana_face, compressed_data, &wire_data);
+                if (code < 0)
+                {
+                    prc_error(ctx, code, "Failed in prc_convert_ana_loops_to_std_loops\n");
+                    goto free_ana;
+                }
+                /* Take the data in wire_data, apply the transform to get us to
+                   our cylinder at the z-axis and then compute the mean of the 
+                   sample distance from the z axis to get the radius */
+                uint32_t num_samples = wire_data.number_of_points;
+                double radius_sum = 0.0;
+                for (uint32_t i = 0; i < num_samples; ++i)
+                {
+                    prc_vec3 transformed_point;
+                    prc_vec3 point = wire_data.points[i];
+                    /* TODO Apply the inverse transform to get to the z-axis cylinder */
+
+                    // Apply inverse rotation
+                    transformed_point = prc_exact_geom_apply_transform(ctx, &inv_geom_matrix, point);
+
+                    /* The radius is the distance from the z-axis (x=0,y=0) */
+                    double radius = sqrt(transformed_point.x * transformed_point.x + transformed_point.y * transformed_point.y);
+                    radius_sum += radius;
+                }
+                cylinder.radius = radius_sum / num_samples;
+                prc_free(ctx, wire_data.points);
+            }
+            else
+            {
+                /* If the face is not trimmed, this is an error because the cylinder
+                  must have trimming data to define its extent. */
+                prc_error(ctx, PRC_ERROR_PARSE, "Analytic cylinder face is not trimmed in prc_tessellate_compressed_face\n");
+                return PRC_ERROR_PARSE;
+            }
+
+            code = prc_tessellate_surface(ctx, data, shell_index, face_index, &synthetic_face,
+                face->orientation_surface_with_shell, NULL, NULL);
+            if (code < 0)
+            {
+                prc_error(ctx, code, "Failed in prc_tessellate_surface for PRC_HCG_AnaPlane\n");
+                goto free_ana;
+            }
             break;
         }
 
@@ -5573,7 +5779,8 @@ prc_tessellate_compressed_face(prc_context *ctx, prc_data *data, uint32_t shell_
             /* Now the trimming data */
             if (ana_face->is_trimmed)
             {
-                code = prc_convert_ana_loops_to_std_loops(ctx, &synthetic_face, ana_face, compressed_data);
+                code = prc_convert_ana_loops_to_std_loops(ctx, &synthetic_face,
+                    ana_face, compressed_data, NULL);
                 if (code < 0)
                 {
                     prc_error(ctx, code, "Failed in prc_convert_ana_loops_to_std_loops\n");
@@ -5740,7 +5947,9 @@ prc_sample_coedge(prc_context *ctx, prc_nano_brep_ref_data *brep_ref_data,
         /* PRC_TYPE_TOPO_SingleWireBodyCompress comes when we are dealing with
            compressed bodies and we are trying to use the same code to tessellate
            as we use for the compressed case */
-        if (topo->tag == PRC_TYPE_TOPO_Edge || topo->tag == PRC_TYPE_TOPO_SingleWireBodyCompress)
+        if (topo->tag == PRC_TYPE_TOPO_Edge ||
+            topo->tag == PRC_TYPE_TOPO_SingleWireBodyCompress ||
+            topo->tag == PRC_TYPE_TOPO_WireEdge)
         {
             /* Now we finally get to the curve. However, the curve may be
                defined by two vertices */
@@ -6744,6 +6953,28 @@ prc_map_loops_to_surface(prc_context *ctx, prc_topo_face *topo_face, uint8_t ori
                 {
                     curr_loop->uv_samples[j].x = (curr_loop->uv_samples[j].x - cylinder->parameterization.u_param_coeff_b) / u_coeff_a;
                     curr_loop->uv_samples[j].y = (curr_loop->uv_samples[j].y - cylinder->parameterization.v_param_coeff_b) / v_coeff_a;
+#if CHECK_SURFACE_PROJECTION
+                    prc_vec3 test_xyz, test2_xyz;
+                    prc_surface_params cylinder_eval_params = { 0 };
+                    cylinder_eval_params.surface_params = (void *)cylinder;
+                    // Reconstruct the actual u and v that the surface expects after tuning:
+                    double eval_u = (curr_loop->uv_samples[j].x * u_coeff_a) + cylinder->parameterization.u_param_coeff_b;
+                    double eval_v = (curr_loop->uv_samples[j].y * v_coeff_a) + cylinder->parameterization.v_param_coeff_b;
+                    test_xyz = prc_evaluate_surf_cylinder(ctx, &cylinder_eval_params, eval_u, eval_v);
+
+                    /* We need to apply the transformation to curve xyz as test_xyz does have that applied it */
+                    if (cylinder->has_transform && !cylinder->exact_geom_transform.is_identity)
+                    {
+                        test2_xyz = prc_exact_geom_apply_transform(ctx, &cylinder->exact_geom_transform, curr_loop->samples[j]);
+                    }
+                    else
+                    {
+                        test2_xyz = curr_loop->samples[j];
+                    }
+                    fprintf(stderr, " PRC_TYPE_SURF_Cylinder projection: curve_sample=%u KnownSurface_xyz = (%.3f,%.3f,%.3f) Surface_uv_from_projection = (%.3f,%.3f) Surface_XYZ_from_uv = (%.3f,%.3f,%.3f) (delta=(%.3f,%.3f,%.3f)\n",
+                        j, test2_xyz.x, test2_xyz.y, test2_xyz.z, curr_loop->uv_samples[j].x, curr_loop->uv_samples[j].y,
+                        test_xyz.x, test_xyz.y, test_xyz.z, test2_xyz.x - test_xyz.x, test2_xyz.y - test_xyz.y, test2_xyz.z - test_xyz.z);
+#endif
                 }
             }
             break;
@@ -9110,10 +9341,8 @@ prc_build_periodic_outer_loop(prc_context *ctx, uint32_t num_loops, prc_loop_sam
            direction, material is on the left in the uv plane): travelling
            in the increasing direction on the wrap axis puts the interior on
            the side of the larger-valued domain edge on the other axis, and
-           vice versa. This relies on loop sample direction matching the
-           standard B-rep convention, which prc_sample_loop does not yet
-           fully guarantee (prc_sample_coedge ignores coedge_orientation) --
-           flip this rule if a real file comes out trimmed to the wrong side */
+           vice versa. Following the fix in #140, prc_sample_coedge honors
+           coedge_orientation, making this standard B-rep convention reliable. */
         edge_b = have_point_loop_edge ? point_loop_edge :
                  (wind > 0) ? (wrap_axis ? sampling_info->end_u : sampling_info->end_v)
                              : (wrap_axis ? sampling_info->start_u : sampling_info->start_v);
@@ -10314,6 +10543,58 @@ prc_tessellate_surface(prc_context *ctx, prc_data *data, uint32_t shell_index,
     }
     surf_params.loop_samples = loop_samples;
     surf_params.num_loops = num_loops;
+
+    /* --- SWAP_UV ROBUST UNIVERSAL BOUNDS FIX --- */
+    if (num_loops > 0 && loop_samples != NULL)
+    {
+        double min_trim_u = loop_samples[0].uv_samples[0].x;
+        double max_trim_u = loop_samples[0].uv_samples[0].x;
+        double min_trim_v = loop_samples[0].uv_samples[0].y;
+        double max_trim_v = loop_samples[0].uv_samples[0].y;
+
+        for (k = 0; k < num_loops; k++) {
+            if (loop_samples[k].is_point_loop) continue;
+
+            uint32_t s_count = loop_samples[k].num_samples;
+            for (j = 0; j < s_count; j++) {
+                if (loop_samples[k].uv_samples[j].x < min_trim_u) min_trim_u = loop_samples[k].uv_samples[j].x;
+                if (loop_samples[k].uv_samples[j].x > max_trim_u) max_trim_u = loop_samples[k].uv_samples[j].x;
+                if (loop_samples[k].uv_samples[j].y < min_trim_v) min_trim_v = loop_samples[k].uv_samples[j].y;
+                if (loop_samples[k].uv_samples[j].y > max_trim_v) max_trim_v = loop_samples[k].uv_samples[j].y;
+            }
+        }
+
+        /* Protect NURBS entirely as they cannot handle domain shifts */
+        if (surface.surface_type != PRC_TYPE_SURF_NURBS)
+        {
+            /* 1. Handle Grid U Axis:
+               If U is the linear axis (either natively or due to swap_uv),
+               force it safely to the trim extent boundaries. */
+            if (sampling_info.u_linear) {
+                sampling_info.start_u = min_trim_u;
+                sampling_info.end_u = max_trim_u;
+            }
+            /* Otherwise, if U is non-periodic, safely tighten the boundaries */
+            else if (!sampling_info.u_periodic) {
+                sampling_info.start_u = fmax(sampling_info.start_u, min_trim_u);
+                sampling_info.end_u = fmin(sampling_info.end_u, max_trim_u);
+            }
+
+            /* 2. Handle Grid V Axis:
+               If V is the linear axis (either natively or due to swap_uv),
+               force it safely to the trim extent boundaries. */
+            if (sampling_info.v_linear) {
+                sampling_info.start_v = min_trim_v;
+                sampling_info.end_v = max_trim_v;
+            }
+            /* Otherwise, if V is non-periodic, safely tighten the boundaries */
+            else if (!sampling_info.v_periodic) {
+                sampling_info.start_v = fmax(sampling_info.start_v, min_trim_v);
+                sampling_info.end_v = fmin(sampling_info.end_v, max_trim_v);
+            }
+        }
+    }
+    /* ------------------------------------------- */
 
     switch (surface.surface_type)
     {

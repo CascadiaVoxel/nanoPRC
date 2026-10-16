@@ -5947,7 +5947,9 @@ prc_sample_coedge(prc_context *ctx, prc_nano_brep_ref_data *brep_ref_data,
         /* PRC_TYPE_TOPO_SingleWireBodyCompress comes when we are dealing with
            compressed bodies and we are trying to use the same code to tessellate
            as we use for the compressed case */
-        if (topo->tag == PRC_TYPE_TOPO_Edge || topo->tag == PRC_TYPE_TOPO_SingleWireBodyCompress)
+        if (topo->tag == PRC_TYPE_TOPO_Edge ||
+            topo->tag == PRC_TYPE_TOPO_SingleWireBodyCompress ||
+            topo->tag == PRC_TYPE_TOPO_WireEdge)
         {
             /* Now we finally get to the curve. However, the curve may be
                defined by two vertices */
@@ -6951,6 +6953,28 @@ prc_map_loops_to_surface(prc_context *ctx, prc_topo_face *topo_face, uint8_t ori
                 {
                     curr_loop->uv_samples[j].x = (curr_loop->uv_samples[j].x - cylinder->parameterization.u_param_coeff_b) / u_coeff_a;
                     curr_loop->uv_samples[j].y = (curr_loop->uv_samples[j].y - cylinder->parameterization.v_param_coeff_b) / v_coeff_a;
+#if CHECK_SURFACE_PROJECTION
+                    prc_vec3 test_xyz, test2_xyz;
+                    prc_surface_params cylinder_eval_params = { 0 };
+                    cylinder_eval_params.surface_params = (void *)cylinder;
+                    // Reconstruct the actual u and v that the surface expects after tuning:
+                    double eval_u = (curr_loop->uv_samples[j].x * u_coeff_a) + cylinder->parameterization.u_param_coeff_b;
+                    double eval_v = (curr_loop->uv_samples[j].y * v_coeff_a) + cylinder->parameterization.v_param_coeff_b;
+                    test_xyz = prc_evaluate_surf_cylinder(ctx, &cylinder_eval_params, eval_u, eval_v);
+
+                    /* We need to apply the transformation to curve xyz as test_xyz does have that applied it */
+                    if (cylinder->has_transform && !cylinder->exact_geom_transform.is_identity)
+                    {
+                        test2_xyz = prc_exact_geom_apply_transform(ctx, &cylinder->exact_geom_transform, curr_loop->samples[j]);
+                    }
+                    else
+                    {
+                        test2_xyz = curr_loop->samples[j];
+                    }
+                    fprintf(stderr, " PRC_TYPE_SURF_Cylinder projection: curve_sample=%u KnownSurface_xyz = (%.3f,%.3f,%.3f) Surface_uv_from_projection = (%.3f,%.3f) Surface_XYZ_from_uv = (%.3f,%.3f,%.3f) (delta=(%.3f,%.3f,%.3f)\n",
+                        j, test2_xyz.x, test2_xyz.y, test2_xyz.z, curr_loop->uv_samples[j].x, curr_loop->uv_samples[j].y,
+                        test_xyz.x, test_xyz.y, test_xyz.z, test2_xyz.x - test_xyz.x, test2_xyz.y - test_xyz.y, test2_xyz.z - test_xyz.z);
+#endif
                 }
             }
             break;
@@ -9317,10 +9341,8 @@ prc_build_periodic_outer_loop(prc_context *ctx, uint32_t num_loops, prc_loop_sam
            direction, material is on the left in the uv plane): travelling
            in the increasing direction on the wrap axis puts the interior on
            the side of the larger-valued domain edge on the other axis, and
-           vice versa. This relies on loop sample direction matching the
-           standard B-rep convention, which prc_sample_loop does not yet
-           fully guarantee (prc_sample_coedge ignores coedge_orientation) --
-           flip this rule if a real file comes out trimmed to the wrong side */
+           vice versa. Following the fix in #140, prc_sample_coedge honors
+           coedge_orientation, making this standard B-rep convention reliable. */
         edge_b = have_point_loop_edge ? point_loop_edge :
                  (wind > 0) ? (wrap_axis ? sampling_info->end_u : sampling_info->end_v)
                              : (wrap_axis ? sampling_info->start_u : sampling_info->start_v);
@@ -10521,6 +10543,58 @@ prc_tessellate_surface(prc_context *ctx, prc_data *data, uint32_t shell_index,
     }
     surf_params.loop_samples = loop_samples;
     surf_params.num_loops = num_loops;
+
+    /* --- SWAP_UV ROBUST UNIVERSAL BOUNDS FIX --- */
+    if (num_loops > 0 && loop_samples != NULL)
+    {
+        double min_trim_u = loop_samples[0].uv_samples[0].x;
+        double max_trim_u = loop_samples[0].uv_samples[0].x;
+        double min_trim_v = loop_samples[0].uv_samples[0].y;
+        double max_trim_v = loop_samples[0].uv_samples[0].y;
+
+        for (k = 0; k < num_loops; k++) {
+            if (loop_samples[k].is_point_loop) continue;
+
+            uint32_t s_count = loop_samples[k].num_samples;
+            for (j = 0; j < s_count; j++) {
+                if (loop_samples[k].uv_samples[j].x < min_trim_u) min_trim_u = loop_samples[k].uv_samples[j].x;
+                if (loop_samples[k].uv_samples[j].x > max_trim_u) max_trim_u = loop_samples[k].uv_samples[j].x;
+                if (loop_samples[k].uv_samples[j].y < min_trim_v) min_trim_v = loop_samples[k].uv_samples[j].y;
+                if (loop_samples[k].uv_samples[j].y > max_trim_v) max_trim_v = loop_samples[k].uv_samples[j].y;
+            }
+        }
+
+        /* Protect NURBS entirely as they cannot handle domain shifts */
+        if (surface.surface_type != PRC_TYPE_SURF_NURBS)
+        {
+            /* 1. Handle Grid U Axis:
+               If U is the linear axis (either natively or due to swap_uv),
+               force it safely to the trim extent boundaries. */
+            if (sampling_info.u_linear) {
+                sampling_info.start_u = min_trim_u;
+                sampling_info.end_u = max_trim_u;
+            }
+            /* Otherwise, if U is non-periodic, safely tighten the boundaries */
+            else if (!sampling_info.u_periodic) {
+                sampling_info.start_u = fmax(sampling_info.start_u, min_trim_u);
+                sampling_info.end_u = fmin(sampling_info.end_u, max_trim_u);
+            }
+
+            /* 2. Handle Grid V Axis:
+               If V is the linear axis (either natively or due to swap_uv),
+               force it safely to the trim extent boundaries. */
+            if (sampling_info.v_linear) {
+                sampling_info.start_v = min_trim_v;
+                sampling_info.end_v = max_trim_v;
+            }
+            /* Otherwise, if V is non-periodic, safely tighten the boundaries */
+            else if (!sampling_info.v_periodic) {
+                sampling_info.start_v = fmax(sampling_info.start_v, min_trim_v);
+                sampling_info.end_v = fmin(sampling_info.end_v, max_trim_v);
+            }
+        }
+    }
+    /* ------------------------------------------- */
 
     switch (surface.surface_type)
     {

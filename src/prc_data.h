@@ -2139,6 +2139,9 @@ struct prc_compressed_texture_parameter_s
     float *texture_parameters;
 };
 
+/* uv_indices_prc_compressed_3d value for a corner that has no texture coordinate */
+#define PRC_COMPRESSED_TESS_NO_UV 0xFFFFFFFFu
+
 /* Table 174 PRC_TYPE_TESS_3D_COMPRESSED Description of the Data Written to the File */
 struct prc_tess_3d_compressed_s
 {
@@ -2189,7 +2192,15 @@ struct prc_tess_3d_compressed_s
     uint8_t *behaviors_array;
 
     /* Uncompressed data */
-    float *uv_coordinates_3d;  /* 2D texture coordinates */
+    float *uv_coordinates_3d;  /* 2D texture coordinates: the pool of (u,v) pairs
+                                  from texture_parameters, indexed by
+                                  uv_indices_prc_compressed_3d, NOT by vertex */
+    /* One entry per triangle corner, parallel to triangle_indices_prc_compressed_3d:
+       the (u,v) pair in uv_coordinates_3d for that corner, or
+       PRC_COMPRESSED_TESS_NO_UV for a corner of an untextured face. NULL when the
+       entity carries no texture, or when its texture block could not be decoded
+       consistently (the geometry is kept, untextured). */
+    uint32_t *uv_indices_prc_compressed_3d;
     int num_triangle_indices_prc_compressed_3d;
     uint32_t *triangle_indices_prc_compressed_3d;
     int num_normal_indices_prc_compressed_3d;

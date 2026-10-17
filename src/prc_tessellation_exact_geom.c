@@ -788,22 +788,41 @@ prc_evaluate_line_compressed(prc_context *ctx, void *params, double input)
 {
     prc_vec3 output = { 0 };
     prc_start_end_data *line = (prc_start_end_data *)params;
-    prc_vec3 point1;
-    prc_vec3 point2;
+    prc_vec3 point1 = { 0 };
+    prc_vec3 point2 = { 0 };
+    int code;
+
+    if (line->is_vertex)
+    {
+        /* TODO deal with the compressed vertices early on in the code
+           so that we are not doing it repeatedly during evaluation. I have
+           not seen these stored so it has not been a problem yet. */
+        code = prc_get_compressed_vertex(ctx, &line->start_vertex,
+            &point1, NULL);
+        if (code < 0)
+        {
+            prc_error(ctx, PRC_ERROR_INTERNAL, "Issue in prc_get_compressed_vertex\n");
+            return output;
+        }
+        point2 = point1;
+    }
+    else
+    {
+        point1 = line->start_point.point;
+        point2 = line->end_point.point;
+    }
 
     if (input <= 0)
     {
-        output = line->start_point.point;
+        output = point1;
         return output;
     }
     if (input >= 1)
     {
-        output = line->end_point.point;
+        output = point2;
         return output;
     }
 
-    point1 = line->start_point.point;
-    point2 = line->start_point.point;
     prc_vec_scale(1 - input, &point1);
     prc_vec_scale(input, &point2);
     prc_vec_add(point1, point2, &output);
@@ -1513,7 +1532,8 @@ prc_get_curve_sample_info(prc_context *ctx, prc_ptr_curve *ptr_curve,
 }
 static int
 prc_sample_compressed_curve(prc_context *ctx, prc_data *data,
-    prc_compressed_curve *curve, double curve_tolerance, prc_exact_geom_wire_data *wire_data)
+    prc_compressed_curve *curve, double curve_tolerance, prc_exact_geom_wire_data *wire_data,
+    prc_nano_brep_compressed_data *compressed_data)
 {
     uint8_t curve_approx_good = 0;
     void *curve_params = NULL;
@@ -1611,12 +1631,12 @@ prc_sample_compressed_curve(prc_context *ctx, prc_data *data,
     return 0;
 }
 
-
 /* Sample curve but dealing with the compressed curve case. It would be
    nice to reduce replicated code with the non-compressed case */
 static int
 prc_sample_compressed_curve_store_in_body(prc_context *ctx, prc_data *data, uint32_t shell_index,
-    uint32_t face_index, prc_compressed_curve *curve, double curve_tolerance)
+    uint32_t face_index, prc_compressed_curve *curve, double curve_tolerance,
+    prc_nano_brep_compressed_data *compressed_data)
 {
     uint32_t geom_count = data->exact_geom_tess_part_count;
     uint32_t file_index = data->exact_geom_tess_part[geom_count].file_index;
@@ -1635,7 +1655,8 @@ prc_sample_compressed_curve_store_in_body(prc_context *ctx, prc_data *data, uint
     }
 
     code = prc_sample_compressed_curve(ctx, data, curve, curve_tolerance,
-            data->exact_geom_tess_part[geom_count].shells[shell_index].faces[face_index].wire_data);
+            data->exact_geom_tess_part[geom_count].shells[shell_index].faces[face_index].wire_data,
+            compressed_data);
     if (code < 0)
     {
         prc_error(ctx, code, "Failure in prc_sample_compressed_curve\n");
@@ -4135,6 +4156,11 @@ prc_get_compressed_vertex(prc_context *ctx, prc_compressed_vertex *comp_vertex,
     }
     else
     {
+        if (compressed_data == NULL)
+        {
+            prc_error(ctx, PRC_ERROR_PARSE, "Failed to get common vertex by id in prc_get_compressed_point\n");
+            return PRC_ERROR_PARSE;
+        }
         prc_compressed_vertex *vertex_store = NULL;
         code = prc_get_vertex_by_id(ctx, compressed_data, comp_vertex->point_index,
                                     &vertex_store);
@@ -4940,7 +4966,7 @@ prc_convert_comp_curve_to_coedge(prc_context *ctx,
             prc_error(ctx, code, "Failed to get compressed curve in prc_convert_comp_curve_to_coedge\n");
             return code;
         }
-        code = prc_sample_compressed_curve(ctx, NULL, curve, 0, wire_data);
+        code = prc_sample_compressed_curve(ctx, NULL, curve, 0, wire_data, compressed_data);
         if (code < 0)
         {
             prc_error(ctx, code, "Failed to sample compressed curve in prc_convert_comp_curve_to_coedge\n");
@@ -6373,7 +6399,8 @@ prc_sample_coedge(prc_context *ctx, prc_nano_brep_ref_data *brep_ref_data,
                 }
 
                 /* This is the case where we are coming from the compressed surface */
-                code = prc_sample_compressed_curve(ctx, NULL, trim_curve, 0, &wire_samples);
+                code = prc_sample_compressed_curve(ctx, NULL, trim_curve, 0,
+                    &wire_samples, topo->topo_single_wire_compress->ref_data);
                 if (code < 0)
                 {
                     if (wire_samples.points != NULL)
@@ -6815,7 +6842,7 @@ prc_assign_loop_inner_outer(prc_context *ctx, prc_topo_face *topo_face, uint8_t 
                 return prc_assign_outer_loop_by_nesting(ctx, num_loops, loop_samples);
             }
 
-            /* For a Torus we could have concentric wrapping rings. We must
+            /* For a Torus or the sphere we could have concentric wrapping rings. We must
                set the outer loop role to the larger bounding domain or greater
                radius profile */
             case PRC_TYPE_SURF_Torus:
@@ -7199,47 +7226,69 @@ prc_map_loops_to_surface(prc_context *ctx, prc_topo_face *topo_face, uint8_t ori
                     }
                     curr_loop->wind_u = 0;
                     curr_loop->wind_v = 0;
-                    continue;
                 }
-
-                for (j = 0; j < num_samples; j++)
+                else
                 {
-                    double x = curr_loop->samples[j].x;
-                    double y = curr_loop->samples[j].y;
-
-                    v = curr_loop->samples[j].z;
-
-                    /* x = radius(v)*cos(u), y = radius(v)*sin(u): wherever
-                       this cone's linear radius(v) = radius + v*tan(semi_angle)
-                       is negative (common away from the apex -- a cone's
-                       bottom_radius/semi_angle pair can put the whole usable
-                       v range on the negative side), atan2(y, x) recovers
-                       u + pi instead of u, since negating radius is the same
-                       as rotating u by pi. Negate x,y first to undo that so
-                       the recovered u matches the surface's own u = atan2(y,x)
-                       convention used by prc_evaluate_surf_cone. */
-                    if (cone->radius + v * tan(cone->semi_angle) < 0.0)
+                    for (j = 0; j < num_samples; j++)
                     {
-                        x = -x;
-                        y = -y;
+                        double x = curr_loop->samples[j].x;
+                        double y = curr_loop->samples[j].y;
+
+                        v = curr_loop->samples[j].z;
+
+                        /* x = radius(v)*cos(u), y = radius(v)*sin(u): wherever
+                           this cone's linear radius(v) = radius + v*tan(semi_angle)
+                           is negative (common away from the apex -- a cone's
+                           bottom_radius/semi_angle pair can put the whole usable
+                           v range on the negative side), atan2(y, x) recovers
+                           u + pi instead of u, since negating radius is the same
+                           as rotating u by pi. Negate x,y first to undo that so
+                           the recovered u matches the surface's own u = atan2(y,x)
+                           convention used by prc_evaluate_surf_cone. */
+                        if (cone->radius + v * tan(cone->semi_angle) < 0.0)
+                        {
+                            x = -x;
+                            y = -y;
+                        }
+                        u = atan2(y, x);
+                        u = prc_map_to_two_pi(u);
+
+                        /* Store the raw angle/height for now; unwrap before the
+                           affine parameterization map so the 2*pi period used to
+                           detect wraparound isn't distorted by u_coeff_a */
+                        curr_loop->uv_samples[j].x = u;
+                        curr_loop->uv_samples[j].y = v;
                     }
-                    u = atan2(y, x);
-                    u = prc_map_to_two_pi(u);
-
-                    /* Store the raw angle/height for now; unwrap before the
-                       affine parameterization map so the 2*pi period used to
-                       detect wraparound isn't distorted by u_coeff_a */
-                    curr_loop->uv_samples[j].x = u;
-                    curr_loop->uv_samples[j].y = v;
+                    curr_loop->wind_u = prc_unwrap_angular_component(curr_loop->uv_samples, num_samples, 0);
+                    curr_loop->wind_v = 0;
                 }
-
-                curr_loop->wind_u = prc_unwrap_angular_component(curr_loop->uv_samples, num_samples, 0);
-                curr_loop->wind_v = 0;
 
                 for (j = 0; j < num_samples; j++)
                 {
                     curr_loop->uv_samples[j].x = (curr_loop->uv_samples[j].x - cone->parameterization.u_param_coeff_b) / u_coeff_a;
                     curr_loop->uv_samples[j].y = (curr_loop->uv_samples[j].y - cone->parameterization.v_param_coeff_b) / v_coeff_a;
+#if CHECK_SURFACE_PROJECTION
+                    prc_vec3 test_xyz, test2_xyz;
+                    prc_surface_params cone_eval_params = { 0 };
+                    cone_eval_params.surface_params = (void *)cone;
+                    // Reconstruct the actual u and v that the surface expects after tuning:
+                    double eval_u = (curr_loop->uv_samples[j].x * u_coeff_a) + cone->parameterization.u_param_coeff_b;
+                    double eval_v = (curr_loop->uv_samples[j].y * v_coeff_a) + cone->parameterization.v_param_coeff_b;
+                    test_xyz = prc_evaluate_surf_cone(ctx, &cone_eval_params, eval_u, eval_v);
+
+                    /* We need to apply the transformation to curve xyz as test_xyz does have that applied it */
+                    if (cone->has_transform && !cone->exact_geom_transform.is_identity)
+                    {
+                        test2_xyz = prc_exact_geom_apply_transform(ctx, &cone->exact_geom_transform, curr_loop->samples[j]);
+                    }
+                    else
+                    {
+                        test2_xyz = curr_loop->samples[j];
+                    }
+                    fprintf(stderr, " PRC_TYPE_SURF_Cone projection: curve_sample=%u KnownSurface_xyz = (%.3f,%.3f,%.3f) Surface_uv_from_projection = (%.3f,%.3f) Surface_XYZ_from_uv = (%.3f,%.3f,%.3f) (delta=(%.3f,%.3f,%.3f)\n",
+                        j, test2_xyz.x, test2_xyz.y, test2_xyz.z, curr_loop->uv_samples[j].x, curr_loop->uv_samples[j].y,
+                        test_xyz.x, test_xyz.y, test_xyz.z, test2_xyz.x - test_xyz.x, test2_xyz.y - test_xyz.y, test2_xyz.z - test_xyz.z);
+#endif
                 }
             }
             break;
@@ -11587,11 +11636,12 @@ prc_approximate_objects_exact_geom(prc_context *ctx, prc_api_data data_in, uint3
             {
             case PRC_TYPE_TOPO_SingleWireBodyCompress:
             {
+                /* Single wire should not be storing vertex data I don't believe hence
+                   the NULL in the call to prc_sample_compressed_curve_store_in_body */
                 data->exact_geom_tess_part[geom_count].shells[i].faces[j].type = PRC_EXACT_GEOM_WIRE;
-                 
                 prc_topo_single_wire_compress *body = topo->topo_single_wire_compress;
                 code = prc_sample_compressed_curve_store_in_body(ctx, data, i, j,
-                                    &body->compressed_curve, body->curve_tolerance);
+                                    &body->compressed_curve, body->curve_tolerance, NULL);
                 if (code < 0)
                 {
                     prc_error(ctx, code, "Failed in prc_sample_compressed_curve\n");

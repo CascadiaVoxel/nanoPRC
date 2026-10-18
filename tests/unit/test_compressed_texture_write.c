@@ -1,0 +1,457 @@
+/* Copyright (C) 2023-2026 CascadiaVoxel LLC
+
+    nanoPRC is free software: you can redistribute it and/or modify it under
+    the terms of the GNU Affero General Public License as published by the
+    Free Software Foundation, either version 3 of the License, or (at your
+    option) any later version.
+
+    nanoPRC is distributed in the hope that it will be useful, but WITHOUT
+    ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
+    FITNESS FOR A PARTICULAR PURPOSE. See the GNU Affero General Public
+    License for more details.
+
+    You should have received a copy of the GNU Affero General Public License
+    along with nanoPRC. If not, see <https://www.gnu.org/licenses/>.
+*/
+
+/* Texture coordinates written into a COMPRESSED tessellation and read back by
+   the real parser and decoder.
+
+   The check is per corner and does not rely on the encoder's vertex or
+   triangle order, which the traversal is free to change: every input
+   triangle is found among the decoded ones by its three positions, and each
+   of its corners must come back with the UV the caller gave that corner.
+   A writer that put the right pairs on the wrong corners, or a seam's UV on
+   the other side of it, fails here even though every pair is present. */
+
+#include <stdlib.h>
+#include <stdint.h>
+#include <string.h>
+#include <stdio.h>
+#include <math.h>
+#include "prc_test.h"
+#include "prc_context.h"
+#include "prc_data.h"
+#include "prc_api.h"
+#include "prc_write_global.h"
+#include "prc_write_tree.h"
+#include "prc_write_file_structure.h"
+#include "prc_write_model.h"
+
+static const char *TEST_PRC_FILENAME = "test_compressed_texture_write_output.prc";
+
+/* 2x2 RGB, written with the textured cases that read through the public API,
+   which reports is_texture only when the item's style carries an image. */
+static const uint8_t TEST_PIXELS[2 * 2 * 3] = {
+    0xFF, 0x00, 0x00,   0x00, 0xFF, 0x00,
+    0x00, 0x00, 0xFF,   0xFF, 0xFF, 0x00
+};
+
+typedef struct
+{
+    const double *positions;
+    uint32_t num_positions;
+    const double *normals;      /* NULL: recalculated */
+    const uint32_t *norm_indices;
+    uint32_t num_normals;
+    const uint32_t *tris;
+    uint32_t num_triangles;
+    const double *uvs;
+    uint32_t num_uvs;
+    const uint32_t *uv_indices;
+} test_mesh;
+
+static int
+write_mesh(prc_context *ctx, const test_mesh *m, int with_image)
+{
+    prc_write_global_tables tables;
+    prc_write_tess_entry tess_entry;
+    prc_write_rep_item ri;
+    prc_write_tree_node root;
+    int code;
+    uint32_t k;
+
+    PRC_ASSERT_EQ(prc_write_global_tables_init(ctx, &tables), 0);
+
+    memset(&tess_entry, 0, sizeof(tess_entry));
+    tess_entry.kind = PRC_WRITE_TESS_KIND_COMPRESSED;
+    tess_entry.positions = m->positions;
+    tess_entry.num_positions = m->num_positions;
+    tess_entry.normals = m->normals;
+    tess_entry.num_normals = m->num_normals;
+    tess_entry.norm_indices = m->norm_indices;
+    tess_entry.tri_indices = m->tris;
+    tess_entry.num_triangles = m->num_triangles;
+    tess_entry.tex_coords = m->uvs;
+    tess_entry.num_tex_coords = m->num_uvs;
+    tess_entry.tex_indices = m->uv_indices;
+
+    memset(&ri, 0, sizeof(ri));
+    ri.kind = PRC_WRITE_RI_SURFACE;
+    ri.biased_tessellation_index = 1;
+    if (with_image)
+    {
+        ri.has_material = 1;
+        ri.material_color[0] = ri.material_color[1] = ri.material_color[2] = 1.0;
+        ri.material_alpha = 1.0;
+        ri.has_texture = 1;
+        ri.texture_image = TEST_PIXELS;
+        ri.texture_image_size = sizeof(TEST_PIXELS);
+        ri.texture_format = PRC_API_WRITE_TEXTURE_RGB;
+        ri.texture_width = 2;
+        ri.texture_height = 2;
+    }
+
+    memset(&root, 0, sizeof(root));
+    root.rep_items = &ri;
+    root.num_rep_items = 1;
+    for (k = 0; k < 3; k++)
+    {
+        root.bbox_min[k] = 1e300;
+        root.bbox_max[k] = -1e300;
+    }
+    for (k = 0; k < m->num_positions * 3; k++)
+    {
+        if (m->positions[k] < root.bbox_min[k % 3]) root.bbox_min[k % 3] = m->positions[k];
+        if (m->positions[k] > root.bbox_max[k % 3]) root.bbox_max[k % 3] = m->positions[k];
+    }
+
+    code = prc_write_prc_file(ctx, TEST_PRC_FILENAME, NULL, &tables, &root, &tess_entry, 1);
+    prc_write_global_tables_free(ctx, &tables);
+    return code;
+}
+
+static int
+same_position(const double *a, const double *b)
+{
+    return fabs(a[0] - b[0]) < 1e-4 && fabs(a[1] - b[1]) < 1e-4 && fabs(a[2] - b[2]) < 1e-4;
+}
+
+/* Reads the file back and checks every input corner's UV. Returns the
+   decoded tessellation's vertex count, for the seam case. */
+static int
+check_corners(prc_context *ctx, const test_mesh *m)
+{
+    prc_data *pd;
+    prc_tess_3d_compressed *t;
+    prc_compressed_texture_parameter *td;
+    uint32_t tri, c, d, k, set_bits;
+    uint32_t num_decoded;
+    int num_vertices;
+
+    pd = (prc_data *)prc_api_open_contents(ctx, TEST_PRC_FILENAME);
+    if (pd == NULL)
+        prc_print_error_stack(ctx);
+    PRC_ASSERT_NOT_NULL(pd);
+    PRC_ASSERT_EQ(pd->file_struct[0].tessellation->tess_count, 1);
+    t = pd->file_struct[0].tessellation->tess[0].tess_3d_compressed;
+    PRC_ASSERT_NOT_NULL(t);
+
+    /* The block's own invariants, as measured on independently written
+       files: one bit per corner, a reference for every set bit, a fresh pair
+       for every clear one. */
+    PRC_ASSERT_EQ(t->no_texture, 0);
+    PRC_ASSERT_EQ(t->all_faces_have_texture, 1);
+    td = t->texture_data;
+    PRC_ASSERT_NOT_NULL(td);
+    num_decoded = t->triangle_face_array_size;
+    PRC_ASSERT_EQ(td->reference_array_size + td->texture_parameters_size / 2, num_decoded * 3);
+    set_bits = 0;
+    for (k = 0; k < num_decoded * 3; k++)
+        set_bits += (td->binary_texture_data->texture_binary_data[k >> 3] >> (k & 7)) & 1;
+    PRC_ASSERT_EQ(set_bits, td->reference_array_size);
+    PRC_ASSERT_EQ(td->binary_texture_data->texture_binary_data_size, num_decoded * 3 / 32 + 1);
+    PRC_ASSERT_EQ(td->binary_texture_data->last_integer_used_bit_number, num_decoded * 3 % 32);
+    for (k = 0; k < td->reference_array_size; k++)
+        PRC_ASSERT_EQ(td->reference_array[k], 0);
+
+    /* The decoder kept the block: a block it could not replay is dropped. */
+    PRC_ASSERT_NOT_NULL(t->uv_indices_prc_compressed_3d);
+    PRC_ASSERT_EQ((uint32_t)t->num_triangle_indices_prc_compressed_3d, num_decoded * 3);
+    PRC_ASSERT_EQ(num_decoded, m->num_triangles);
+
+    for (tri = 0; tri < m->num_triangles; tri++)
+    {
+        int found = 0;
+
+        for (d = 0; d < num_decoded && !found; d++)
+        {
+            int matched[3] = { -1, -1, -1 };
+            int all = 1;
+
+            for (c = 0; c < 3; c++)
+            {
+                const double *want = &m->positions[(size_t)m->tris[tri * 3 + c] * 3];
+                for (k = 0; k < 3; k++)
+                {
+                    uint32_t vi = t->triangle_indices_prc_compressed_3d[d * 3 + k];
+                    if (same_position(want, &t->vertices_prc_compressed_3d[(size_t)vi * 3]))
+                        matched[c] = (int)k;
+                }
+                if (matched[c] < 0)
+                    all = 0;
+            }
+            if (!all)
+                continue;
+
+            found = 1;
+            for (c = 0; c < 3; c++)
+            {
+                const double *want = &m->uvs[(size_t)m->uv_indices[tri * 3 + c] * 2];
+                uint32_t uv = t->uv_indices_prc_compressed_3d[d * 3 + (uint32_t)matched[c]];
+
+                PRC_ASSERT(uv != PRC_COMPRESSED_TESS_NO_UV);
+                PRC_ASSERT(uv < td->texture_parameters_size / 2);
+                PRC_ASSERT_NEAR(t->uv_coordinates_3d[uv * 2 + 0], want[0], 1e-6);
+                PRC_ASSERT_NEAR(t->uv_coordinates_3d[uv * 2 + 1], want[1], 1e-6);
+            }
+        }
+        PRC_ASSERT(found);
+    }
+
+    num_vertices = t->num_vertices_prc_compressed_3d;
+    prc_api_release_data(ctx, (prc_api_data)pd, NULL, 0, NULL, 0, NULL, 0, NULL);
+    return num_vertices;
+}
+
+/* Unit square, one UV per vertex. The texture streams follow the position
+   streams here; the seam and grid cases below make them differ. */
+static const double QUAD_POS[4 * 3] = { 0, 0, 0,  1, 0, 0,  1, 1, 0,  0, 1, 0 };
+static const double QUAD_UV[4 * 2] = { 0.1, 0.2,  0.9, 0.2,  0.9, 0.8,  0.1, 0.8 };
+static const uint32_t QUAD_TRIS[6] = { 0, 1, 2,  0, 2, 3 };
+static const double QUAD_NORMAL[3] = { 0, 0, 1 };
+static const uint32_t QUAD_NIDX[6] = { 0, 0, 0,  0, 0, 0 };
+
+static void
+test_quad(prc_context *ctx)
+{
+    test_mesh m;
+
+    printf("  sub-case: textured quad, normals recalculated\n");
+    memset(&m, 0, sizeof(m));
+    m.positions = QUAD_POS; m.num_positions = 4;
+    m.tris = QUAD_TRIS; m.num_triangles = 2;
+    m.uvs = QUAD_UV; m.num_uvs = 4; m.uv_indices = QUAD_TRIS;
+    PRC_ASSERT_EQ(write_mesh(ctx, &m, 0), 0);
+    PRC_ASSERT_EQ(check_corners(ctx, &m), 4);
+
+    printf("  sub-case: textured quad, normals supplied\n");
+    m.normals = QUAD_NORMAL; m.num_normals = 1; m.norm_indices = QUAD_NIDX;
+    PRC_ASSERT_EQ(write_mesh(ctx, &m, 0), 0);
+    PRC_ASSERT_EQ(check_corners(ctx, &m), 4);
+}
+
+/* A band round a cylinder, 8 segments, with the texture wrapped once: the
+   column at angle 0 is u = 0 on one side and u = 1 on the other. Positions
+   are shared all the way round, so the seam is two vertices whose corners
+   carry two UVs each; they come back split, 16 positions as 18 vertices. */
+#define BAND_N 8
+
+static void
+test_seam_band(prc_context *ctx)
+{
+    double pos[BAND_N * 2 * 3];
+    double uvs[(BAND_N + 1) * 2 * 2];
+    uint32_t tris[BAND_N * 6];
+    uint32_t uv_idx[BAND_N * 6];
+    test_mesh m;
+    uint32_t i, r;
+
+    printf("  sub-case: seam band, u = 0 and u = 1 on one column\n");
+    for (i = 0; i < BAND_N; i++)
+    {
+        double a = 2.0 * 3.14159265358979323846 * (double)i / BAND_N;
+        for (r = 0; r < 2; r++)
+        {
+            pos[(r * BAND_N + i) * 3 + 0] = cos(a);
+            pos[(r * BAND_N + i) * 3 + 1] = sin(a);
+            pos[(r * BAND_N + i) * 3 + 2] = (double)r;
+        }
+    }
+    for (i = 0; i <= BAND_N; i++)
+    {
+        for (r = 0; r < 2; r++)
+        {
+            uvs[(r * (BAND_N + 1) + i) * 2 + 0] = (double)i / BAND_N;
+            uvs[(r * (BAND_N + 1) + i) * 2 + 1] = (double)r;
+        }
+    }
+    for (i = 0; i < BAND_N; i++)
+    {
+        uint32_t i1 = (i + 1) % BAND_N;      /* position wraps */
+        uint32_t u0 = i, u1 = i + 1;         /* UV column does not */
+        uint32_t *t = &tris[i * 6];
+        uint32_t *q = &uv_idx[i * 6];
+
+        t[0] = i;  t[1] = i1;           t[2] = BAND_N + i1;
+        t[3] = i;  t[4] = BAND_N + i1;  t[5] = BAND_N + i;
+        q[0] = u0; q[1] = u1;                 q[2] = (BAND_N + 1) + u1;
+        q[3] = u0; q[4] = (BAND_N + 1) + u1;  q[5] = (BAND_N + 1) + u0;
+    }
+
+    memset(&m, 0, sizeof(m));
+    m.positions = pos; m.num_positions = BAND_N * 2;
+    m.tris = tris; m.num_triangles = BAND_N * 2;
+    m.uvs = uvs; m.num_uvs = (BAND_N + 1) * 2; m.uv_indices = uv_idx;
+    PRC_ASSERT_EQ(write_mesh(ctx, &m, 0), 0);
+    PRC_ASSERT_EQ(check_corners(ctx, &m), BAND_N * 2 + 2);
+}
+
+/* A 4x4-vertex grid, 18 triangles, UV = position / 3: most corners reach a
+   vertex already holding its pair, so the repeat path carries most of the
+   block. The pair indices deliberately differ from the vertex indices. */
+static void
+test_heavy_reuse(prc_context *ctx)
+{
+    double pos[16 * 3];
+    double uvs[16 * 2];
+    uint32_t tris[18 * 3];
+    uint32_t uv_idx[18 * 3];
+    test_mesh m;
+    uint32_t x, y, n = 0;
+
+    printf("  sub-case: 4x4 grid, repeats exercised\n");
+    for (y = 0; y < 4; y++)
+    {
+        for (x = 0; x < 4; x++)
+        {
+            uint32_t v = y * 4 + x;
+            uint32_t p = 15 - v;     /* pair order reversed against vertex order */
+            pos[v * 3 + 0] = (double)x;
+            pos[v * 3 + 1] = (double)y;
+            pos[v * 3 + 2] = 0.0;
+            uvs[p * 2 + 0] = (double)x / 3.0;
+            uvs[p * 2 + 1] = (double)y / 3.0;
+        }
+    }
+    for (y = 0; y < 3; y++)
+    {
+        for (x = 0; x < 3; x++)
+        {
+            uint32_t a = y * 4 + x, b = a + 1, c = a + 5, d = a + 4;
+            tris[n * 3 + 0] = a; tris[n * 3 + 1] = b; tris[n * 3 + 2] = c; n++;
+            tris[n * 3 + 0] = a; tris[n * 3 + 1] = c; tris[n * 3 + 2] = d; n++;
+        }
+    }
+    for (x = 0; x < n * 3; x++)
+        uv_idx[x] = 15 - tris[x];
+
+    memset(&m, 0, sizeof(m));
+    m.positions = pos; m.num_positions = 16;
+    m.tris = tris; m.num_triangles = n;
+    m.uvs = uvs; m.num_uvs = 16; m.uv_indices = uv_idx;
+    PRC_ASSERT_EQ(write_mesh(ctx, &m, 0), 0);
+    PRC_ASSERT_EQ(check_corners(ctx, &m), 16);
+
+    /* 54 corners over 16 vertices: at least 38 must be repeats. */
+    {
+        prc_data *pd = (prc_data *)prc_api_open_contents(ctx, TEST_PRC_FILENAME);
+        PRC_ASSERT_NOT_NULL(pd);
+        PRC_ASSERT_EQ(pd->file_struct[0].tessellation->tess[0].tess_3d_compressed->texture_data->reference_array_size, 38);
+        prc_api_release_data(ctx, (prc_api_data)pd, NULL, 0, NULL, 0, NULL, 0, NULL);
+    }
+}
+
+/* The public read path: is_texture on the face and a UV on every vertex,
+   with the reader's V flip. */
+static void
+test_public_api(prc_context *ctx)
+{
+    test_mesh m;
+    prc_api_data data;
+    prc_api_product *model_tree = NULL;
+    uint32_t num_parts = 0, num_products = 0, num_markups = 0;
+    uint32_t num_tess = 0, num_line_tess = 0, num_extra = 0;
+    prc_api_tess *tesses;
+    uint8_t has_lines = 0;
+    size_t v;
+
+    printf("  sub-case: public API reports the texture\n");
+    memset(&m, 0, sizeof(m));
+    m.positions = QUAD_POS; m.num_positions = 4;
+    m.tris = QUAD_TRIS; m.num_triangles = 2;
+    m.uvs = QUAD_UV; m.num_uvs = 4; m.uv_indices = QUAD_TRIS;
+    PRC_ASSERT_EQ(write_mesh(ctx, &m, 1), 0);
+
+    data = prc_api_open_contents(ctx, TEST_PRC_FILENAME);
+    PRC_ASSERT_NOT_NULL(data);
+    PRC_ASSERT(prc_api_prep_model_tree(ctx, data, &num_parts, &num_products, &num_markups) >= 0);
+    PRC_ASSERT(prc_api_create_model_tree(ctx, data, &model_tree, num_parts, num_products, num_markups) >= 0);
+    PRC_ASSERT(prc_api_get_number_tessellations(ctx, data, model_tree, &num_tess,
+        &num_line_tess, &num_extra, 0) >= 0);
+    PRC_ASSERT(num_tess >= 1);
+    tesses = (prc_api_tess *)calloc(num_tess, sizeof(prc_api_tess));
+    PRC_ASSERT_NOT_NULL(tesses);
+
+    tesses[0].num_faces = prc_api_get_number_faces(ctx, data, 0);
+    PRC_ASSERT(tesses[0].num_faces >= 1);
+    tesses[0].tess_faces = (prc_api_face *)calloc(tesses[0].num_faces, sizeof(prc_api_face));
+    PRC_ASSERT_NOT_NULL(tesses[0].tess_faces);
+    PRC_ASSERT(prc_api_initialize_tessellation(ctx, data, model_tree, 0, &tesses[0], NULL, &has_lines) >= 0);
+    PRC_ASSERT_EQ(tesses[0].type, PRC_API_TESS_3D_Compressed);
+    PRC_ASSERT(prc_api_get_tessellation_vertices(ctx, data, 0, 0, &tesses[0].tess_faces[0], &tesses[0]) >= 0);
+
+    PRC_ASSERT(tesses[0].tess_faces[0].is_texture);
+    PRC_ASSERT_EQ(tesses[0].tess_vertices.num_vertices, 4);
+    for (v = 0; v < tesses[0].tess_vertices.num_vertices; v++)
+    {
+        const prc_api_vertex *pv = &tesses[0].tess_vertices.vertices[v];
+        uint32_t q;
+        int found = 0;
+
+        PRC_ASSERT(pv->uv_set);
+        for (q = 0; q < 4; q++)
+        {
+            if (fabs(pv->position[0] - QUAD_POS[q * 3 + 0]) < 1e-4 &&
+                fabs(pv->position[1] - QUAD_POS[q * 3 + 1]) < 1e-4)
+            {
+                PRC_ASSERT_NEAR(pv->uv[0], QUAD_UV[q * 2 + 0], 1e-6);
+                PRC_ASSERT_NEAR(pv->uv[1], 1.0 - QUAD_UV[q * 2 + 1], 1e-6);
+                found = 1;
+            }
+        }
+        PRC_ASSERT(found);
+    }
+
+    prc_api_release_data(ctx, data, tesses, num_tess, NULL, 0, NULL, 0, model_tree);
+}
+
+static void
+test_refusals(prc_context *ctx)
+{
+    static const uint32_t bad_uv_idx[6] = { 0, 1, 2,  0, 2, 4 };
+    test_mesh m;
+
+    printf("  sub-case: a texture index past the coordinates is refused\n");
+    memset(&m, 0, sizeof(m));
+    m.positions = QUAD_POS; m.num_positions = 4;
+    m.tris = QUAD_TRIS; m.num_triangles = 2;
+    m.uvs = QUAD_UV; m.num_uvs = 4; m.uv_indices = bad_uv_idx;
+    PRC_ASSERT(write_mesh(ctx, &m, 0) != 0);
+
+    printf("  sub-case: coordinates without indices are refused\n");
+    m.uv_indices = NULL;
+    PRC_ASSERT(write_mesh(ctx, &m, 0) != 0);
+}
+
+int
+main(void)
+{
+    prc_context *ctx;
+
+    PRC_TEST_BEGIN("compressed tessellation texture write");
+
+    ctx = prc_new_context(NULL);
+    PRC_ASSERT_NOT_NULL(ctx);
+
+    test_quad(ctx);
+    test_seam_band(ctx);
+    test_heavy_reuse(ctx);
+    test_public_api(ctx);
+    test_refusals(ctx);
+
+    prc_release_context(ctx);
+    remove(TEST_PRC_FILENAME);
+
+    PRC_TEST_END;
+}

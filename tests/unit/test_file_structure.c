@@ -501,9 +501,8 @@ test_textured_quad_roundtrip(prc_context *ctx)
 
 /* The two ways a caller can ask for something the writer cannot honour. Both
    must be refused rather than quietly dropped: prc_write_tess_3d treats a
-   half-supplied pair as "no textures", and the compressed encoder has no
-   texture path at all, so without these checks the UVs would simply vanish
-   from the output with no error anywhere. */
+   half-supplied pair as "no textures", so without these checks the UVs would
+   simply vanish from the output with no error anywhere. */
 static void
 test_textured_groups_roundtrip(prc_context *ctx)
 {
@@ -853,14 +852,8 @@ test_texture_misuse_is_refused(prc_context *ctx)
     PRC_ASSERT(prc_write_prc_file(ctx, TEST_PRC_FILENAME, NULL, &tables, &root, &tess_entry, 1) != 0);
     prc_write_global_tables_free(ctx, &tables);
 
-    /* Both, but on a kind with no texture path. */
-    PRC_ASSERT_EQ(prc_write_global_tables_init(ctx, &tables), 0);
-    tess_entry.kind = PRC_WRITE_TESS_KIND_COMPRESSED;
-    tess_entry.tex_coords = tex_coords;
-    tess_entry.num_tex_coords = 3;
-    tess_entry.tex_indices = tex_idx;
-    PRC_ASSERT(prc_write_prc_file(ctx, TEST_PRC_FILENAME, NULL, &tables, &root, &tess_entry, 1) != 0);
-    prc_write_global_tables_free(ctx, &tables);
+    /* COMPRESSED used to be refused here too; it now writes textures, and
+       test_compressed_texture_write covers it. */
 
     /* A textured tessellation whose fans carry no tex_indices. The group
        would be written untextured beside textured geometry, silently losing

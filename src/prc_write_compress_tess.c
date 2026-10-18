@@ -29,6 +29,7 @@
 typedef struct
 {
     int64_t key[3];
+    uint32_t group;
     uint32_t index;
     uint8_t used;
 } prc_vtx_slot;
@@ -301,9 +302,16 @@ prc_encode_rebuild_edges(prc_edge_slot *etable, size_t ecap,
     return nedges;
 }
 
-int
-prc_encode_preprocess_ex(prc_context *ctx,
+/* prc_encode_preprocess_ex, plus weld_group: NULL, or one value per input
+   vertex. Two vertices weld only when they quantize to the same position AND
+   carry the same group, so a caller can keep apart vertices that share a
+   position but must stay distinct -- a texture seam, where the two sides
+   carry different UVs. With NULL every vertex is in one group, and the
+   result is exactly prc_encode_preprocess_ex's. */
+static int
+prc_encode_preprocess_grouped(prc_context *ctx,
     const double *positions, uint32_t num_positions,
+    const uint32_t *weld_group,
     const uint32_t *tri_indices, uint32_t num_triangles,
     prc_write_tolerance tolerance,
     uint8_t skip_nonmanifold_edge_remap,
@@ -395,7 +403,9 @@ prc_encode_preprocess_ex(prc_context *ctx,
             goto fail;
         }
 
-        if (prc_diag_getenv("PRC_DIAG_WELD_SORT_METHOD") != NULL)
+        /* The sort-based weld knows nothing of weld groups, so it is used only
+           when there are none. */
+        if (prc_diag_getenv("PRC_DIAG_WELD_SORT_METHOD") != NULL && weld_group == NULL)
         {
             /* See prc_weldsort_vtx's own comment above for the full rationale.
                EXTENDED (2026-08-06): RG's own real Walnut file keeps 65 separate
@@ -496,6 +506,8 @@ prc_encode_preprocess_ex(prc_context *ctx,
                 const double *raw = positions + (size_t)i * 3;
                 double p[3];
                 int64_t kx, ky, kz;
+                uint32_t group;
+                uint64_t hash;
                 size_t slot;
 
                 p[0] = raw[0]; p[1] = raw[1]; p[2] = raw[2];
@@ -521,7 +533,13 @@ prc_encode_preprocess_ex(prc_context *ctx,
                 kx = (int64_t)llround(p[0] / tol);
                 ky = (int64_t)llround(p[1] / tol);
                 kz = (int64_t)llround(p[2] / tol);
-                slot = (size_t)(prc_vtx_hash(kx, ky, kz) & (uint64_t)(vcap - 1));
+                group = (weld_group != NULL) ? weld_group[i] : 0;
+                hash = prc_vtx_hash(kx, ky, kz);
+                /* Mixed in only when groups exist, so ungrouped input probes
+                   the table exactly as it always has. */
+                if (weld_group != NULL)
+                    hash = prc_mix64(hash ^ (uint64_t)group);
+                slot = (size_t)(hash & (uint64_t)(vcap - 1));
 
                 for (;;)
                 {
@@ -532,13 +550,14 @@ prc_encode_preprocess_ex(prc_context *ctx,
                         s->key[0] = kx;
                         s->key[1] = ky;
                         s->key[2] = kz;
+                        s->group = group;
                         s->index = ndedup;
                         memcpy(out->positions + (size_t)ndedup * 3, p, 3 * sizeof(double));
                         remap[i] = ndedup;
                         ndedup++;
                         break;
                     }
-                    if (s->key[0] == kx && s->key[1] == ky && s->key[2] == kz)
+                    if (s->key[0] == kx && s->key[1] == ky && s->key[2] == kz && s->group == group)
                     {
                         remap[i] = s->index;
                         break;
@@ -1423,6 +1442,18 @@ fail:
     return ret;
 }
 
+int
+prc_encode_preprocess_ex(prc_context *ctx,
+    const double *positions, uint32_t num_positions,
+    const uint32_t *tri_indices, uint32_t num_triangles,
+    prc_write_tolerance tolerance,
+    uint8_t skip_nonmanifold_edge_remap,
+    prc_encode_mesh *out)
+{
+    return prc_encode_preprocess_grouped(ctx, positions, num_positions, NULL, tri_indices,
+        num_triangles, tolerance, skip_nonmanifold_edge_remap, out);
+}
+
 /* Every existing caller (COMPRESSED encoding, where an edge shared by 3+
    triangles genuinely must be resolved -- the EdgeBreaker-style traversal
    below assumes at most 2 triangles per edge) wants the non-manifold-edge
@@ -2101,6 +2132,34 @@ prc_encode_chain_start(prc_encode_state *st, uint32_t tri,
 
     for (k = 0; k < 3; k++)
         mv[k] = st->mesh->tri_indices[(size_t)tri * 3 + k];
+
+    /* The decoder swaps a chain start's first two corners when the first
+       decodes to a higher point index than the second (the final step of
+       prc_handle_empty_stack_decode). Acrobat reads a textured triangle's
+       texture bits in the unswapped order, so it shears any triangle where
+       the swap fires. A cyclic rotation keeps the winding and one always
+       exists that avoids the swap: new points take indices above every
+       existing one, and three distinct indices always have one adjacent
+       ascending pair. Applied only to textured meshes, which leaves
+       untextured output unchanged. */
+    if (st->mesh->avoid_chain_start_swap)
+    {
+        uint32_t rot;
+
+        for (rot = 0; rot < 3; rot++)
+        {
+            int32_t a = st->vtx_map[mv[0]];
+            int32_t b = st->vtx_map[mv[1]];
+            uint32_t tm;
+
+            if (!((a < 0 && b >= 0) || (a >= 0 && b >= 0 && a > b)))
+                break;
+            tm = mv[0];
+            mv[0] = mv[1];
+            mv[1] = mv[2];
+            mv[2] = tm;
+        }
+    }
     num_refs = 0;
     for (k = 0; k < 3; k++)
     {
@@ -4528,6 +4587,66 @@ fail:
 
 /* ---- Step E: bitstream assembly ---------------------------------------- */
 
+/* CompressedTextureParameter and all_faces_have_texture, as
+   prc_parse_texture_data and its caller read them.
+
+   texture_binary_data holds one bit per corner, least significant bit first
+   through the stored bytes, and last_integer_used_bit_number is the number
+   of bits used in the last 32-bit word. When the bits fill their last word
+   exactly, independent writers split between writing 0 for "full" and
+   appending an empty word with 0 (prc-db, October 2026: 70 and 187
+   entities). This writes the second, so the count always follows from
+   num_bits alone: num_bits / 32 + 1 words, num_bits % 32 used in the last.
+
+   texture_parameters_tolerance is written as 0, the value on every textured
+   entity sampled from independent writers. */
+static int
+prc_write_compress_texture_block(prc_context *ctx, prc_bit_write_state *state,
+    const prc_encode_texture_block *tex)
+{
+    uint32_t num_words = tex->num_bits / 32u + 1u;
+    uint32_t b, k;
+
+    if (prc_bitwrite_uint32(ctx, state, num_words) != 0)
+        return -1;
+    for (b = 0; b < num_words * 4u; b++)
+    {
+        uint8_t byte = 0;
+        uint32_t i;
+
+        for (i = 0; i < 8; i++)
+        {
+            uint32_t bit = b * 8u + i;
+            if (bit < tex->num_bits && tex->bits[bit])
+                byte = (uint8_t)(byte | (1u << i));
+        }
+        if (prc_bitwrite_uint8(ctx, state, byte) != 0)
+            return -1;
+    }
+    if (prc_bitwrite_uint32(ctx, state, tex->num_bits % 32u) != 0)
+        return -1;
+
+    if (prc_bitwrite_uint32(ctx, state, tex->num_refs) != 0)
+        return -1;
+    for (k = 0; k < tex->num_refs; k++)
+    {
+        if (prc_bitwrite_number_of_bits_then_unsigned_int(ctx, state, tex->refs[k]) != 0)
+            return -1;
+    }
+
+    if (prc_bitwrite_double(ctx, state, 0.0) != 0)   /* texture_parameters_tolerance */
+        return -1;
+    if (prc_bitwrite_uint32(ctx, state, tex->num_pairs * 2u) != 0)
+        return -1;
+    for (k = 0; k < tex->num_pairs * 2u; k++)
+    {
+        if (prc_bitwrite_float(ctx, state, tex->pairs[k]) != 0)
+            return -1;
+    }
+
+    return prc_bitwrite_bit(ctx, state, 1);   /* all_faces_have_texture */
+}
+
 int
 prc_write_compress_tess_to_stream(prc_context *ctx, prc_bit_write_state *state,
     const prc_encode_traversal_result *trav, double tolerance_mm,
@@ -4535,6 +4654,20 @@ prc_write_compress_tess_to_stream(prc_context *ctx, prc_bit_write_state *state,
     const int32_t *normal_angle_array, uint32_t normal_angle_array_count,
     const uint8_t *normal_binary_data, uint32_t normal_binary_data_size,
     uint8_t must_recalculate_normals, const uint8_t *is_face_planar)
+{
+    return prc_write_compress_tess_to_stream_ex(ctx, state, trav, tolerance_mm,
+        normal_is_reversed_c1, crease_angle_degrees, normal_angle_array, normal_angle_array_count,
+        normal_binary_data, normal_binary_data_size, must_recalculate_normals, is_face_planar, NULL);
+}
+
+int
+prc_write_compress_tess_to_stream_ex(prc_context *ctx, prc_bit_write_state *state,
+    const prc_encode_traversal_result *trav, double tolerance_mm,
+    const uint8_t *normal_is_reversed_c1, double crease_angle_degrees,
+    const int32_t *normal_angle_array, uint32_t normal_angle_array_count,
+    const uint8_t *normal_binary_data, uint32_t normal_binary_data_size,
+    uint8_t must_recalculate_normals, const uint8_t *is_face_planar,
+    const prc_encode_texture_block *texture)
 {
     uint32_t k, num_refs = 0;
 
@@ -4792,7 +4925,9 @@ prc_write_compress_tess_to_stream(prc_context *ctx, prc_bit_write_state *state,
             PRC_DIAG_TESS_FIELD_SIZES_MARK("line_attribute_array");
         }
     }
-    if (prc_bitwrite_bit(ctx, state, 1) != 0)   /* no_texture */
+    if (prc_bitwrite_bit(ctx, state, texture == NULL ? 1 : 0) != 0)   /* no_texture */
+        goto werr;
+    if (texture != NULL && prc_write_compress_texture_block(ctx, state, texture) != 0)
         goto werr;
     if (prc_bitwrite_bit(ctx, state, 0) != 0)   /* has_behaviors */
         goto werr;
@@ -5142,12 +5277,252 @@ prc_encode_compute_face_planarity(prc_context *ctx, const prc_encode_mesh *mesh,
     return 0;
 }
 
+typedef struct
+{
+    double u, v;
+    uint32_t index;
+} prc_encode_uv_sort;
+
+static int
+prc_encode_uv_sort_cmp(const void *a, const void *b)
+{
+    const prc_encode_uv_sort *x = (const prc_encode_uv_sort *)a;
+    const prc_encode_uv_sort *y = (const prc_encode_uv_sort *)b;
+
+    if (x->u < y->u) return -1;
+    if (x->u > y->u) return 1;
+    if (x->v < y->v) return -1;
+    if (x->v > y->v) return 1;
+    return (x->index < y->index) ? -1 : (x->index > y->index);
+}
+
+typedef struct
+{
+    uint64_t key;      /* vertex << 32 | uv id */
+    uint32_t corner;
+} prc_encode_corner_sort;
+
+static int
+prc_encode_corner_sort_cmp(const void *a, const void *b)
+{
+    const prc_encode_corner_sort *x = (const prc_encode_corner_sort *)a;
+    const prc_encode_corner_sort *y = (const prc_encode_corner_sort *)b;
+
+    if (x->key < y->key) return -1;
+    if (x->key > y->key) return 1;
+    return (x->corner < y->corner) ? -1 : (x->corner > y->corner);
+}
+
+/* The input of a textured entry, rewritten so that every vertex carries one
+   UV. UV pairs with identical values share one id. Each distinct (vertex,
+   UV id) used by some corner becomes its own vertex, and its UV id becomes
+   its weld group, so welding later merges coincident vertices only when
+   their UVs agree. A vertex on a texture seam therefore comes out as one
+   vertex per side.
+
+   Splitting rather than giving a seam vertex two pairs keeps every
+   reference_array value at 0. What a non-zero value indexes is measured,
+   not stated by ISO 14739-1 (see prc_compressed_texture_state in
+   prc_decode_compressed_tess.c), and at 0 the readings agree. */
+typedef struct
+{
+    double   *positions;     /* num_positions * 3 */
+    uint32_t  num_positions;
+    uint32_t *weld_group;    /* num_positions: the vertex's UV id */
+    uint32_t *tri_indices;   /* num_triangles * 3 */
+    uint32_t *uv_pair;       /* per UV id: an input pair index with that value */
+    uint32_t  num_uv;
+} prc_encode_textured_input;
+
+static void
+prc_encode_textured_input_free(prc_context *ctx, prc_encode_textured_input *in)
+{
+    if (in->positions != NULL) prc_free(ctx, in->positions);
+    if (in->weld_group != NULL) prc_free(ctx, in->weld_group);
+    if (in->tri_indices != NULL) prc_free(ctx, in->tri_indices);
+    if (in->uv_pair != NULL) prc_free(ctx, in->uv_pair);
+    memset(in, 0, sizeof(*in));
+}
+
+static int
+prc_encode_split_texture_seams(prc_context *ctx,
+    const double *positions, const uint32_t *tri_indices, uint32_t num_triangles,
+    const double *tex_coords, uint32_t num_tex_coords, const uint32_t *tex_indices,
+    prc_encode_textured_input *out)
+{
+    prc_encode_uv_sort *uvs = NULL;
+    prc_encode_corner_sort *corners = NULL;
+    uint32_t *uv_id = NULL;
+    size_t num_corners = (size_t)num_triangles * 3;
+    size_t c;
+    uint32_t k;
+    int ret = PRC_ERROR_MEMORY;
+
+    memset(out, 0, sizeof(*out));
+    for (c = 0; c < num_corners; c++)
+    {
+        if (tex_indices[c] >= num_tex_coords)
+        {
+            prc_error(ctx, PRC_ERROR_INTERNAL,
+                "prc_write_compress_tess_entry: texture index out of range\n");
+            return PRC_ERROR_INTERNAL;
+        }
+    }
+
+    uvs = (prc_encode_uv_sort *)prc_malloc(ctx, (size_t)num_tex_coords * sizeof(prc_encode_uv_sort));
+    uv_id = (uint32_t *)prc_malloc(ctx, (size_t)num_tex_coords * sizeof(uint32_t));
+    out->uv_pair = (uint32_t *)prc_malloc(ctx, (size_t)num_tex_coords * sizeof(uint32_t));
+    corners = (prc_encode_corner_sort *)prc_malloc(ctx, num_corners * sizeof(prc_encode_corner_sort));
+    out->tri_indices = (uint32_t *)prc_malloc(ctx, num_corners * sizeof(uint32_t));
+    if (uvs == NULL || uv_id == NULL || out->uv_pair == NULL || corners == NULL || out->tri_indices == NULL)
+        goto fail;
+
+    for (k = 0; k < num_tex_coords; k++)
+    {
+        uvs[k].u = tex_coords[(size_t)k * 2 + 0];
+        uvs[k].v = tex_coords[(size_t)k * 2 + 1];
+        uvs[k].index = k;
+    }
+    qsort(uvs, num_tex_coords, sizeof(prc_encode_uv_sort), prc_encode_uv_sort_cmp);
+    for (k = 0; k < num_tex_coords; k++)
+    {
+        if (k == 0 || uvs[k].u != uvs[k - 1].u || uvs[k].v != uvs[k - 1].v)
+            out->uv_pair[out->num_uv++] = uvs[k].index;
+        uv_id[uvs[k].index] = out->num_uv - 1;
+    }
+
+    for (c = 0; c < num_corners; c++)
+    {
+        corners[c].key = ((uint64_t)tri_indices[c] << 32) | (uint64_t)uv_id[tex_indices[c]];
+        corners[c].corner = (uint32_t)c;
+    }
+    qsort(corners, num_corners, sizeof(prc_encode_corner_sort), prc_encode_corner_sort_cmp);
+
+    /* At most one vertex per corner. */
+    out->positions = (double *)prc_malloc(ctx, num_corners * 3 * sizeof(double));
+    out->weld_group = (uint32_t *)prc_malloc(ctx, num_corners * sizeof(uint32_t));
+    if (out->positions == NULL || out->weld_group == NULL)
+        goto fail;
+    for (c = 0; c < num_corners; c++)
+    {
+        if (c == 0 || corners[c].key != corners[c - 1].key)
+        {
+            uint32_t v = (uint32_t)(corners[c].key >> 32);
+            memcpy(&out->positions[(size_t)out->num_positions * 3], &positions[(size_t)v * 3],
+                3 * sizeof(double));
+            out->weld_group[out->num_positions] = (uint32_t)(corners[c].key & 0xFFFFFFFFu);
+            out->num_positions++;
+        }
+        out->tri_indices[corners[c].corner] = out->num_positions - 1;
+    }
+    ret = 0;
+
+fail:
+    if (ret != 0)
+    {
+        prc_error(ctx, PRC_ERROR_MEMORY, "Allocation error in prc_write_compress_tess_entry (texture seams)\n");
+        prc_encode_textured_input_free(ctx, out);
+    }
+    if (uvs != NULL) prc_free(ctx, uvs);
+    if (uv_id != NULL) prc_free(ctx, uv_id);
+    if (corners != NULL) prc_free(ctx, corners);
+    return ret;
+}
+
+/* The texture block for a traversal, given each mesh vertex's UV id. The
+   decoder stores pairs per decoded point, so the first corner to reach a
+   point takes a fresh pair and every later corner repeats it (reference
+   0: the point's first and only pair). */
+static int
+prc_encode_texture_block_build(prc_context *ctx, const prc_encode_traversal_result *trav,
+    const uint32_t *mesh_uv, uint32_t num_mesh_vertices,
+    const prc_encode_textured_input *in, const double *tex_coords,
+    prc_encode_texture_block *out)
+{
+    uint32_t *point_uv = NULL;
+    uint32_t num_tris = trav->edge_status_array_size;
+    size_t num_corners = (size_t)num_tris * 3;
+    size_t c;
+    uint32_t p;
+    int ret = PRC_ERROR_MEMORY;
+
+    memset(out, 0, sizeof(*out));
+    if (trav->triangle_point_indices == NULL || trav->point_mesh_vertex == NULL)
+    {
+        prc_error(ctx, PRC_ERROR_INTERNAL, "prc_write_compress_tess_entry: traversal has no corner map\n");
+        return PRC_ERROR_INTERNAL;
+    }
+
+    point_uv = (uint32_t *)prc_malloc(ctx, (size_t)trav->num_decoded_points * sizeof(uint32_t));
+    out->bits = (uint8_t *)prc_malloc(ctx, num_corners * sizeof(uint8_t));
+    out->refs = (uint32_t *)prc_malloc(ctx, num_corners * sizeof(uint32_t));
+    out->pairs = (float *)prc_malloc(ctx, num_corners * 2 * sizeof(float));
+    if (point_uv == NULL || out->bits == NULL || out->refs == NULL || out->pairs == NULL)
+    {
+        prc_error(ctx, PRC_ERROR_MEMORY, "Allocation error in prc_write_compress_tess_entry (texture block)\n");
+        goto fail;
+    }
+    for (p = 0; p < trav->num_decoded_points; p++)
+        point_uv[p] = UINT32_MAX;
+
+    for (c = 0; c < num_corners; c++)
+    {
+        int32_t pt = trav->triangle_point_indices[c];
+        int32_t mv;
+        uint32_t uv;
+
+        if (pt < 0 || (uint32_t)pt >= trav->num_decoded_points)
+            goto bad;
+        mv = trav->point_mesh_vertex[pt];
+        if (mv < 0 || (uint32_t)mv >= num_mesh_vertices || mesh_uv[mv] == UINT32_MAX)
+            goto bad;
+        uv = mesh_uv[mv];
+
+        if (point_uv[pt] == UINT32_MAX)
+        {
+            const double *pair = &tex_coords[(size_t)in->uv_pair[uv] * 2];
+
+            point_uv[pt] = uv;
+            out->bits[out->num_bits++] = 0;
+            out->pairs[(size_t)out->num_pairs * 2 + 0] = (float)pair[0];
+            out->pairs[(size_t)out->num_pairs * 2 + 1] = (float)pair[1];
+            out->num_pairs++;
+        }
+        else if (point_uv[pt] == uv)
+        {
+            out->bits[out->num_bits++] = 1;
+            out->refs[out->num_refs++] = 0;
+        }
+        else
+        {
+            goto bad;
+        }
+    }
+    prc_free(ctx, point_uv);
+    return 0;
+
+bad:
+    /* Seam splitting gives every vertex one UV, so a point reached with two
+       means the corner map and the split disagree. */
+    prc_error(ctx, PRC_ERROR_INTERNAL,
+        "prc_write_compress_tess_entry: a decoded point would need two texture pairs\n");
+    ret = PRC_ERROR_INTERNAL;
+fail:
+    if (point_uv != NULL) prc_free(ctx, point_uv);
+    if (out->bits != NULL) prc_free(ctx, out->bits);
+    if (out->refs != NULL) prc_free(ctx, out->refs);
+    if (out->pairs != NULL) prc_free(ctx, out->pairs);
+    memset(out, 0, sizeof(*out));
+    return ret;
+}
+
 int
 prc_write_compress_tess_entry(prc_context *ctx, prc_bit_write_state *s,
     const double *positions, uint32_t num_positions,
     const double *normals, uint32_t num_normals,
     const uint32_t *tri_indices, const uint32_t *norm_indices, uint32_t num_triangles,
     const uint32_t *face_tri_counts, uint32_t num_faces,
+    const double *tex_coords, uint32_t num_tex_coords, const uint32_t *tex_indices,
     prc_write_tolerance tolerance, double crease_angle_degrees)
 {
     prc_encode_mesh mesh;
@@ -5164,22 +5539,75 @@ prc_write_compress_tess_entry(prc_context *ctx, prc_bit_write_state *s,
     uint8_t *bin = NULL;
     uint32_t acount = 0, bsize = 0;
     uint8_t must_recalculate_normals;
+    prc_encode_textured_input textured;
+    prc_encode_texture_block tex_block;
+    uint32_t *mesh_uv = NULL;           /* mesh.num_positions entries: each mesh vertex's UV id */
     int mesh_ready = 0, trav_ready = 0;
     int ret = PRC_ERROR_INTERNAL;
     int code;
     uint32_t f, t, k;
 
     (void)num_normals;
+    memset(&textured, 0, sizeof(textured));
+    memset(&tex_block, 0, sizeof(tex_block));
 
-    if (ctx == NULL || s == NULL || num_triangles == 0)
+    if (ctx == NULL || s == NULL || num_triangles == 0 ||
+        (tex_coords == NULL) != (tex_indices == NULL) || (tex_coords != NULL && num_tex_coords == 0))
     {
         prc_error(ctx, PRC_ERROR_INTERNAL, "prc_write_compress_tess_entry: invalid arguments\n");
         return PRC_ERROR_INTERNAL;
     }
 
-    code = prc_encode_preprocess(ctx, positions, num_positions, tri_indices, num_triangles, tolerance, &mesh);
-    if (code != 0) return code;
+    if (tex_coords != NULL)
+    {
+        code = prc_encode_split_texture_seams(ctx, positions, tri_indices, num_triangles,
+            tex_coords, num_tex_coords, tex_indices, &textured);
+        if (code != 0) return code;
+        code = prc_encode_preprocess_grouped(ctx, textured.positions, textured.num_positions,
+            textured.weld_group, textured.tri_indices, num_triangles, tolerance, 0, &mesh);
+    }
+    else
+    {
+        code = prc_encode_preprocess(ctx, positions, num_positions, tri_indices, num_triangles, tolerance, &mesh);
+    }
+    if (code != 0)
+    {
+        prc_encode_textured_input_free(ctx, &textured);
+        return code;
+    }
     mesh_ready = 1;
+
+    if (tex_coords != NULL)
+    {
+        mesh.avoid_chain_start_swap = 1;
+        /* Each surviving triangle keeps its corners in input order, so a mesh
+           corner's UV id is its input corner's weld group. */
+        mesh_uv = (uint32_t *)prc_malloc(ctx, (size_t)(mesh.num_positions > 0 ? mesh.num_positions : 1) * sizeof(uint32_t));
+        if (mesh_uv == NULL)
+        {
+            prc_error(ctx, PRC_ERROR_MEMORY, "Allocation error in prc_write_compress_tess_entry\n");
+            ret = PRC_ERROR_MEMORY;
+            goto cleanup;
+        }
+        for (k = 0; k < mesh.num_positions; k++)
+            mesh_uv[k] = UINT32_MAX;
+        for (k = 0; k < mesh.num_triangles; k++)
+        {
+            uint32_t c;
+            for (c = 0; c < 3; c++)
+            {
+                uint32_t mv = mesh.tri_indices[(size_t)k * 3 + c];
+                uint32_t uv = textured.weld_group[textured.tri_indices[(size_t)mesh.tri_orig_index[k] * 3 + c]];
+                if (mesh_uv[mv] != UINT32_MAX && mesh_uv[mv] != uv)
+                {
+                    prc_error(ctx, PRC_ERROR_INTERNAL,
+                        "prc_write_compress_tess_entry: a welded vertex carries two texture pairs\n");
+                    goto cleanup;
+                }
+                mesh_uv[mv] = uv;
+            }
+        }
+    }
 
     if (mesh.num_triangles == 0)
     {
@@ -5393,12 +5821,28 @@ prc_write_compress_tess_entry(prc_context *ctx, prc_bit_write_state *s,
     /* is_face_planar is whatever prc_encode_normals_c2 actually encoded --
        never the geometric candidate, and NULL on the C1 path where the
        field does not exist in the stream at all. */
-    code = prc_write_compress_tess_to_stream(ctx, s, &trav, mesh.tolerance_mm,
+    if (tex_coords != NULL)
+    {
+        code = prc_encode_texture_block_build(ctx, &trav, mesh_uv, mesh.num_positions,
+            &textured, tex_coords, &tex_block);
+        if (code != 0)
+        {
+            ret = code;
+            goto cleanup;
+        }
+    }
+
+    code = prc_write_compress_tess_to_stream_ex(ctx, s, &trav, mesh.tolerance_mm,
         rev, crease_angle_degrees, angles, acount, bin, bsize, must_recalculate_normals,
-        is_face_planar);
+        is_face_planar, tex_coords != NULL ? &tex_block : NULL);
     ret = code;
 
 cleanup:
+    if (mesh_uv != NULL) prc_free(ctx, mesh_uv);
+    if (tex_block.bits != NULL) prc_free(ctx, tex_block.bits);
+    if (tex_block.refs != NULL) prc_free(ctx, tex_block.refs);
+    if (tex_block.pairs != NULL) prc_free(ctx, tex_block.pairs);
+    prc_encode_textured_input_free(ctx, &textured);
     if (orig_face_id != NULL) prc_free(ctx, orig_face_id);
     if (face_indices_post != NULL) prc_free(ctx, face_indices_post);
     if (corner_normals != NULL) prc_free(ctx, corner_normals);

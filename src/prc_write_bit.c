@@ -677,6 +677,21 @@ prc_spec_bits_for_unsigned(uint32_t v)
     return 1 + prc_bit_width_u32(v > 0 ? v - 1 : 0);
 }
 
+/* Inverse of prc_bitread_number_of_bits_then_unsigned_int: the bit count in
+   5 bits, then the value in that many bits. The count is the spec function
+   above, which is what independently written files use for the texture
+   reference_array (prc-db, October 2026: 0 and 1 in 1 bit, 2 in 2, 3 and 4
+   in 3, 5 and 7 in 4, 11 in 5). */
+int
+prc_bitwrite_number_of_bits_then_unsigned_int(prc_context *ctx, prc_bit_write_state *state, uint32_t val)
+{
+    uint32_t bit_length = prc_spec_bits_for_unsigned(val);
+
+    if (prc_bitwrite_uint_variable_bit(ctx, state, bit_length, 5) != 0)
+        return -1;
+    return prc_bitwrite_uint_variable_bit(ctx, state, val, bit_length);
+}
+
 static int
 prc_huff_value_compare(const void *a, const void *b)
 {

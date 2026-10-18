@@ -72,6 +72,10 @@ static int prc_tessellate_surface(prc_context *ctx, prc_data *data,
     uint8_t orientation, prc_nano_brep_ref_data *brep_ref_data,
     prc_topo_context *topo_context);
 
+static int
+prc_get_compressed_vertex(prc_context *ctx, prc_compressed_vertex *comp_vertex,
+    prc_vec3 *vertex, prc_nano_brep_compressed_data *compressed_data);
+
 /* A standard type for curve sampling */
 typedef prc_vec3 (*curve_func)(prc_context *ctx, void *params, double input);
 
@@ -788,22 +792,41 @@ prc_evaluate_line_compressed(prc_context *ctx, void *params, double input)
 {
     prc_vec3 output = { 0 };
     prc_start_end_data *line = (prc_start_end_data *)params;
-    prc_vec3 point1;
-    prc_vec3 point2;
+    prc_vec3 point1 = { 0 };
+    prc_vec3 point2 = { 0 };
+    int code;
+
+    if (line->is_vertex)
+    {
+        /* TODO deal with the compressed vertices early on in the code
+           so that we are not doing it repeatedly during evaluation. I have
+           not seen these stored so it has not been a problem yet. */
+        code = prc_get_compressed_vertex(ctx, &line->start_vertex,
+            &point1, NULL);
+        if (code < 0)
+        {
+            prc_error(ctx, PRC_ERROR_INTERNAL, "Issue in prc_get_compressed_vertex\n");
+            return output;
+        }
+        point2 = point1;
+    }
+    else
+    {
+        point1 = line->start_point.point;
+        point2 = line->end_point.point;
+    }
 
     if (input <= 0)
     {
-        output = line->start_point.point;
+        output = point1;
         return output;
     }
     if (input >= 1)
     {
-        output = line->end_point.point;
+        output = point2;
         return output;
     }
 
-    point1 = line->start_point.point;
-    point2 = line->start_point.point;
     prc_vec_scale(1 - input, &point1);
     prc_vec_scale(input, &point2);
     prc_vec_add(point1, point2, &output);
@@ -1513,7 +1536,8 @@ prc_get_curve_sample_info(prc_context *ctx, prc_ptr_curve *ptr_curve,
 }
 static int
 prc_sample_compressed_curve(prc_context *ctx, prc_data *data,
-    prc_compressed_curve *curve, double curve_tolerance, prc_exact_geom_wire_data *wire_data)
+    prc_compressed_curve *curve, double curve_tolerance, prc_exact_geom_wire_data *wire_data,
+    prc_nano_brep_compressed_data *compressed_data)
 {
     uint8_t curve_approx_good = 0;
     void *curve_params = NULL;
@@ -1611,12 +1635,12 @@ prc_sample_compressed_curve(prc_context *ctx, prc_data *data,
     return 0;
 }
 
-
 /* Sample curve but dealing with the compressed curve case. It would be
    nice to reduce replicated code with the non-compressed case */
 static int
 prc_sample_compressed_curve_store_in_body(prc_context *ctx, prc_data *data, uint32_t shell_index,
-    uint32_t face_index, prc_compressed_curve *curve, double curve_tolerance)
+    uint32_t face_index, prc_compressed_curve *curve, double curve_tolerance,
+    prc_nano_brep_compressed_data *compressed_data)
 {
     uint32_t geom_count = data->exact_geom_tess_part_count;
     uint32_t file_index = data->exact_geom_tess_part[geom_count].file_index;
@@ -1635,7 +1659,8 @@ prc_sample_compressed_curve_store_in_body(prc_context *ctx, prc_data *data, uint
     }
 
     code = prc_sample_compressed_curve(ctx, data, curve, curve_tolerance,
-            data->exact_geom_tess_part[geom_count].shells[shell_index].faces[face_index].wire_data);
+            data->exact_geom_tess_part[geom_count].shells[shell_index].faces[face_index].wire_data,
+            compressed_data);
     if (code < 0)
     {
         prc_error(ctx, code, "Failure in prc_sample_compressed_curve\n");
@@ -3999,10 +4024,10 @@ prc_get_surface_data(prc_context *ctx, prc_type_surf *surface,
 
             sampling_info->num_samples_u = TORUS_MAX_SAMPLES;
             sampling_info->num_samples_v = TORUS_MAX_SAMPLES;
-            sampling_info->u_periodic = 0;
-            sampling_info->v_periodic = 0;
-            sampling_info->u_linear = 1;
-            sampling_info->v_linear = 1;
+            sampling_info->u_periodic = 1;
+            sampling_info->v_periodic = 1;
+            sampling_info->u_linear = 0;
+            sampling_info->v_linear = 0;
             sampling_info->u_period = 2.0 * PRC_PI;
             sampling_info->v_period = 2.0 * PRC_PI;
             sampling_info->precision_u = TORUS_SURFACE_PRECISION;
@@ -4135,6 +4160,11 @@ prc_get_compressed_vertex(prc_context *ctx, prc_compressed_vertex *comp_vertex,
     }
     else
     {
+        if (compressed_data == NULL)
+        {
+            prc_error(ctx, PRC_ERROR_PARSE, "Failed to get common vertex by id in prc_get_compressed_point\n");
+            return PRC_ERROR_PARSE;
+        }
         prc_compressed_vertex *vertex_store = NULL;
         code = prc_get_vertex_by_id(ctx, compressed_data, comp_vertex->point_index,
                                     &vertex_store);
@@ -4940,7 +4970,7 @@ prc_convert_comp_curve_to_coedge(prc_context *ctx,
             prc_error(ctx, code, "Failed to get compressed curve in prc_convert_comp_curve_to_coedge\n");
             return code;
         }
-        code = prc_sample_compressed_curve(ctx, NULL, curve, 0, wire_data);
+        code = prc_sample_compressed_curve(ctx, NULL, curve, 0, wire_data, compressed_data);
         if (code < 0)
         {
             prc_error(ctx, code, "Failed to sample compressed curve in prc_convert_comp_curve_to_coedge\n");
@@ -5015,28 +5045,257 @@ prc_convert_ana_loops_to_std_loops(prc_context *ctx, prc_topo_face *synthetic_fa
         return PRC_ERROR_INTERNAL;
     }
 
-    for (j = 0; j < num_loops; ++j)
+    if (wire_data == NULL)
     {
-        if (j == 0)
-        {
-            code = prc_convert_compressed_loop_to_std_loop(ctx, &ana_face->trim_loop[j],
-                &synthetic_face->loops[j], compressed_data, wire_data);
-        }
-        else
+        for (j = 0; j < num_loops; ++j)
         {
             code = prc_convert_compressed_loop_to_std_loop(ctx, &ana_face->trim_loop[j],
                 &synthetic_face->loops[j], compressed_data, NULL);
-        }
-        if (code < 0)
-        {
-            if (wire_data->points != NULL)
+            if (code < 0)
             {
-                prc_free(ctx, wire_data->points);
-                wire_data->points = NULL;
+                prc_error(ctx, code, "Failed to convert ana loop to std loop in prc_convert_compressed_loop_to_std_loop\n");
+                return code;
             }
-            prc_error(ctx, code, "Failed to convert ana loop to std loop in prc_convert_compressed_loop_to_std_loop\n");
-            return code;
         }
+    }
+    else
+    {
+        for (j = 0; j < num_loops; ++j)
+        {
+            code = prc_convert_compressed_loop_to_std_loop(ctx, &ana_face->trim_loop[j],
+                &synthetic_face->loops[j], compressed_data, &wire_data[j]);
+            if (code < 0)
+            {
+                prc_error(ctx, code, "Failed to convert ana loop to std loop in prc_convert_compressed_loop_to_std_loop\n");
+                return code;
+            }
+        }
+    }
+    return 0;
+}
+
+/* Decompress the compressed NURBs control points */
+static int
+prc_decompress_control_points(prc_context *ctx, uint32_t num_ctrl_u,
+    uint32_t num_ctrl_v, prc_compressed_control_points *comp_cp,
+    uint8_t is_rational, prc_compressed_weights *comp_weights,
+    double nurbs_tolerance, prc_control_points_nurbs_surf *output_p)
+{
+    uint32_t i, j;
+
+    /* Step 1: Initialize baseline starting pointer corner cell matrix index */
+    output_p[0].x = comp_cp->p00.x;
+    output_p[0].y = comp_cp->p00.y;
+    output_p[0].z = comp_cp->p00.z;
+
+    /* Step 2: Accumulate the first V row data points (i = 0, j > 0) */
+    for (j = 1; j < num_ctrl_v; j++)
+    {
+        output_p[j].x = output_p[j - 1].x + comp_cp->ccpt_in_v[j - 1].x;
+        output_p[j].y = output_p[j - 1].y + comp_cp->ccpt_in_v[j - 1].y;
+        output_p[j].z = output_p[j - 1].z + comp_cp->ccpt_in_v[j - 1].z;
+    }
+
+    /* Step 3: Accumulate the first U column data points (i > 0, j = 0) */
+    for (i = 1; i < num_ctrl_u; i++)
+    {
+        uint32_t curr_idx = i * num_ctrl_v;
+        uint32_t prev_idx = (i - 1) * num_ctrl_v;
+        output_p[curr_idx].x = output_p[prev_idx].x + comp_cp->ccpt_in_u[i - 1].x;
+        output_p[curr_idx].y = output_p[prev_idx].y + comp_cp->ccpt_in_u[i - 1].y;
+        output_p[curr_idx].z = output_p[prev_idx].z + comp_cp->ccpt_in_u[i - 1].z;
+    }
+
+    /* Step 4: Core Matrix Loop - Evaluate types on localized tangent surfaces */
+    uint32_t interior_idx = 0;
+    for (i = 1; i < num_ctrl_u; i++)
+    {
+        for (j = 1; j < num_ctrl_v; j++)
+        {
+            uint32_t idx_ij = i * num_ctrl_v + j;
+            uint32_t idx_im1j = (i - 1) * num_ctrl_v + j;
+            uint32_t idx_ijm1 = i * num_ctrl_v + (j - 1);
+            uint32_t idx_prev = (i - 1) * num_ctrl_v + (j - 1);
+
+            /* Local coordinate calculation vectors mapping */
+            prc_vec3 V, U, N, PlaneOrigin;
+            V.x = output_p[idx_im1j].x - output_p[idx_prev].x;
+            V.y = output_p[idx_im1j].y - output_p[idx_prev].y;
+            V.z = output_p[idx_im1j].z - output_p[idx_prev].z;
+
+            U.x = output_p[idx_ijm1].x - output_p[idx_prev].x;
+            U.y = output_p[idx_ijm1].y - output_p[idx_prev].y;
+            U.z = output_p[idx_ijm1].z - output_p[idx_prev].z;
+
+            PlaneOrigin.x = output_p[idx_prev].x + V.x + U.x;
+            PlaneOrigin.y = output_p[idx_prev].y + V.y + U.y;
+            PlaneOrigin.z = output_p[idx_prev].z + V.z + U.z;
+
+            prc_vec_cross(U, V, &N);
+
+            double len_u = prc_vec_length(U);
+            double len_v = prc_vec_length(V);
+            double len_n = prc_vec_length(N);
+
+            prc_interior_compressed_control_points *cp_int = &comp_cp->ccpt_interior[interior_idx++];
+            uint32_t type = cp_int->type;
+
+            /* Force fallback to basic absolute vector evaluations if edge constraints collapse */
+            if (len_u < 1e-12 || len_v < 1e-12 || len_n < 1e-12)
+            {
+                type = 3;
+            }
+
+            if (type == 0)
+            {
+                /* Type 0: Explicit node point matches baseline plane prediction directly */
+                output_p[idx_ij].x = PlaneOrigin.x;
+                output_p[idx_ij].y = PlaneOrigin.y;
+                output_p[idx_ij].z = PlaneOrigin.z;
+            }
+            else
+            {
+                /* Transform plane orientation system metrics to locate target */
+                prc_vec3 unit_u = { U.x / len_u, U.y / len_u, U.z / len_u };
+                prc_vec3 unit_n = { N.x / len_n, N.y / len_n, N.z / len_n };
+                prc_vec3 cross_nu;
+                prc_vec_cross(unit_n, unit_u, &cross_nu);
+
+                double local_x = 0.0, local_y = 0.0, local_z = 0.0;
+
+                if (type == 1)
+                {
+                    /* Type 1: Planar deviation matches plane, unpack only vertical Z vector */
+                    local_z = (double)cp_int->Pijz;
+                }
+                else if (type == 2)
+                {
+                    /* Type 2: Unpack explicit localized X and Y shifts */
+                    local_x = (double)cp_int->Pijx;
+                    local_y = (double)cp_int->Pijy;
+                }
+                else if (type == 3)
+                {
+                    /* Type 3: Read full 3D deviations vector explicitly */
+                    local_x = (double)cp_int->Pijx;
+                    local_y = (double)cp_int->Pijy;
+                    local_z = (double)cp_int->Pijz;
+                }
+
+                /* Project local coordinate coordinates back into world 3D space configuration mapping */
+                output_p[idx_ij].x = PlaneOrigin.x + (local_x * unit_u.x) + (local_y * cross_nu.x) + (local_z * unit_n.x);
+                output_p[idx_ij].y = PlaneOrigin.y + (local_x * unit_u.y) + (local_y * cross_nu.y) + (local_z * unit_n.y);
+                output_p[idx_ij].z = PlaneOrigin.z + (local_x * unit_u.z) + (local_y * cross_nu.z) + (local_z * unit_n.z);
+            }
+        }
+    }
+
+    /* Step 5: Unpack Rational Weights Sequence Configuration Matrix */
+    uint32_t total_points = num_ctrl_u * num_ctrl_v;
+    for (i = 0; i < total_points; i++)
+    {
+        if (is_rational && comp_weights) {
+            /* Decode using uncompressed array or unpack with weight variable metrics tolerances */
+            if (comp_weights->number_bit_weight > 30)
+            {
+                output_p[i].w = comp_weights->weights[i];
+            }
+            else
+            {
+                output_p[i].w = comp_weights->compressed_weights[i];
+            }
+        }
+        else
+        {
+            output_p[i].w = 1.0; /* Non-rational implicit fallback state boundary */
+        }
+    }
+    return 0;
+}
+
+/* Decompress NURBS knot vectors */
+static int
+prc_decompress_knot_vector(prc_context *ctx, uint32_t degree, uint32_t num_control_points,
+    uint32_t number_stored_knots, prc_compressed_multiplicities *mult_array,
+    prc_compressed_knot_vector *comp_knot_vector, double *output_knot_vector)
+{
+    uint32_t total_knots = degree + num_control_points + 1;
+    uint32_t i, j;
+
+    if (comp_knot_vector->is_uniform)
+    {
+        /* Clamped uniform knot vector construction (0.0 at start, 1.0 at end) */
+        /* First (degree + 1) entries are 0.0 */
+        for (i = 0; i <= degree; i++)
+        {
+            output_knot_vector[i] = 0.0;
+        }
+
+        /* Inner uniform steps */
+        uint32_t num_inner_steps = num_control_points - degree;
+        for (i = 1; i < num_inner_steps; i++)
+        {
+            double value = (double)i / (double)num_inner_steps;
+            output_knot_vector[degree + i] = value;
+        }
+
+        /* Last (degree + 1) entries are 1.0 */
+        for (i = num_control_points; i < total_knots; i++)
+        {
+            output_knot_vector[i] = 1.0;
+        }
+        return 0;
+    }
+
+    /* Non-Uniform Knot Vector Reconstruction */
+    uint32_t knot_idx = 0;
+    uint32_t num_bits = comp_knot_vector->knots.number_bit_parameter;
+    double tolerance_param = 1.0 / (double)((1ULL) << (num_bits - 1)); // 1.0 / 2^(num_bits - 1)
+
+    /* Standard implementations assume multi-clamped endpoints matching CAD configurations */
+    /* Pad the baseline starting clamp up to degree + 1 multiplicity */
+    for (i = 0; i <= degree; i++)
+    {
+        output_knot_vector[knot_idx++] = 0.0;
+    }
+
+    double current_knot_value = 0.0;
+
+    /* Reconstruct stored inner knot parameters sequence */
+    for (i = 0; i < number_stored_knots; i++)
+    {
+        uint32_t multiplicity = 1;
+
+        /* Resolve implicitly omitted multiplicity values */
+        if (mult_array[i].multiplicity_is_stored)
+        {
+            multiplicity = mult_array[i].multiplicity;
+        }
+        else if (i > 0)
+        {
+            /* Fallback to matching prior iteration state */
+            multiplicity = mult_array[i - 1].multiplicity_is_stored ? mult_array[i - 1].multiplicity : 1;
+        }
+
+        /* Unpack delta parameter accumulation from the variable bitstream array */
+        /* (Assumes your wrapper abstracts DoubleWithVariableBitNumber calculations) */
+        double compressed_delta = comp_knot_vector->knots.compressed_knots[i].knot;
+        current_knot_value += compressed_delta;
+
+        /* Apply multiplicity sequence writing */
+        for (j = 0; j < multiplicity; j++)
+        {
+            if (knot_idx < total_knots)
+            {
+                output_knot_vector[knot_idx++] = current_knot_value;
+            }
+        }
+    }
+
+    /* Pad trailing clamp up to matching length requirement boundary */
+    while (knot_idx < total_knots)
+    {
+        output_knot_vector[knot_idx++] = 1.0;
     }
 
     return 0;
@@ -5050,7 +5309,7 @@ prc_tessellate_compressed_face(prc_context *ctx, prc_data *data, uint32_t shell_
     uint8_t free_ana = 0;
     prc_topo_face synthetic_face = { 0 };
     prc_type_surf synthetic_surface = { 0 };
-    prc_exact_geom_wire_data wire_data = { 0 };
+    prc_exact_geom_wire_data *wire_data;
 
     synthetic_face.is_synthetic = 1;
 
@@ -5667,8 +5926,15 @@ prc_tessellate_compressed_face(prc_context *ctx, prc_data *data, uint32_t shell_
             /* Now the trimming data */
             if (ana_face->is_trimmed)
             {
+                wire_data = (prc_exact_geom_wire_data *)prc_calloc(ctx,
+                    ana_face->trim_loop_count, sizeof(prc_exact_geom_wire_data));
+                if (wire_data == NULL)
+                {
+                    prc_error(ctx, PRC_ERROR_MEMORY, "Failed to allocate memory for wire_data in prc_tessellate_compressed_face\n");
+                    return PRC_ERROR_MEMORY;
+                }
                 code = prc_convert_ana_loops_to_std_loops(ctx, &synthetic_face,
-                    ana_face, compressed_data, &wire_data);
+                    ana_face, compressed_data, wire_data);
                 if (code < 0)
                 {
                     prc_error(ctx, code, "Failed in prc_convert_ana_loops_to_std_loops\n");
@@ -5676,13 +5942,14 @@ prc_tessellate_compressed_face(prc_context *ctx, prc_data *data, uint32_t shell_
                 }
                 /* Take the data in wire_data, apply the transform to get us to
                    our cylinder at the z-axis and then compute the mean of the 
-                   sample distance from the z axis to get the radius */
-                uint32_t num_samples = wire_data.number_of_points;
+                   sample distance from the z axis to get the radius just use
+                   loop 0 */
+                uint32_t num_samples = wire_data[0].number_of_points;
                 double radius_sum = 0.0;
                 for (uint32_t i = 0; i < num_samples; ++i)
                 {
                     prc_vec3 transformed_point;
-                    prc_vec3 point = wire_data.points[i];
+                    prc_vec3 point = wire_data[0].points[i];
                     /* TODO Apply the inverse transform to get to the z-axis cylinder */
 
                     // Apply inverse rotation
@@ -5693,7 +5960,11 @@ prc_tessellate_compressed_face(prc_context *ctx, prc_data *data, uint32_t shell_
                     radius_sum += radius;
                 }
                 cylinder.radius = radius_sum / num_samples;
-                prc_free(ctx, wire_data.points);
+                for (uint32_t i = 0; i < ana_face->trim_loop_count; ++i)
+                {
+                    prc_free(ctx, wire_data[i].points);
+                }
+                prc_free(ctx, wire_data);
             }
             else
             {
@@ -5801,18 +6072,458 @@ prc_tessellate_compressed_face(prc_context *ctx, prc_data *data, uint32_t shell_
         case PRC_HCG_AnaSphere:
         {
             prc_hcg_ana_sphere hcg_ana_sphere = topo_face->hcg_ana_sphere;
+            prc_vec3 sphere_center;
+            prc_content_compressed_face *face = &hcg_ana_sphere.face;
+            uint8_t orientation_surface_with_shell = face->orientation_surface_with_shell;
+            uint8_t is_an_iso_face = face->is_an_iso_face;
+            prc_surf_sphere sphere = { 0 };
+            prc_vec3 curve_points[ANA_CURVE_SAMPLE];
+
+            free_ana = 1;
+            if (is_an_iso_face)
+            {
+                prc_error(ctx, PRC_ERROR_PARSE, "Analytic face is an ISO face in prc_tessellate_compressed_face\n");
+                return PRC_ERROR_PARSE;
+            }
+
+            prc_content_compressed_ana_face *ana_face = &face->ana_face;
+
+            /* Now we need to build a synthetic uncompressed torus with loops */
+            uint32_t num_loop = 0;
+
+            synthetic_surface.surface_type = PRC_TYPE_SURF_Sphere;
+            sphere.tag = PRC_TYPE_SURF_Sphere;
+            synthetic_surface.surf_sphere = &sphere;
+            prc_get_compressed_point(ctx, &hcg_ana_sphere.sphere_center, &sphere_center);
+
+            /* The radius of the sphere is found by looking at the first point of
+               the curve and getting its distance from the center */
+            sphere.parameterization.u_param_coeff_a = 1;
+            sphere.parameterization.v_param_coeff_a = 1;
+            sphere.parameterization.u_param_coeff_b = 0;
+            sphere.parameterization.v_param_coeff_b = 0;
+            sphere.parameterization.swap_uv = 0;
+            sphere.parameterization.surface_domain.max_uv.x = 2 * PRC_PI;
+            sphere.parameterization.surface_domain.max_uv.y = PRC_HALF_PI;
+            sphere.parameterization.surface_domain.min_uv.x = 0;
+            sphere.parameterization.surface_domain.min_uv.y = -PRC_HALF_PI;
+
+            synthetic_face.has_tolerance = 0;
+            synthetic_face.surface_geometry.is_referenced = 0;
+            synthetic_face.surface_geometry.surface = synthetic_surface;
+            synthetic_face.is_trimmed = 0;
+            synthetic_face.tag = PRC_TYPE_TOPO_Face;
+            synthetic_face.index_of_outer_loop = -1;
+            synthetic_face.number_of_loops = ana_face->trim_loop_count;
+
+            /* If the center is anything other than [0, 0, 0] then we need
+               to add a translation here */
+            if (prc_vec_length(sphere_center) > 1e-9)
+            {
+                sphere.has_transform = 1;
+                sphere.transform.behavior = PRC_TRANSFORMATION_Translate;
+                sphere.transform.translation = sphere_center;
+            }
+            else
+            {
+                sphere.has_transform = 0;
+            }
+
+            /* Now the trimming data */
+            if (ana_face->is_trimmed)
+            {
+                wire_data = (prc_exact_geom_wire_data *)prc_calloc(ctx,
+                    ana_face->trim_loop_count, sizeof(prc_exact_geom_wire_data *));
+                if (wire_data == NULL)
+                {
+                    prc_error(ctx, PRC_ERROR_MEMORY, "Failed to allocate memory for wire_data in prc_tessellate_compressed_face\n");
+                    return PRC_ERROR_MEMORY;
+                }
+                code = prc_convert_ana_loops_to_std_loops(ctx, &synthetic_face,
+                    ana_face, compressed_data, wire_data);
+                if (code < 0)
+                {
+                    for (uint32_t i = 0; i < ana_face->trim_loop_count; ++i)
+                    {
+                        prc_free(ctx, wire_data[i].points);
+                    }
+                    prc_free(ctx, wire_data);
+                    prc_error(ctx, code, "Failed in prc_convert_ana_loops_to_std_loops\n");
+                    goto free_ana;
+                }
+
+                /* Just the first point to compute the radius */
+                prc_vec3 diff;
+                prc_vec_sub(wire_data[0].points[0], sphere_center, &diff);
+                sphere.radius = prc_vec_length(diff);
+
+                for (uint32_t i = 0; i < ana_face->trim_loop_count; ++i)
+                {
+                    prc_free(ctx, wire_data[i].points);
+                }
+                prc_free(ctx, wire_data);
+            }
+            else
+            {
+                /* If the face is not trimmed, this is an error because the cylinder
+                  must have trimming data to define its extent. */
+                prc_error(ctx, PRC_ERROR_PARSE, "Analytic cylinder face is not trimmed in prc_tessellate_compressed_face\n");
+                return PRC_ERROR_PARSE;
+            }
+
+            code = prc_tessellate_surface(ctx, data, shell_index, face_index, &synthetic_face,
+                face->orientation_surface_with_shell, NULL, NULL);
+            if (code < 0)
+            {
+                prc_error(ctx, code, "Failed in prc_tessellate_surface for PRC_HCG_AnaPlane\n");
+                goto free_ana;
+            }
             break;
         }
 
         case PRC_HCG_AnaCone:
         {
             prc_hcg_ana_cone hcg_ana_cone = topo_face->hcg_ana_cone;
+            prc_vec3 axis_point, apex_point;
+            prc_content_compressed_face *face = &hcg_ana_cone.face;
+            uint8_t orientation_surface_with_shell = face->orientation_surface_with_shell;
+            uint8_t is_an_iso_face = face->is_an_iso_face;
+            prc_surf_cone cone = { 0 };
+            prc_vec3 curve_points[ANA_CURVE_SAMPLE];
+
+            free_ana = 1;
+            if (is_an_iso_face)
+            {
+                prc_error(ctx, PRC_ERROR_PARSE, "Analytic face is an ISO face in prc_tessellate_compressed_face\n");
+                return PRC_ERROR_PARSE;
+            }
+
+            prc_content_compressed_ana_face *ana_face = &face->ana_face;
+
+            synthetic_surface.surface_type = PRC_TYPE_SURF_Cone;
+            cone.tag = PRC_TYPE_SURF_Cone;
+            synthetic_surface.surf_cone = &cone;
+            prc_get_compressed_point(ctx, &hcg_ana_cone.axis_point, &axis_point);
+            prc_get_compressed_point(ctx, &hcg_ana_cone.apex_point, &apex_point);
+
+            cone.parameterization.u_param_coeff_a = 1;
+            cone.parameterization.v_param_coeff_a = 1;
+            cone.parameterization.u_param_coeff_b = 0;
+            cone.parameterization.v_param_coeff_b = 0;
+            cone.parameterization.swap_uv = 0;
+            cone.parameterization.surface_domain.max_uv.x = 2 * PRC_PI;
+            cone.parameterization.surface_domain.max_uv.y = 1245;
+            cone.parameterization.surface_domain.min_uv.x = 0;
+            cone.parameterization.surface_domain.min_uv.y = -1245;
+
+            synthetic_face.has_tolerance = 0;
+            synthetic_face.surface_geometry.is_referenced = 0;
+            synthetic_face.surface_geometry.surface = synthetic_surface;
+            synthetic_face.is_trimmed = 0;
+            synthetic_face.tag = PRC_TYPE_TOPO_Face;
+            synthetic_face.index_of_outer_loop = -1;
+            synthetic_face.number_of_loops = ana_face->trim_loop_count;
+
+            /* =================================================================
+               1. COMPUTE FORWARD TRANSFORMATION BASIS VECTORS
+               ================================================================= */
+            prc_vec3 z_basis;
+            prc_vec_sub(apex_point, axis_point, &z_basis);
+            double len_z = sqrt(z_basis.x * z_basis.x + z_basis.y * z_basis.y + z_basis.z * z_basis.z);
+            if (len_z > 1e-9)
+            {
+                z_basis.x /= len_z;
+                z_basis.y /= len_z;
+                z_basis.z /= len_z;
+            }
+            else
+            {
+                z_basis.x = 0.0; z_basis.y = 0.0; z_basis.z = 1.0;
+            }
+
+            prc_vec3 arb_vec = { 1.0, 0.0, 0.0 };
+            if (fabs(z_basis.x) > 0.9)
+            {
+                arb_vec.x = 0.0; arb_vec.y = 1.0; arb_vec.z = 0.0;
+            }
+
+            prc_vec3 x_basis, y_basis;
+            prc_vec_cross(arb_vec, z_basis, &x_basis);
+            double len_x = sqrt(x_basis.x * x_basis.x + x_basis.y * x_basis.y + x_basis.z * x_basis.z);
+            x_basis.x /= len_x; x_basis.y /= len_x; x_basis.z /= len_x;
+
+            prc_vec_cross(z_basis, x_basis, &y_basis);
+
+            /* Forward transform mapping Canonical space -> Model space */
+            cone.has_transform = 1;
+            cone.transform.behavior = PRC_TRANSFORMATION_Translate | PRC_TRANSFORMATION_Rotate;
+            cone.transform.translation = axis_point;
+            cone.transform.rotation[0] = x_basis;
+            cone.transform.rotation[1] = y_basis;
+            cone.transform.scale = 1.0;
+
+            if (prc_exact_geom_set_transform(ctx, &cone.exact_geom_transform, &cone.transform) < 0)
+            {
+                prc_error(ctx, PRC_ERROR_INTERNAL, "Failed forward transform generation for cone\n");
+                return PRC_ERROR_INTERNAL;
+            }
+
+            /* =================================================================
+               2. BUILD INVERSE MATRIX SYSTEM (Model space -> Canonical space)
+               ================================================================= */
+            prc_trans_3d inv_transform = { 0 };
+            inv_transform.behavior = PRC_TRANSFORMATION_Translate | PRC_TRANSFORMATION_Rotate;
+            inv_transform.scale = 1.0;
+
+            inv_transform.rotation[0].x = x_basis.x;
+            inv_transform.rotation[0].y = y_basis.x;
+            inv_transform.rotation[0].z = z_basis.x;
+
+            inv_transform.rotation[1].x = x_basis.y;
+            inv_transform.rotation[1].y = y_basis.y;
+            inv_transform.rotation[1].z = z_basis.y;
+
+            inv_transform.translation.x = -(axis_point.x * x_basis.x + axis_point.y * x_basis.y + axis_point.z * x_basis.z);
+            inv_transform.translation.y = -(axis_point.x * x_basis.y + axis_point.y * y_basis.y + axis_point.z * y_basis.z);
+            inv_transform.translation.z = -(axis_point.x * x_basis.z + axis_point.y * y_basis.z + axis_point.z * z_basis.z);
+
+            prc_exact_geom_transform inv_geom_matrix;
+            prc_exact_geom_set_transform(ctx, &inv_geom_matrix, &inv_transform);
+
+            /* =================================================================
+               3. RESOLVE CONE PARAMETERS USING THE STRIP LOOP AND APEX COORDS
+               ================================================================= */
+            if (ana_face->is_trimmed)
+            {
+                wire_data = (prc_exact_geom_wire_data *)prc_calloc(ctx,
+                    ana_face->trim_loop_count, sizeof(prc_exact_geom_wire_data));
+                if (wire_data == NULL)
+                {
+                    prc_error(ctx, PRC_ERROR_MEMORY, "Failed to allocate memory for wire_data in prc_tessellate_compressed_face\n");
+                    return PRC_ERROR_MEMORY;
+                }
+                code = prc_convert_ana_loops_to_std_loops(ctx, &synthetic_face,
+                    ana_face, compressed_data, wire_data);
+                if (code < 0)
+                {
+                    prc_error(ctx, code, "Failed in prc_convert_ana_loops_to_std_loops\n");
+                    goto free_ana;
+                }
+
+                uint32_t loop_index = 0;
+                uint32_t num_samples = wire_data[0].number_of_points;
+                for (uint32_t i = 1; i < ana_face->trim_loop_count; i++)
+                {
+                    if (wire_data[i].number_of_points > num_samples)
+                    {
+                        loop_index = i;
+                        num_samples = wire_data[i].number_of_points;
+                    }
+                }
+
+                if (num_samples >= 2)
+                {
+                    /* A. Project the global model space apex point into canonical space */
+                    prc_vec3 canonical_apex = prc_exact_geom_apply_transform(ctx, &inv_geom_matrix, apex_point);
+                    double v_apex = canonical_apex.z;
+
+                    /* B. Compute average radius and height from the un-collapsed boundary circle */
+                    double r_sum = 0.0;
+                    double v_sum = 0.0;
+
+                    for (uint32_t i = 0; i < num_samples; ++i)
+                    {
+                        prc_vec3 canonical_pt = prc_exact_geom_apply_transform(ctx, &inv_geom_matrix, wire_data[loop_index].points[i]);
+                        r_sum += sqrt(canonical_pt.x * canonical_pt.x + canonical_pt.y * canonical_pt.y);
+                        v_sum += canonical_pt.z;
+                    }
+                    double r_sample = r_sum / (double)num_samples;
+                    double v_sample = v_sum / (double)num_samples;
+
+                    /* C. Calculate properties cleanly using the apex height offset distance */
+                    double dv = v_sample - v_apex;
+                    if (fabs(dv) > 1e-9)
+                    {
+                        double tan_alpha = r_sample / dv;
+                        cone.semi_angle = atan(tan_alpha);
+                        cone.radius = r_sample - (v_sample * tan_alpha);
+                    }
+                    else
+                    {
+                        /* Fallback to cylinder geometry if loops flatten entirely */
+                        cone.radius = r_sample;
+                        cone.semi_angle = 0.0;
+                    }
+                }
+                else
+                {
+                    prc_error(ctx, PRC_ERROR_PARSE, "Insufficient trimming loop samples to resolve cone coefficients\n");
+                    for (uint32_t i = 0; i < ana_face->trim_loop_count; ++i)
+                    {
+                        prc_free(ctx, wire_data[i].points);
+                    }
+                    prc_free(ctx, wire_data);
+                    return PRC_ERROR_PARSE;
+                }
+
+                for (uint32_t i = 0; i < ana_face->trim_loop_count; ++i)
+                {
+                    prc_free(ctx, wire_data[i].points);
+                }
+                prc_free(ctx, wire_data);
+            }
+            else
+            {
+                prc_error(ctx, PRC_ERROR_PARSE, "Analytic cone face is not trimmed in prc_tessellate_compressed_face\n");
+                return PRC_ERROR_PARSE;
+            }
+
+            code = prc_tessellate_surface(ctx, data, shell_index, face_index, &synthetic_face,
+                face->orientation_surface_with_shell, NULL, NULL);
+            if (code < 0)
+            {
+                prc_error(ctx, code, "Failed in prc_tessellate_surface for PRC_HCG_AnaCone\n");
+                goto free_ana;
+            }
             break;
         }
 
         case PRC_HCG_AnaNURBS:
         {
+            /* Convert to a non-compressed nurbs */
             prc_hcg_ana_nurbs hcg_ana_nurbs = topo_face->hcg_ana_nurbs;
+            prc_content_compressed_face *face = &hcg_ana_nurbs.face;
+            uint8_t orientation_surface_with_shell = face->orientation_surface_with_shell;
+            uint8_t is_an_iso_face = face->is_an_iso_face;
+            prc_surf_nurbs nurbs = { 0 };
+            prc_vec3 curve_points[ANA_CURVE_SAMPLE];
+            double nurbs_tolerance = compressed_data->tolerance / 5.0;
+
+            free_ana = 1;
+            if (is_an_iso_face)
+            {
+                prc_error(ctx, PRC_ERROR_PARSE, "Analytic face is an ISO face in prc_tessellate_compressed_face\n");
+                return PRC_ERROR_PARSE;
+            }
+
+            prc_content_compressed_ana_face *ana_face = &face->ana_face;
+
+            synthetic_surface.surface_type = PRC_TYPE_SURF_NURBS;
+            synthetic_surface.surf_nurbs = &nurbs;
+
+            /* Get all the data from the compressed nurbs */
+            uint32_t degree_in_u = hcg_ana_nurbs.compressed_surface.degree_in_u;
+            uint32_t degree_in_v = hcg_ana_nurbs.compressed_surface.degree_in_v;
+            uint32_t number_stored_knots_in_u = hcg_ana_nurbs.compressed_surface.number_stored_knots_in_u;
+            uint32_t number_stored_knots_in_v = hcg_ana_nurbs.compressed_surface.number_stored_knots_in_v;
+            uint8_t is_closed_in_u = hcg_ana_nurbs.compressed_surface.is_closed_in_u;
+            uint8_t is_closed_in_v = hcg_ana_nurbs.compressed_surface.is_closed_in_v;
+            uint8_t is_rational = hcg_ana_nurbs.compressed_surface.is_rational;
+            prc_compressed_multiplicities *mult_v = hcg_ana_nurbs.compressed_surface.mult_v;
+            prc_compressed_multiplicities *mult_u = hcg_ana_nurbs.compressed_surface.mult_u;
+            prc_compressed_control_points comp_control_points = hcg_ana_nurbs.compressed_surface.compressed_control_points;
+            prc_compressed_knot_vector comp_knot_vector_u = hcg_ana_nurbs.compressed_surface.knot_vector_u;
+            prc_compressed_knot_vector comp_knot_vector_v = hcg_ana_nurbs.compressed_surface.knot_vector_v;
+            prc_compressed_weights comp_weights = hcg_ana_nurbs.compressed_surface.compressed_weights;
+
+            /* Make sure all the control points, knot vectors, multiplicities, and weights are uncompressed */
+            nurbs.tag = PRC_TYPE_SURF_NURBS;
+            nurbs.is_rational = is_rational;
+            nurbs.surface_form = KEPRCBsplineSurfaceFormUnspecified;
+
+            /* COMPUTE THESE FROM THE COMPRESSED NURBS DATA */
+            nurbs.du = degree_in_u; /* Restricted to range 1 <= degree <= 25 */
+            nurbs.dv = degree_in_v; /* Restricted to range 1 <= degree <= 25 */
+
+            /* 1. Calculate explicit total knot vector counts from the stored array properties */
+            /* Clause 7.9.21.6 specifies: number_stored_knots = number_of_knots - 2 */
+            uint32_t total_knots_u = number_stored_knots_in_u + 2;
+            uint32_t total_knots_v = number_stored_knots_in_v + 2;
+
+            nurbs.highest_index_of_knots_u = total_knots_u - 1;
+            nurbs.highest_index_of_knots_v = total_knots_v - 1;
+
+            /* 2. Solve for control point counts using the standard NURBS structural constraint equation: */
+            /* total_knots = degree + num_control_points + 1  ==>  num_ctrl = total_knots - degree - 1 */
+            uint32_t num_ctrl_u = total_knots_u - degree_in_u - 1;
+            uint32_t num_ctrl_v = total_knots_v - degree_in_v - 1;
+
+            nurbs.highest_index_of_control_points_u = num_ctrl_u - 1;
+            nurbs.highest_index_of_control_points_v = num_ctrl_v - 1;
+
+            /* 3. Allocate Uncompressed NURBS Arrays */
+            nurbs.p = (prc_control_points_nurbs_surf *)prc_calloc(ctx, num_ctrl_u * num_ctrl_v, sizeof(prc_control_points_nurbs_surf));
+            nurbs.knot_vector_u = (double *)prc_calloc(ctx, total_knots_u, sizeof(double));
+            nurbs.knot_vector_v = (double *)prc_calloc(ctx, total_knots_v, sizeof(double));
+            nurbs.knot_type = KEPRCKnotTypeUnspecified;
+
+            if (!nurbs.p || !nurbs.knot_vector_u || !nurbs.knot_vector_v)
+            {
+                prc_error(ctx, PRC_ERROR_MEMORY, "Memory allocation failed for uncompressed NURBS arrays.\n");
+                goto free_nurbs;
+            }
+
+            /* 4. Decompress U and V Knot Vectors */
+            /* Reconstruct the complete knot vectors from the compressed multiplicities and knot values */
+            code = prc_decompress_knot_vector(ctx, degree_in_u, num_ctrl_u,
+                number_stored_knots_in_u, mult_u, &comp_knot_vector_u, nurbs.knot_vector_u);
+            if (code < 0)
+            {
+                prc_error(ctx, code, "Error in prc_decompress_knot_vector.\n");
+                goto free_nurbs;
+            }
+
+            code = prc_decompress_knot_vector(ctx, degree_in_v, num_ctrl_v,
+                number_stored_knots_in_v, mult_v, &comp_knot_vector_v, nurbs.knot_vector_v);
+            if (code < 0)
+            {
+                prc_error(ctx, code, "Error in prc_decompress_knot_vector.\n");
+                goto free_nurbs;
+            }
+
+            /* 5. Decompress Control Points Matrix & Optional Weights */
+            /* Control points are stored u-major: index = ctrl_u * num_ctrl_v + ctrl_v */
+            code = prc_decompress_control_points(ctx, num_ctrl_u, num_ctrl_v,
+                &comp_control_points, is_rational, &comp_weights, nurbs_tolerance,
+                nurbs.p);
+            if (code < 0)
+            {
+                prc_error(ctx, code, "Error in prc_decompress_control_points.\n");
+                goto free_nurbs;
+            }
+
+            synthetic_face.has_tolerance = 0;
+            synthetic_face.surface_geometry.is_referenced = 0;
+            synthetic_face.surface_geometry.surface = synthetic_surface;
+            synthetic_face.is_trimmed = 0;
+            synthetic_face.tag = PRC_TYPE_TOPO_Face;
+            synthetic_face.index_of_outer_loop = -1;
+            synthetic_face.number_of_loops = ana_face->trim_loop_count;
+
+            /* Now the trimming data */
+            if (ana_face->is_trimmed)
+            {
+                code = prc_convert_ana_loops_to_std_loops(ctx, &synthetic_face,
+                    ana_face, compressed_data, NULL);
+                if (code < 0)
+                {
+                    prc_error(ctx, code, "Failed in prc_convert_ana_loops_to_std_loops\n");
+                    goto free_nurbs;
+                }
+            }
+
+            code = prc_tessellate_surface(ctx, data, shell_index, face_index, &synthetic_face,
+                face->orientation_surface_with_shell, NULL, NULL);
+            if (code < 0)
+            {
+                prc_error(ctx, code, "Failed in prc_tessellate_surface for PRC_HCG_AnaPlane\n");
+                goto free_nurbs;
+            }
+
+free_nurbs: prc_free(ctx, nurbs.p);
+            prc_free(ctx, nurbs.knot_vector_u);
+            prc_free(ctx, nurbs.knot_vector_v);
+
             break;
         }
 
@@ -6052,7 +6763,8 @@ prc_sample_coedge(prc_context *ctx, prc_nano_brep_ref_data *brep_ref_data,
                 }
 
                 /* This is the case where we are coming from the compressed surface */
-                code = prc_sample_compressed_curve(ctx, NULL, trim_curve, 0, &wire_samples);
+                code = prc_sample_compressed_curve(ctx, NULL, trim_curve, 0,
+                    &wire_samples, topo->topo_single_wire_compress->ref_data);
                 if (code < 0)
                 {
                     if (wire_samples.points != NULL)
@@ -6487,7 +7199,6 @@ prc_assign_loop_inner_outer(prc_context *ctx, prc_topo_face *topo_face, uint8_t 
                loop's wind_u/wind_v (see prc_tessellate_periodic_face_from_loops) */
             case PRC_TYPE_SURF_Cone:
             case PRC_TYPE_SURF_Cylinder:
-            case PRC_TYPE_SURF_Sphere:
             {
                 if (any_wraps)
                     break;
@@ -6495,10 +7206,11 @@ prc_assign_loop_inner_outer(prc_context *ctx, prc_topo_face *topo_face, uint8_t 
                 return prc_assign_outer_loop_by_nesting(ctx, num_loops, loop_samples);
             }
 
-            /* For a Torus we could have concentric wrapping rings. We must
+            /* For a Torus or the sphere we could have concentric wrapping rings. We must
                set the outer loop role to the larger bounding domain or greater
                radius profile */
             case PRC_TYPE_SURF_Torus:
+            case PRC_TYPE_SURF_Sphere:
             {
                 if (any_wraps)
                 {
@@ -6878,47 +7590,69 @@ prc_map_loops_to_surface(prc_context *ctx, prc_topo_face *topo_face, uint8_t ori
                     }
                     curr_loop->wind_u = 0;
                     curr_loop->wind_v = 0;
-                    continue;
                 }
-
-                for (j = 0; j < num_samples; j++)
+                else
                 {
-                    double x = curr_loop->samples[j].x;
-                    double y = curr_loop->samples[j].y;
-
-                    v = curr_loop->samples[j].z;
-
-                    /* x = radius(v)*cos(u), y = radius(v)*sin(u): wherever
-                       this cone's linear radius(v) = radius + v*tan(semi_angle)
-                       is negative (common away from the apex -- a cone's
-                       bottom_radius/semi_angle pair can put the whole usable
-                       v range on the negative side), atan2(y, x) recovers
-                       u + pi instead of u, since negating radius is the same
-                       as rotating u by pi. Negate x,y first to undo that so
-                       the recovered u matches the surface's own u = atan2(y,x)
-                       convention used by prc_evaluate_surf_cone. */
-                    if (cone->radius + v * tan(cone->semi_angle) < 0.0)
+                    for (j = 0; j < num_samples; j++)
                     {
-                        x = -x;
-                        y = -y;
+                        double x = curr_loop->samples[j].x;
+                        double y = curr_loop->samples[j].y;
+
+                        v = curr_loop->samples[j].z;
+
+                        /* x = radius(v)*cos(u), y = radius(v)*sin(u): wherever
+                           this cone's linear radius(v) = radius + v*tan(semi_angle)
+                           is negative (common away from the apex -- a cone's
+                           bottom_radius/semi_angle pair can put the whole usable
+                           v range on the negative side), atan2(y, x) recovers
+                           u + pi instead of u, since negating radius is the same
+                           as rotating u by pi. Negate x,y first to undo that so
+                           the recovered u matches the surface's own u = atan2(y,x)
+                           convention used by prc_evaluate_surf_cone. */
+                        if (cone->radius + v * tan(cone->semi_angle) < 0.0)
+                        {
+                            x = -x;
+                            y = -y;
+                        }
+                        u = atan2(y, x);
+                        u = prc_map_to_two_pi(u);
+
+                        /* Store the raw angle/height for now; unwrap before the
+                           affine parameterization map so the 2*pi period used to
+                           detect wraparound isn't distorted by u_coeff_a */
+                        curr_loop->uv_samples[j].x = u;
+                        curr_loop->uv_samples[j].y = v;
                     }
-                    u = atan2(y, x);
-                    u = prc_map_to_two_pi(u);
-
-                    /* Store the raw angle/height for now; unwrap before the
-                       affine parameterization map so the 2*pi period used to
-                       detect wraparound isn't distorted by u_coeff_a */
-                    curr_loop->uv_samples[j].x = u;
-                    curr_loop->uv_samples[j].y = v;
+                    curr_loop->wind_u = prc_unwrap_angular_component(curr_loop->uv_samples, num_samples, 0);
+                    curr_loop->wind_v = 0;
                 }
-
-                curr_loop->wind_u = prc_unwrap_angular_component(curr_loop->uv_samples, num_samples, 0);
-                curr_loop->wind_v = 0;
 
                 for (j = 0; j < num_samples; j++)
                 {
                     curr_loop->uv_samples[j].x = (curr_loop->uv_samples[j].x - cone->parameterization.u_param_coeff_b) / u_coeff_a;
                     curr_loop->uv_samples[j].y = (curr_loop->uv_samples[j].y - cone->parameterization.v_param_coeff_b) / v_coeff_a;
+#if CHECK_SURFACE_PROJECTION
+                    prc_vec3 test_xyz, test2_xyz;
+                    prc_surface_params cone_eval_params = { 0 };
+                    cone_eval_params.surface_params = (void *)cone;
+                    // Reconstruct the actual u and v that the surface expects after tuning:
+                    double eval_u = (curr_loop->uv_samples[j].x * u_coeff_a) + cone->parameterization.u_param_coeff_b;
+                    double eval_v = (curr_loop->uv_samples[j].y * v_coeff_a) + cone->parameterization.v_param_coeff_b;
+                    test_xyz = prc_evaluate_surf_cone(ctx, &cone_eval_params, eval_u, eval_v);
+
+                    /* We need to apply the transformation to curve xyz as test_xyz does have that applied it */
+                    if (cone->has_transform && !cone->exact_geom_transform.is_identity)
+                    {
+                        test2_xyz = prc_exact_geom_apply_transform(ctx, &cone->exact_geom_transform, curr_loop->samples[j]);
+                    }
+                    else
+                    {
+                        test2_xyz = curr_loop->samples[j];
+                    }
+                    fprintf(stderr, " PRC_TYPE_SURF_Cone projection: curve_sample=%u KnownSurface_xyz = (%.3f,%.3f,%.3f) Surface_uv_from_projection = (%.3f,%.3f) Surface_XYZ_from_uv = (%.3f,%.3f,%.3f) (delta=(%.3f,%.3f,%.3f)\n",
+                        j, test2_xyz.x, test2_xyz.y, test2_xyz.z, curr_loop->uv_samples[j].x, curr_loop->uv_samples[j].y,
+                        test_xyz.x, test_xyz.y, test_xyz.z, test2_xyz.x - test_xyz.x, test2_xyz.y - test_xyz.y, test2_xyz.z - test_xyz.z);
+#endif
                 }
             }
             break;
@@ -6995,10 +7729,15 @@ prc_map_loops_to_surface(prc_context *ctx, prc_topo_face *topo_face, uint8_t ori
                 num_samples = curr_loop->num_samples;
                 for (j = 0; j < num_samples; j++)
                 {
-                    u = atan2(curr_loop->samples[j].y, curr_loop->samples[j].x);
+                    /* Points are already in local coordinate space via the inverse matrix step above */
+                    double local_x = curr_loop->samples[j].x;
+                    double local_y = curr_loop->samples[j].y;
+                    double local_z = curr_loop->samples[j].z;
+
+                    u = atan2(local_y, local_x);
                     u = prc_map_to_two_pi(u);
-                    horizontal_radius = sqrt(curr_loop->samples[j].y * curr_loop->samples[j].y + curr_loop->samples[j].x * curr_loop->samples[j].x);
-                    v = atan2(curr_loop->samples[j].z, horizontal_radius);
+                    horizontal_radius = sqrt(local_y * local_y + local_x * local_x);
+                    v = atan2(local_z, horizontal_radius);
 
                     curr_loop->uv_samples[j].x = u;
                     curr_loop->uv_samples[j].y = v;
@@ -7013,6 +7752,19 @@ prc_map_loops_to_surface(prc_context *ctx, prc_topo_face *topo_face, uint8_t ori
                 {
                     curr_loop->uv_samples[j].x = (curr_loop->uv_samples[j].x - sphere->parameterization.u_param_coeff_b) / u_coeff_a;
                     curr_loop->uv_samples[j].y = (curr_loop->uv_samples[j].y - sphere->parameterization.v_param_coeff_b) / v_coeff_a;
+
+#if CHECK_SURFACE_PROJECTION
+                    prc_vec3 test_xyz;
+                    prc_surface_params sphere_eval_params = { 0 };
+                    sphere_eval_params.surface_params = (void *)sphere;
+                    double eval_u = (curr_loop->uv_samples[j].x * u_coeff_a) + sphere->parameterization.u_param_coeff_b;
+                    double eval_v = (curr_loop->uv_samples[j].y * v_coeff_a) + sphere->parameterization.v_param_coeff_b;
+                    test_xyz = prc_evaluate_surf_sphere(ctx, &sphere_eval_params, eval_u, eval_v);
+
+                    fprintf(stderr, " PRC_TYPE_SURF_Sphere projection: curve_sample=%u LocalSurface_xyz = (%.3f,%.3f,%.3f) Surface_uv_from_projection = (%.3f,%.3f) Surface_XYZ_from_uv = (%.3f,%.3f,%.3f) (delta=(%.3f,%.3f,%.3f)\n",
+                        j, curr_loop->samples[j].x, curr_loop->samples[j].y, curr_loop->samples[j].z, curr_loop->uv_samples[j].x, curr_loop->uv_samples[j].y,
+                        test_xyz.x, test_xyz.y, test_xyz.z, curr_loop->samples[j].x - test_xyz.x, curr_loop->samples[j].y - test_xyz.y, curr_loop->samples[j].z - test_xyz.z);
+#endif
                 }
             }
             break;
@@ -9283,25 +10035,22 @@ prc_build_periodic_outer_loop(prc_context *ctx, uint32_t num_loops, prc_loop_sam
             return PRC_ERROR_INTERNAL;
         }
 
-        /* Align loop B into the same unwrapped coordinate frame as loop A
-           (each was unwrapped independently, starting from its own first
-           sample) so the two meet up at a short seam instead of at
-           arbitrary, independently-chosen angle offsets */
         a_end_a = wrap_axis ? loop_samples[wrap_indices[0]].uv_samples[count_a].y
-                             : loop_samples[wrap_indices[0]].uv_samples[count_a].x;
+            : loop_samples[wrap_indices[0]].uv_samples[count_a].x;
         a_start_b = wrap_axis ? loop_samples[idx_b].uv_samples[0].y : loop_samples[idx_b].uv_samples[0].x;
         shift = a_end_a - a_start_b;
 
         combined_count = count_a + count_b;
-        combined = (prc_vec2 *)prc_calloc(ctx, combined_count, sizeof(prc_vec2));
+        combined = (prc_vec2 *)prc_calloc(ctx, combined_count + 1, sizeof(prc_vec2));
         if (combined == NULL)
         {
             prc_error(ctx, PRC_ERROR_MEMORY, "Failed to allocate combined seam ring in prc_build_periodic_outer_loop\n");
-            return PRC_ERROR_MEMORY;
+            return PRC_ERROR_INTERNAL;
         }
 
         for (j = 0; j < count_a; j++)
             combined[j] = loop_samples[wrap_indices[0]].uv_samples[j];
+
         for (j = 0; j < count_b; j++)
         {
             prc_vec2 p = loop_samples[idx_b].uv_samples[j];
@@ -9312,6 +10061,35 @@ prc_build_periodic_outer_loop(prc_context *ctx, uint32_t num_loops, prc_loop_sam
                 p.x += shift;
             combined[count_a + j] = p;
         }
+
+        /* --- STRAY LINE REMOVAL PATCH ---
+           Explicitly close the loop back onto Loop A's starting coordinate
+           frame by matching its absolute period position. */
+        if (combined_count > 0)
+        {
+            if (wrap_axis == 0) // Longitude wrapping
+            {
+                combined[combined_count - 1].x = combined[0].x;
+            }
+            else // Latitude wrapping
+            {
+                combined[combined_count - 1].y = combined[0].y;
+            }
+        }
+
+        /* Explicitly link the duplicate final end cap */
+        combined[combined_count] = combined[0];
+
+        /* === DUAL-WRAP PERIODIC SEAM CLOSURE DIAGNOSTIC === */
+        fprintf(stderr, "=== CRITICAL SEAM DEBUG (num_wrap == 2) ===\n");
+        fprintf(stderr, "Loop A Total Samples: %u, Loop B Total Samples: %u\n", count_a, count_b);
+        fprintf(stderr, "Unroll Offset Shift Value: %.9f\n", shift);
+        fprintf(stderr, "Loop A Start Point: (%.9f, %.9f)\n", combined[0].x, combined[0].y);
+        fprintf(stderr, "Loop A End Point:   (%.9f, %.9f)\n", combined[count_a - 1].x, combined[count_a - 1].y);
+        fprintf(stderr, "Loop B Start (Shifted):  (%.9f, %.9f)\n", combined[count_a].x, combined[count_a].y);
+        fprintf(stderr, "Loop B End (Shifted):    (%.9f, %.9f)\n", combined[combined_count - 1].x, combined[combined_count - 1].y);
+        fprintf(stderr, "Final Cap Ring Point:    (%.9f, %.9f)\n", combined[combined_count].x, combined[combined_count].y);
+        /* ==================================================== */
     }
     else /* num_wrap == 1: close against the surface's natural domain edge */
     {
@@ -9344,8 +10122,8 @@ prc_build_periodic_outer_loop(prc_context *ctx, uint32_t num_loops, prc_loop_sam
            vice versa. Following the fix in #140, prc_sample_coedge honors
            coedge_orientation, making this standard B-rep convention reliable. */
         edge_b = have_point_loop_edge ? point_loop_edge :
-                 (wind > 0) ? (wrap_axis ? sampling_info->end_u : sampling_info->end_v)
-                             : (wrap_axis ? sampling_info->start_u : sampling_info->start_v);
+            (wind > 0) ? (wrap_axis ? sampling_info->end_u : sampling_info->end_v)
+            : (wrap_axis ? sampling_info->start_u : sampling_info->start_v);
 
         a_start = wrap_axis ? loop_samples[wrap_indices[0]].uv_samples[0].y : loop_samples[wrap_indices[0]].uv_samples[0].x;
         a_end = wrap_axis ? loop_samples[wrap_indices[0]].uv_samples[count_a].y : loop_samples[wrap_indices[0]].uv_samples[count_a].x;
@@ -9669,6 +10447,7 @@ prc_tessellate_trimmed_face(prc_context *ctx, prc_data *data, uint32_t shell_ind
     uint32_t total_verts, total_triangles, grid_num_verts;
     uint32_t v, t;
     int code;
+    uint8_t *cell_processed = NULL;
 
     code = prc_build_regular_grid(ctx, surface_eval_func, surf_params, sampling_info, orientation, &grid);
     if (code < 0)
@@ -9719,15 +10498,17 @@ prc_tessellate_trimmed_face(prc_context *ctx, prc_data *data, uint32_t shell_ind
 
     {
         uint8_t *cell_inside_raw = (uint8_t *)prc_calloc(ctx, cell_count_u * cell_count_v, sizeof(uint8_t));
+        cell_processed = (uint8_t *)prc_calloc(ctx, cell_count_u * cell_count_v, sizeof(uint8_t));
 
         cell_inside = (uint8_t *)prc_calloc(ctx, cell_count_u * cell_count_v, sizeof(uint8_t));
         kept_triangles = (uint32_t *)prc_calloc(ctx, cell_count_u * cell_count_v * 6, sizeof(uint32_t));
-        if (cell_inside_raw == NULL || cell_inside == NULL || kept_triangles == NULL)
+        if (cell_inside_raw == NULL || cell_inside == NULL || kept_triangles == NULL || cell_processed == NULL)
         {
             prc_free(ctx, grid.uv);
             prc_free(ctx, grid.verts);
             prc_free(ctx, cell_inside_raw);
             prc_free(ctx, cell_inside);
+            prc_free(ctx, cell_processed);
             prc_free(ctx, kept_triangles);
             prc_error(ctx, PRC_ERROR_MEMORY, "Allocation failure in prc_tessellate_trimmed_face\n");
             return PRC_ERROR_MEMORY;
@@ -9758,25 +10539,42 @@ prc_tessellate_trimmed_face(prc_context *ctx, prc_data *data, uint32_t shell_ind
 
                 if (has_wrapping_loop)
                 {
-                    if (wrap_axis == 0) // Loops wrap U-axis
+                    if (wrap_axis == 0) // Loops wrap U-axis (Longitude)
                     {
                         double v0 = grid.uv[i00].y;
                         double v1 = grid.uv[i11].y;
 
-                        // Restrict grid cell acceptance strictly between trimming limits
+                        /* Fix: Longitude wraps full 360, so ignore U trim limits completely.
+                           Only restrict rows along the flat, linear V height axis. */
                         if (v0 >= min_trim_v - 0.001 && v1 <= max_trim_v + 0.001)
                         {
                             cell_inside_raw[j * cell_count_u + i] = 1;
                         }
+                        else
+                        {
+                            cell_inside_raw[j * cell_count_u + i] = 0;
+                            if (!grid.wrap_v) {
+                                cell_processed[j * cell_count_u + i] = 1;
+                            }
+                        }
                     }
-                    else // Loops wrap V-axis
+                    else // Loops wrap V-axis (Latitude)
                     {
                         double u0 = grid.uv[i00].x;
                         double u1 = grid.uv[i11].x;
 
+                        /* Fix: Latitude wraps full 360, so ignore V trim limits completely.
+                           Only restrict columns along the flat, linear U axis. */
                         if (u0 >= min_trim_u - 0.001 && u1 <= max_trim_u + 0.001)
                         {
                             cell_inside_raw[j * cell_count_u + i] = 1;
+                        }
+                        else
+                        {
+                            cell_inside_raw[j * cell_count_u + i] = 0;
+                            if (!grid.wrap_u) {
+                                cell_processed[j * cell_count_u + i] = 1;
+                            }
                         }
                     }
                 }
@@ -9795,6 +10593,7 @@ prc_tessellate_trimmed_face(prc_context *ctx, prc_data *data, uint32_t shell_ind
             }
         }
 
+        /* Sync the erosion pass into cell_inside normally */
         /* Erode the raw classification by one cell in every direction (any
            cell touching a non-kept neighbor, or the true domain edge, is
            excluded) so the kept region's traced outline is always at least
@@ -9808,7 +10607,9 @@ prc_tessellate_trimmed_face(prc_context *ctx, prc_data *data, uint32_t shell_ind
            ear-clipping. The subdivision fringe doesn't trace an outline or
            ear-clip at all, so it needs none of this -- it just subdivides
            every cell the raw classification didn't already accept whole */
-        if (use_subdivision_fringe || has_wrapping_loop)
+           // if (use_subdivision_fringe || has_wrapping_loop)
+
+        if (use_subdivision_fringe)
         {
             memcpy(cell_inside, cell_inside_raw, cell_count_u * cell_count_v * sizeof(uint8_t));
         }
@@ -9821,23 +10622,50 @@ prc_tessellate_trimmed_face(prc_context *ctx, prc_data *data, uint32_t shell_ind
                     if (!cell_inside_raw[j * cell_count_u + i])
                         continue;
 
-                    {
-                        int32_t ni_left = prc_wrap_cell_index((int32_t)i - 1, cell_count_u, grid.wrap_u);
-                        int32_t ni_right = prc_wrap_cell_index((int32_t)i + 1, cell_count_u, grid.wrap_u);
-                        int32_t nj_below = prc_wrap_cell_index((int32_t)j - 1, cell_count_v, grid.wrap_v);
-                        int32_t nj_above = prc_wrap_cell_index((int32_t)j + 1, cell_count_v, grid.wrap_v);
+                    int32_t ni_left = prc_wrap_cell_index((int32_t)i - 1, cell_count_u, grid.wrap_u);
+                    int32_t ni_right = prc_wrap_cell_index((int32_t)i + 1, cell_count_u, grid.wrap_u);
+                    int32_t nj_below = prc_wrap_cell_index((int32_t)j - 1, cell_count_v, grid.wrap_v);
+                    int32_t nj_above = prc_wrap_cell_index((int32_t)j + 1, cell_count_v, grid.wrap_v);
 
-                        if (ni_left >= 0 && ni_right >= 0 && nj_below >= 0 && nj_above >= 0 &&
-                            cell_inside_raw[j * cell_count_u + (uint32_t)ni_left] &&
-                            cell_inside_raw[j * cell_count_u + (uint32_t)ni_right] &&
-                            cell_inside_raw[(uint32_t)nj_below * cell_count_u + i] &&
-                            cell_inside_raw[(uint32_t)nj_above * cell_count_u + i])
-                        {
-                            cell_inside[j * cell_count_u + i] = 1;
+                    /* --- FIXED ROBUST BOUNDS SHIELD PASS ---
+                       If an axis is not periodic and does not wrap, do not look for neighbors
+                       past the out-of-bounds terminal limits (< 0). Validate neighbors ONLY
+                       if they point to valid rows within the allocated matrix buffer. */
+                    uint8_t u_valid = 1;
+                    if (grid.wrap_u) {
+                        if (ni_left < 0 || ni_right < 0 || !cell_inside_raw[j * cell_count_u + ni_left] || !cell_inside_raw[j * cell_count_u + ni_right]) {
+                            u_valid = 0;
                         }
+                    }
+                    else {
+                        if (ni_left >= 0 && !cell_inside_raw[j * cell_count_u + ni_left])  u_valid = 0;
+                        if (ni_right >= 0 && !cell_inside_raw[j * cell_count_u + ni_right]) u_valid = 0;
+                    }
+
+                    uint8_t v_valid = 1;
+                    if (grid.wrap_v) {
+                        if (nj_below < 0 || nj_above < 0 || !cell_inside_raw[nj_below * cell_count_u + i] || !cell_inside_raw[nj_above * cell_count_u + i]) {
+                            v_valid = 0;
+                        }
+                    }
+                    else {
+                        if (nj_below >= 0 && !cell_inside_raw[nj_below * cell_count_u + i]) v_valid = 0;
+                        if (nj_above >= 0 && !cell_inside_raw[nj_above * cell_count_u + i]) v_valid = 0;
+                    }
+
+                    if (u_valid && v_valid)
+                    {
+                        cell_inside[j * cell_count_u + i] = 1;
                     }
                 }
             }
+        }
+
+        /* Merge the flags so cell_processed tracks BOTH solid grid vertices and dead space */
+        for (k = 0; k < cell_count_u * cell_count_v; k++)
+        {
+            if (cell_inside[k])
+                cell_processed[k] = 1;
         }
 
         {
@@ -9909,7 +10737,7 @@ prc_tessellate_trimmed_face(prc_context *ctx, prc_data *data, uint32_t shell_ind
             {
                 uint32_t vnext_i, vnext_j, i00, i10, i11, i01;
 
-                if (cell_inside[j * cell_count_u + i])
+                if (cell_processed[j * cell_count_u + i])
                     continue;
 
                 vnext_i = (i + 1 == grid.vertex_samples_u && grid.wrap_u) ? 0 : (i + 1);
@@ -10096,6 +10924,7 @@ prc_tessellate_trimmed_face(prc_context *ctx, prc_data *data, uint32_t shell_ind
     prc_free(ctx, fringe_poly_triangles);
 
 fringe_done:
+    prc_free(ctx, cell_processed);
     prc_free(ctx, cell_inside);
 
     total_verts = grid_num_verts + fringe_num_verts;
@@ -11171,11 +12000,12 @@ prc_approximate_objects_exact_geom(prc_context *ctx, prc_api_data data_in, uint3
             {
             case PRC_TYPE_TOPO_SingleWireBodyCompress:
             {
+                /* Single wire should not be storing vertex data I don't believe hence
+                   the NULL in the call to prc_sample_compressed_curve_store_in_body */
                 data->exact_geom_tess_part[geom_count].shells[i].faces[j].type = PRC_EXACT_GEOM_WIRE;
-                 
                 prc_topo_single_wire_compress *body = topo->topo_single_wire_compress;
                 code = prc_sample_compressed_curve_store_in_body(ctx, data, i, j,
-                                    &body->compressed_curve, body->curve_tolerance);
+                                    &body->compressed_curve, body->curve_tolerance, NULL);
                 if (code < 0)
                 {
                     prc_error(ctx, code, "Failed in prc_sample_compressed_curve\n");

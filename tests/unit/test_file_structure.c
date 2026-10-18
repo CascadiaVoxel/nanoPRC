@@ -33,6 +33,9 @@
 #include "prc_write_tree.h"
 #include "prc_write_file_structure.h"
 #include "prc_write_model.h"
+#include "prc_bit.h"
+#include "prc_parse_common.h"
+#include "prc_parse_tess.h"
 #include "zlib.h"
 
 static const char *TEST_PRC_FILENAME = "test_file_structure_output.prc";
@@ -1005,6 +1008,69 @@ test_zlib_section_valid(prc_context *ctx)
     prc_write_global_tables_free(ctx, &tables);
 }
 
+/* The tessellation section ends with user_data (Table 49), after the last
+   entry. Acrobat reads it; when it was missing, Acrobat read one bit past the
+   entries and showed an empty model tree whenever they ended exactly on a
+   byte boundary. Padding can hide the omission from a reader, so this
+   compares the bits the writer produced with the bits the entries account
+   for: the difference must be exactly the one bit of an empty user_data. */
+static void
+test_tessellation_section_ends_with_user_data(void)
+{
+    /* A context of its own: the parsed entries are left to it, because the
+       functions that release a prc_tess are private to prc_release.c. */
+    prc_context *ctx = prc_new_context(NULL);
+    double positions[4 * 3] = { 0,0,0, 1,0,0, 1,1,0, 0,1,0 };
+    uint32_t tris[6] = { 0,1,2, 0,2,3 };
+    double normal[3] = { 0.0, 0.0, 1.0 };
+    uint32_t norm_indices[6] = { 0,0,0, 0,0,0 };
+    uint32_t face_tri_counts[1] = { 2 };
+    prc_write_tess_entry entries[2];
+    prc_bit_write_state s;
+    prc_bit_state bs;
+    prc_content_prc_base base;
+    prc_tess tess[2];
+    size_t written_bits;
+    uint32_t k;
+
+    printf("  sub-case: tessellation section ends with user_data\n");
+
+    memset(entries, 0, sizeof(entries));
+    entries[0].kind = PRC_WRITE_TESS_KIND_COMPRESSED;
+    entries[0].positions = positions;
+    entries[0].num_positions = 4;
+    entries[0].tri_indices = tris;
+    entries[0].num_triangles = 2;
+    entries[0].normals = normal;
+    entries[0].num_normals = 1;
+    entries[0].norm_indices = norm_indices;
+    entries[1] = entries[0];
+    entries[1].kind = PRC_WRITE_TESS_KIND_3D;
+    entries[1].face_tri_counts = face_tri_counts;
+    entries[1].num_faces = 1;
+
+    PRC_ASSERT_EQ(prc_bitwrite_init(ctx, &s, 256), 0);
+    PRC_ASSERT_EQ(prc_write_tessellation_section_to_stream(ctx, &s, entries, 2, NULL), 0);
+    written_bits = s.byte_pos * 8 + s.bit_fill;
+    PRC_ASSERT_EQ(prc_bitwrite_flush(ctx, &s), 0);
+
+    prc_init_bit_state(ctx, &bs, s.buf, s.byte_pos);
+    PRC_ASSERT_EQ(prc_bitread_uint32(ctx, &bs), PRC_TYPE_ASM_FileStructureTessellation);
+    memset(&base, 0, sizeof(base));
+    PRC_ASSERT(prc_parse_content_prc_base(ctx, &bs, &base) >= 0);
+    PRC_ASSERT_EQ(prc_bitread_uint32(ctx, &bs), 2);
+    memset(tess, 0, sizeof(tess));
+    for (k = 0; k < 2; k++)
+        PRC_ASSERT(prc_parse_tess(ctx, &bs, &tess[k], 0) >= 0);
+
+    PRC_ASSERT_EQ((uint64_t)written_bits - (uint64_t)bs.bit_position, 1);
+    PRC_ASSERT_EQ(prc_bitread_uint32(ctx, &bs), 0);   /* user_data.stream_size */
+    PRC_ASSERT_EQ(bs.overrun, 0);
+
+    prc_bitwrite_release(ctx, &s);
+    prc_release_context(ctx);
+}
+
 int
 main(void)
 {
@@ -1025,6 +1091,7 @@ main(void)
     test_embedded_files(ctx);
     test_texture_chain_roundtrip(ctx);
     test_textured_groups_roundtrip(ctx);
+    test_tessellation_section_ends_with_user_data();
 
     prc_release_context(ctx);
     remove(TEST_PRC_FILENAME);

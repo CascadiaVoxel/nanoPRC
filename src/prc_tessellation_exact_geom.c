@@ -72,6 +72,10 @@ static int prc_tessellate_surface(prc_context *ctx, prc_data *data,
     uint8_t orientation, prc_nano_brep_ref_data *brep_ref_data,
     prc_topo_context *topo_context);
 
+static int
+prc_get_compressed_vertex(prc_context *ctx, prc_compressed_vertex *comp_vertex,
+    prc_vec3 *vertex, prc_nano_brep_compressed_data *compressed_data);
+
 /* A standard type for curve sampling */
 typedef prc_vec3 (*curve_func)(prc_context *ctx, void *params, double input);
 
@@ -5070,6 +5074,233 @@ prc_convert_ana_loops_to_std_loops(prc_context *ctx, prc_topo_face *synthetic_fa
     return 0;
 }
 
+/* Decompress the compressed NURBs control points */
+static int
+prc_decompress_control_points(prc_context *ctx, uint32_t num_ctrl_u,
+    uint32_t num_ctrl_v, prc_compressed_control_points *comp_cp,
+    uint8_t is_rational, prc_compressed_weights *comp_weights,
+    double nurbs_tolerance, prc_control_points_nurbs_surf *output_p)
+{
+    uint32_t i, j;
+
+    /* Step 1: Initialize baseline starting pointer corner cell matrix index */
+    output_p[0].x = comp_cp->p00.x;
+    output_p[0].y = comp_cp->p00.y;
+    output_p[0].z = comp_cp->p00.z;
+
+    /* Step 2: Accumulate the first V row data points (i = 0, j > 0) */
+    for (j = 1; j < num_ctrl_v; j++)
+    {
+        output_p[j].x = output_p[j - 1].x + comp_cp->ccpt_in_v[j - 1].x;
+        output_p[j].y = output_p[j - 1].y + comp_cp->ccpt_in_v[j - 1].y;
+        output_p[j].z = output_p[j - 1].z + comp_cp->ccpt_in_v[j - 1].z;
+    }
+
+    /* Step 3: Accumulate the first U column data points (i > 0, j = 0) */
+    for (i = 1; i < num_ctrl_u; i++)
+    {
+        uint32_t curr_idx = i * num_ctrl_v;
+        uint32_t prev_idx = (i - 1) * num_ctrl_v;
+        output_p[curr_idx].x = output_p[prev_idx].x + comp_cp->ccpt_in_u[i - 1].x;
+        output_p[curr_idx].y = output_p[prev_idx].y + comp_cp->ccpt_in_u[i - 1].y;
+        output_p[curr_idx].z = output_p[prev_idx].z + comp_cp->ccpt_in_u[i - 1].z;
+    }
+
+    /* Step 4: Core Matrix Loop - Evaluate types on localized tangent surfaces */
+    uint32_t interior_idx = 0;
+    for (i = 1; i < num_ctrl_u; i++)
+    {
+        for (j = 1; j < num_ctrl_v; j++)
+        {
+            uint32_t idx_ij = i * num_ctrl_v + j;
+            uint32_t idx_im1j = (i - 1) * num_ctrl_v + j;
+            uint32_t idx_ijm1 = i * num_ctrl_v + (j - 1);
+            uint32_t idx_prev = (i - 1) * num_ctrl_v + (j - 1);
+
+            /* Local coordinate calculation vectors mapping */
+            prc_vec3 V, U, N, PlaneOrigin;
+            V.x = output_p[idx_im1j].x - output_p[idx_prev].x;
+            V.y = output_p[idx_im1j].y - output_p[idx_prev].y;
+            V.z = output_p[idx_im1j].z - output_p[idx_prev].z;
+
+            U.x = output_p[idx_ijm1].x - output_p[idx_prev].x;
+            U.y = output_p[idx_ijm1].y - output_p[idx_prev].y;
+            U.z = output_p[idx_ijm1].z - output_p[idx_prev].z;
+
+            PlaneOrigin.x = output_p[idx_prev].x + V.x + U.x;
+            PlaneOrigin.y = output_p[idx_prev].y + V.y + U.y;
+            PlaneOrigin.z = output_p[idx_prev].z + V.z + U.z;
+
+            prc_vec_cross(U, V, &N);
+
+            double len_u = prc_vec_length(U);
+            double len_v = prc_vec_length(V);
+            double len_n = prc_vec_length(N);
+
+            prc_interior_compressed_control_points *cp_int = &comp_cp->ccpt_interior[interior_idx++];
+            uint32_t type = cp_int->type;
+
+            /* Force fallback to basic absolute vector evaluations if edge constraints collapse */
+            if (len_u < 1e-12 || len_v < 1e-12 || len_n < 1e-12)
+            {
+                type = 3;
+            }
+
+            if (type == 0)
+            {
+                /* Type 0: Explicit node point matches baseline plane prediction directly */
+                output_p[idx_ij].x = PlaneOrigin.x;
+                output_p[idx_ij].y = PlaneOrigin.y;
+                output_p[idx_ij].z = PlaneOrigin.z;
+            }
+            else
+            {
+                /* Transform plane orientation system metrics to locate target */
+                prc_vec3 unit_u = { U.x / len_u, U.y / len_u, U.z / len_u };
+                prc_vec3 unit_n = { N.x / len_n, N.y / len_n, N.z / len_n };
+                prc_vec3 cross_nu;
+                prc_vec_cross(unit_n, unit_u, &cross_nu);
+
+                double local_x = 0.0, local_y = 0.0, local_z = 0.0;
+
+                if (type == 1)
+                {
+                    /* Type 1: Planar deviation matches plane, unpack only vertical Z vector */
+                    local_z = (double)cp_int->Pijz;
+                }
+                else if (type == 2)
+                {
+                    /* Type 2: Unpack explicit localized X and Y shifts */
+                    local_x = (double)cp_int->Pijx;
+                    local_y = (double)cp_int->Pijy;
+                }
+                else if (type == 3)
+                {
+                    /* Type 3: Read full 3D deviations vector explicitly */
+                    local_x = (double)cp_int->Pijx;
+                    local_y = (double)cp_int->Pijy;
+                    local_z = (double)cp_int->Pijz;
+                }
+
+                /* Project local coordinate coordinates back into world 3D space configuration mapping */
+                output_p[idx_ij].x = PlaneOrigin.x + (local_x * unit_u.x) + (local_y * cross_nu.x) + (local_z * unit_n.x);
+                output_p[idx_ij].y = PlaneOrigin.y + (local_x * unit_u.y) + (local_y * cross_nu.y) + (local_z * unit_n.y);
+                output_p[idx_ij].z = PlaneOrigin.z + (local_x * unit_u.z) + (local_y * cross_nu.z) + (local_z * unit_n.z);
+            }
+        }
+    }
+
+    /* Step 5: Unpack Rational Weights Sequence Configuration Matrix */
+    uint32_t total_points = num_ctrl_u * num_ctrl_v;
+    for (i = 0; i < total_points; i++)
+    {
+        if (is_rational && comp_weights) {
+            /* Decode using uncompressed array or unpack with weight variable metrics tolerances */
+            if (comp_weights->number_bit_weight > 30)
+            {
+                output_p[i].w = comp_weights->weights[i];
+            }
+            else
+            {
+                output_p[i].w = comp_weights->compressed_weights[i];
+            }
+        }
+        else
+        {
+            output_p[i].w = 1.0; /* Non-rational implicit fallback state boundary */
+        }
+    }
+    return 0;
+}
+
+/* Decompress NURBS knot vectors */
+static int
+prc_decompress_knot_vector(prc_context *ctx, uint32_t degree, uint32_t num_control_points,
+    uint32_t number_stored_knots, prc_compressed_multiplicities *mult_array,
+    prc_compressed_knot_vector *comp_knot_vector, double *output_knot_vector)
+{
+    uint32_t total_knots = degree + num_control_points + 1;
+    uint32_t i, j;
+
+    if (comp_knot_vector->is_uniform)
+    {
+        /* Clamped uniform knot vector construction (0.0 at start, 1.0 at end) */
+        /* First (degree + 1) entries are 0.0 */
+        for (i = 0; i <= degree; i++)
+        {
+            output_knot_vector[i] = 0.0;
+        }
+
+        /* Inner uniform steps */
+        uint32_t num_inner_steps = num_control_points - degree;
+        for (i = 1; i < num_inner_steps; i++)
+        {
+            double value = (double)i / (double)num_inner_steps;
+            output_knot_vector[degree + i] = value;
+        }
+
+        /* Last (degree + 1) entries are 1.0 */
+        for (i = num_control_points; i < total_knots; i++)
+        {
+            output_knot_vector[i] = 1.0;
+        }
+        return 0;
+    }
+
+    /* Non-Uniform Knot Vector Reconstruction */
+    uint32_t knot_idx = 0;
+    uint32_t num_bits = comp_knot_vector->knots.number_bit_parameter;
+    double tolerance_param = 1.0 / (double)((1ULL) << (num_bits - 1)); // 1.0 / 2^(num_bits - 1)
+
+    /* Standard implementations assume multi-clamped endpoints matching CAD configurations */
+    /* Pad the baseline starting clamp up to degree + 1 multiplicity */
+    for (i = 0; i <= degree; i++)
+    {
+        output_knot_vector[knot_idx++] = 0.0;
+    }
+
+    double current_knot_value = 0.0;
+
+    /* Reconstruct stored inner knot parameters sequence */
+    for (i = 0; i < number_stored_knots; i++)
+    {
+        uint32_t multiplicity = 1;
+
+        /* Resolve implicitly omitted multiplicity values */
+        if (mult_array[i].multiplicity_is_stored)
+        {
+            multiplicity = mult_array[i].multiplicity;
+        }
+        else if (i > 0)
+        {
+            /* Fallback to matching prior iteration state */
+            multiplicity = mult_array[i - 1].multiplicity_is_stored ? mult_array[i - 1].multiplicity : 1;
+        }
+
+        /* Unpack delta parameter accumulation from the variable bitstream array */
+        /* (Assumes your wrapper abstracts DoubleWithVariableBitNumber calculations) */
+        double compressed_delta = comp_knot_vector->knots.compressed_knots[i].knot;
+        current_knot_value += compressed_delta;
+
+        /* Apply multiplicity sequence writing */
+        for (j = 0; j < multiplicity; j++)
+        {
+            if (knot_idx < total_knots)
+            {
+                output_knot_vector[knot_idx++] = current_knot_value;
+            }
+        }
+    }
+
+    /* Pad trailing clamp up to matching length requirement boundary */
+    while (knot_idx < total_knots)
+    {
+        output_knot_vector[knot_idx++] = 1.0;
+    }
+
+    return 0;
+}
+
 static int
 prc_tessellate_compressed_face(prc_context *ctx, prc_data *data, uint32_t shell_index, uint32_t face_index,
     prc_compressed_face *topo_face, prc_nano_brep_compressed_data *compressed_data)
@@ -6159,7 +6390,140 @@ prc_tessellate_compressed_face(prc_context *ctx, prc_data *data, uint32_t shell_
 
         case PRC_HCG_AnaNURBS:
         {
+            /* Convert to a non-compressed nurbs */
             prc_hcg_ana_nurbs hcg_ana_nurbs = topo_face->hcg_ana_nurbs;
+            prc_content_compressed_face *face = &hcg_ana_nurbs.face;
+            uint8_t orientation_surface_with_shell = face->orientation_surface_with_shell;
+            uint8_t is_an_iso_face = face->is_an_iso_face;
+            prc_surf_nurbs nurbs = { 0 };
+            prc_vec3 curve_points[ANA_CURVE_SAMPLE];
+            double nurbs_tolerance = compressed_data->tolerance / 5.0;
+
+            free_ana = 1;
+            if (is_an_iso_face)
+            {
+                prc_error(ctx, PRC_ERROR_PARSE, "Analytic face is an ISO face in prc_tessellate_compressed_face\n");
+                return PRC_ERROR_PARSE;
+            }
+
+            prc_content_compressed_ana_face *ana_face = &face->ana_face;
+
+            synthetic_surface.surface_type = PRC_TYPE_SURF_NURBS;
+            synthetic_surface.surf_nurbs = &nurbs;
+
+            /* Get all the data from the compressed nurbs */
+            uint32_t degree_in_u = hcg_ana_nurbs.compressed_surface.degree_in_u;
+            uint32_t degree_in_v = hcg_ana_nurbs.compressed_surface.degree_in_v;
+            uint32_t number_stored_knots_in_u = hcg_ana_nurbs.compressed_surface.number_stored_knots_in_u;
+            uint32_t number_stored_knots_in_v = hcg_ana_nurbs.compressed_surface.number_stored_knots_in_v;
+            uint8_t is_closed_in_u = hcg_ana_nurbs.compressed_surface.is_closed_in_u;
+            uint8_t is_closed_in_v = hcg_ana_nurbs.compressed_surface.is_closed_in_v;
+            uint8_t is_rational = hcg_ana_nurbs.compressed_surface.is_rational;
+            prc_compressed_multiplicities *mult_v = hcg_ana_nurbs.compressed_surface.mult_v;
+            prc_compressed_multiplicities *mult_u = hcg_ana_nurbs.compressed_surface.mult_u;
+            prc_compressed_control_points comp_control_points = hcg_ana_nurbs.compressed_surface.compressed_control_points;
+            prc_compressed_knot_vector comp_knot_vector_u = hcg_ana_nurbs.compressed_surface.knot_vector_u;
+            prc_compressed_knot_vector comp_knot_vector_v = hcg_ana_nurbs.compressed_surface.knot_vector_v;
+            prc_compressed_weights comp_weights = hcg_ana_nurbs.compressed_surface.compressed_weights;
+
+            /* Make sure all the control points, knot vectors, multiplicities, and weights are uncompressed */
+            nurbs.tag = PRC_TYPE_SURF_NURBS;
+            nurbs.is_rational = is_rational;
+            nurbs.surface_form = KEPRCBsplineSurfaceFormUnspecified;
+
+            /* COMPUTE THESE FROM THE COMPRESSED NURBS DATA */
+            nurbs.du = degree_in_u; /* Restricted to range 1 <= degree <= 25 */
+            nurbs.dv = degree_in_v; /* Restricted to range 1 <= degree <= 25 */
+
+            /* 1. Calculate explicit total knot vector counts from the stored array properties */
+            /* Clause 7.9.21.6 specifies: number_stored_knots = number_of_knots - 2 */
+            uint32_t total_knots_u = number_stored_knots_in_u + 2;
+            uint32_t total_knots_v = number_stored_knots_in_v + 2;
+
+            nurbs.highest_index_of_knots_u = total_knots_u - 1;
+            nurbs.highest_index_of_knots_v = total_knots_v - 1;
+
+            /* 2. Solve for control point counts using the standard NURBS structural constraint equation: */
+            /* total_knots = degree + num_control_points + 1  ==>  num_ctrl = total_knots - degree - 1 */
+            uint32_t num_ctrl_u = total_knots_u - degree_in_u - 1;
+            uint32_t num_ctrl_v = total_knots_v - degree_in_v - 1;
+
+            nurbs.highest_index_of_control_points_u = num_ctrl_u - 1;
+            nurbs.highest_index_of_control_points_v = num_ctrl_v - 1;
+
+            /* 3. Allocate Uncompressed NURBS Arrays */
+            nurbs.p = (prc_control_points_nurbs_surf *)prc_calloc(ctx, num_ctrl_u * num_ctrl_v, sizeof(prc_control_points_nurbs_surf));
+            nurbs.knot_vector_u = (double *)prc_calloc(ctx, total_knots_u, sizeof(double));
+            nurbs.knot_vector_v = (double *)prc_calloc(ctx, total_knots_v, sizeof(double));
+            nurbs.knot_type = KEPRCKnotTypeUnspecified;
+
+            if (!nurbs.p || !nurbs.knot_vector_u || !nurbs.knot_vector_v)
+            {
+                prc_error(ctx, PRC_ERROR_MEMORY, "Memory allocation failed for uncompressed NURBS arrays.\n");
+                goto free_nurbs;
+            }
+
+            /* 4. Decompress U and V Knot Vectors */
+            /* Reconstruct the complete knot vectors from the compressed multiplicities and knot values */
+            code = prc_decompress_knot_vector(ctx, degree_in_u, num_ctrl_u,
+                number_stored_knots_in_u, mult_u, &comp_knot_vector_u, nurbs.knot_vector_u);
+            if (code < 0)
+            {
+                prc_error(ctx, code, "Error in prc_decompress_knot_vector.\n");
+                goto free_nurbs;
+            }
+
+            code = prc_decompress_knot_vector(ctx, degree_in_v, num_ctrl_v,
+                number_stored_knots_in_v, mult_v, &comp_knot_vector_v, nurbs.knot_vector_v);
+            if (code < 0)
+            {
+                prc_error(ctx, code, "Error in prc_decompress_knot_vector.\n");
+                goto free_nurbs;
+            }
+
+            /* 5. Decompress Control Points Matrix & Optional Weights */
+            /* Control points are stored u-major: index = ctrl_u * num_ctrl_v + ctrl_v */
+            code = prc_decompress_control_points(ctx, num_ctrl_u, num_ctrl_v,
+                &comp_control_points, is_rational, &comp_weights, nurbs_tolerance,
+                nurbs.p);
+            if (code < 0)
+            {
+                prc_error(ctx, code, "Error in prc_decompress_control_points.\n");
+                goto free_nurbs;
+            }
+
+            synthetic_face.has_tolerance = 0;
+            synthetic_face.surface_geometry.is_referenced = 0;
+            synthetic_face.surface_geometry.surface = synthetic_surface;
+            synthetic_face.is_trimmed = 0;
+            synthetic_face.tag = PRC_TYPE_TOPO_Face;
+            synthetic_face.index_of_outer_loop = -1;
+            synthetic_face.number_of_loops = ana_face->trim_loop_count;
+
+            /* Now the trimming data */
+            if (ana_face->is_trimmed)
+            {
+                code = prc_convert_ana_loops_to_std_loops(ctx, &synthetic_face,
+                    ana_face, compressed_data, NULL);
+                if (code < 0)
+                {
+                    prc_error(ctx, code, "Failed in prc_convert_ana_loops_to_std_loops\n");
+                    goto free_nurbs;
+                }
+            }
+
+            code = prc_tessellate_surface(ctx, data, shell_index, face_index, &synthetic_face,
+                face->orientation_surface_with_shell, NULL, NULL);
+            if (code < 0)
+            {
+                prc_error(ctx, code, "Failed in prc_tessellate_surface for PRC_HCG_AnaPlane\n");
+                goto free_nurbs;
+            }
+
+free_nurbs: prc_free(ctx, nurbs.p);
+            prc_free(ctx, nurbs.knot_vector_u);
+            prc_free(ctx, nurbs.knot_vector_v);
+
             break;
         }
 

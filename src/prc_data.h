@@ -608,6 +608,16 @@ typedef enum {
     PRC_TYPE_SURF_Blend04 = PRC_TYPE_SURF + 19
 } PRC_surface_entity_types_t;
 
+/* This is the only valid value per the spec */
+typedef enum {
+    KEPRCBsplineSurfaceFormUnspecified = 9
+} PRC_EPRCSplineSurfaceForm_t;
+
+/* This is the only valid value per the spec */
+typedef enum {
+    KEPRCKnotTypeUnspecified = 1
+} PRC_EPRCKnotType_t;
+
 /* Table 192 */
 typedef enum {
     PRC_BODY_BBOX_Evaluation = 1,

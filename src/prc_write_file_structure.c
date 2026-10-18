@@ -314,6 +314,14 @@ prc_write_tessellation_section_to_stream(prc_context *ctx, prc_bit_write_state *
         }
     }
 
+    /* user_data closes the section (Table 49, PRC_TYPE_ASM_FileStructureTessellation),
+       and Acrobat reads it. Without it, Acrobat reads one bit past the last
+       entry, which goes unnoticed while that bit is padding in the final
+       byte. When the entries end exactly on a byte boundary, the read runs
+       off the section and Acrobat shows an empty model tree: one file in
+       eight, depending only on the bit length of the content. */
+    if (prc_bitwrite_uint32(ctx, s, 0) != 0) goto fail; /* user_data.stream_size */
+
     if (skip != NULL)
         prc_free(ctx, skip);
     if (demote != NULL)

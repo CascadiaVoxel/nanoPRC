@@ -1014,21 +1014,33 @@ typedef struct prc_api_write_rep_item_s
         there because a genuinely styleless file stops real viewers rendering
         at all.
 
-        A material written here becomes a GRAPH_Material with its ambient,
-        diffuse and specular slots all pointing at `color`, and its emissive
-        slot at black. That mirrors the shared default's construction, which
-        is itself the shape real producers were observed to use, and it is
-        the reason all four slots are populated: a material with an unset
-        emissive index is rejected outright when a viewer resolves it, even
-        though lighter-weight checks upstream accept it. */
+        A material written here becomes a GRAPH_Material. By default its
+        ambient, diffuse and specular slots all point at material_color, and
+        its emissive slot at black; has_material_slots below gives each slot
+        its own colour. All four slots are always populated: a material with
+        an unset emissive index is rejected outright when a viewer resolves
+        it, even though lighter-weight checks upstream accept it. */
     uint8_t  has_material;
-    /** Linear RGB in 0..1, used for ambient, diffuse and specular. */
+    /** Linear RGB in 0..1. The diffuse colour, and also the ambient and
+        specular colour unless has_material_slots is 1. */
     double   material_color[3];
     /** Opacity in 0..1; 1 is opaque. A zero here means fully transparent,
         not "unset" -- set it explicitly whenever has_material is 1. */
     double   material_alpha;
     /** Specular exponent in 0..1. 0 is legal and means a matte surface. */
     double   material_shininess;
+    /** 1 to give the ambient, specular and emissive slots the colours below.
+        material_color then sets the diffuse slot only. Leave 0 and ambient
+        and specular take material_color and emissive is black, as before.
+        These map onto MTL's Ka, Ks and Ke, with Kd as material_color.
+
+        There is no alpha per slot: a reader takes transparency from the
+        item's style, set from material_alpha, and not from the material. */
+    uint8_t  has_material_slots;
+    /** Linear RGB in 0..1. Read only when has_material_slots is 1. */
+    double   material_ambient[3];
+    double   material_specular[3];
+    double   material_emissive[3];
 
     /* --- optional diffuse texture ---
        Set has_texture with has_material to map an image across the item.

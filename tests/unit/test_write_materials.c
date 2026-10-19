@@ -278,6 +278,130 @@ test_two_materials(prc_context *ctx)
     remove(TEST_MATERIALS_FILENAME);
 }
 
+/* Writes one leaf holding one item, reopens it, and returns the material the
+   public API reports for its first face: the same values the OBJ exporter and
+   the viewer see. */
+static void
+write_and_read_face_material(prc_context *ctx, const prc_api_write_rep_item *item,
+    prc_api_material *out)
+{
+    prc_api_write_tessellation tess[1];
+    prc_api_write_rep_item items[1];
+    prc_api_write_node leaf, root;
+    prc_api_write_node *kids[1];
+    uint8_t *buf = NULL;
+    size_t buf_size = 0;
+    FILE *fid;
+    prc_api_data data;
+    prc_api_product *model_tree = NULL;
+    uint32_t num_parts = 0, num_products = 0, num_markups = 0;
+    uint32_t num_tess = 0, num_line_tess = 0, num_extra = 0;
+    prc_api_tess *tesses;
+    uint8_t has_lines = 0;
+
+    fill_tess(&tess[0]);
+    items[0] = *item;
+
+    memset(&leaf, 0, sizeof(leaf));
+    leaf.rep_items = items;
+    leaf.num_rep_items = 1;
+    leaf.name = "leaf";
+    leaf.bbox_max[0] = leaf.bbox_max[1] = 1.0;
+    kids[0] = &leaf;
+    memset(&root, 0, sizeof(root));
+    root.name = "root";
+    root.children = kids;
+    root.num_children = 1;
+    root.bbox_max[0] = root.bbox_max[1] = 1.0;
+
+    PRC_ASSERT_EQ(prc_api_write_prc_buffer(ctx, "slots_model", &root,
+        tess, 1, &buf, &buf_size), 0);
+    fid = fopen(TEST_MATERIALS_FILENAME, "wb");
+    PRC_ASSERT_NOT_NULL(fid);
+    PRC_ASSERT_EQ(fwrite(buf, 1, buf_size, fid), buf_size);
+    fclose(fid);
+    prc_api_write_prc_buffer_free(ctx, buf);
+
+    data = prc_api_open_contents(ctx, TEST_MATERIALS_FILENAME);
+    PRC_ASSERT_NOT_NULL(data);
+    PRC_ASSERT(prc_api_prep_model_tree(ctx, data, &num_parts, &num_products, &num_markups) >= 0);
+    PRC_ASSERT(prc_api_create_model_tree(ctx, data, &model_tree, num_parts, num_products, num_markups) >= 0);
+    PRC_ASSERT(prc_api_get_number_tessellations(ctx, data, model_tree, &num_tess,
+        &num_line_tess, &num_extra, 0) >= 0);
+    PRC_ASSERT_EQ(num_tess, 1);
+    tesses = (prc_api_tess *)calloc(num_tess, sizeof(prc_api_tess));
+    PRC_ASSERT_NOT_NULL(tesses);
+    tesses[0].num_faces = prc_api_get_number_faces(ctx, data, 0);
+    PRC_ASSERT(tesses[0].num_faces >= 1);
+    tesses[0].tess_faces = (prc_api_face *)calloc(tesses[0].num_faces, sizeof(prc_api_face));
+    PRC_ASSERT_NOT_NULL(tesses[0].tess_faces);
+    PRC_ASSERT(prc_api_initialize_tessellation(ctx, data, model_tree, 0, &tesses[0], NULL, &has_lines) >= 0);
+    PRC_ASSERT(prc_api_get_tessellation_vertices(ctx, data, 0, 0, &tesses[0].tess_faces[0], &tesses[0]) >= 0);
+    PRC_ASSERT(prc_api_face_is_material(ctx, &tesses[0], 0));
+
+    memset(out, 0, sizeof(*out));
+    prc_api_get_face_material(ctx, &tesses[0], out, 0);
+
+    prc_api_release_data(ctx, data, tesses, num_tess, NULL, 0, NULL, 0, model_tree);
+    remove(TEST_MATERIALS_FILENAME);
+}
+
+static void
+assert_rgb_near(const float got[3], const double want[3])
+{
+    uint32_t c;
+
+    for (c = 0; c < 3; c++)
+        PRC_ASSERT(got[c] > want[c] - 0.01 && got[c] < want[c] + 0.01);
+}
+
+/* has_material_slots gives each of the four slots its own colour; without it
+   ambient and specular repeat the diffuse colour and emissive is black. Four
+   unrelated colours, so a slot read from the wrong index cannot pass by
+   coincidence. */
+static void
+test_material_slots(prc_context *ctx)
+{
+    static const double diffuse[3]  = { 0.8, 0.2, 0.1 };
+    static const double ambient[3]  = { 0.1, 0.3, 0.6 };
+    static const double specular[3] = { 0.9, 0.9, 0.4 };
+    static const double emissive[3] = { 0.0, 0.7, 0.2 };
+    static const double black[3]    = { 0.0, 0.0, 0.0 };
+    prc_api_write_rep_item item;
+    prc_api_material m;
+
+    printf("  sub-case: separate ambient, specular and emissive colours\n");
+
+    memset(&item, 0, sizeof(item));
+    item.kind = PRC_API_WRITE_RI_SURFACE;
+    item.biased_tessellation_index = 1;
+    item.has_material = 1;
+    memcpy(item.material_color, diffuse, sizeof(diffuse));
+    item.material_alpha = 1.0;
+    item.material_shininess = 0.5;
+    item.has_material_slots = 1;
+    memcpy(item.material_ambient, ambient, sizeof(ambient));
+    memcpy(item.material_specular, specular, sizeof(specular));
+    memcpy(item.material_emissive, emissive, sizeof(emissive));
+
+    write_and_read_face_material(ctx, &item, &m);
+    assert_rgb_near(m.diffuse, diffuse);
+    assert_rgb_near(m.ambient, ambient);
+    assert_rgb_near(m.specular, specular);
+    assert_rgb_near(m.emissive, emissive);
+
+    printf("  sub-case: without has_material_slots, one colour and black emissive\n");
+
+    /* The slot colours stay filled in, so this also shows they are ignored
+       when the flag is clear. */
+    item.has_material_slots = 0;
+    write_and_read_face_material(ctx, &item, &m);
+    assert_rgb_near(m.diffuse, diffuse);
+    assert_rgb_near(m.ambient, diffuse);
+    assert_rgb_near(m.specular, diffuse);
+    assert_rgb_near(m.emissive, black);
+}
+
 /* An item that asks for no material still gets the shared default, which is
    the behaviour every caller written before materials existed relies on. */
 static void
@@ -518,6 +642,7 @@ main(void)
     PRC_ASSERT_NOT_NULL(ctx);
 
     test_two_materials(ctx);
+    test_material_slots(ctx);
     test_default_still_applies(ctx);
     test_face_names_its_style(ctx);
     test_shared_tessellation_names_no_style(ctx);

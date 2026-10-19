@@ -42,6 +42,9 @@ prc_write_schema_and_globals_to_stream(prc_context *ctx, prc_bit_write_state *s,
     if (prc_bitwrite_uint32(ctx, s, 0) != 0) goto fail; /* external file_count (cross-file references) */
 
     if (prc_write_globals_to_stream(ctx, s, tables) != 0) goto fail;
+    /* FileStructureGlobals ends with user_data, as the tessellation section
+       does: see prc_write_extra_geometry_section_to_stream. */
+    if (prc_bitwrite_uint32(ctx, s, 0) != 0) goto fail; /* user_data.stream_size */
 
     return 0;
 
@@ -367,11 +370,18 @@ fail:
    header + schema/globals + tree + tessellation + geometry + ExtraGeometry,
    this function providing the last of those, called from
    prc_write_prc_buffer alongside prc_write_geometry_section_to_stream.
-   Field order/content mirrors prc_parse_file_extra_geometry exactly
-   (prc_parse_file_structure.c): tag, ContentPRCBase (attribute_count,
-   name), then extra_geom_count -- that parser does NOT consume a trailing
-   user_data stream despite the struct having a user_data field, so this
-   writer doesn't emit one either. */
+   Fields: tag, ContentPRCBase (attribute_count, name), extra_geom_count,
+   then user_data.
+
+   user_data is required here and in the globals section, as in the
+   tessellation section. Our own reader stops before it, which is why it was
+   once left out. Acrobat reads it: when the tessellation section lacked it,
+   Acrobat read the first bit after the last entry, and showed an empty
+   model tree whenever the entries ended exactly on a byte boundary. Globals
+   and extra geometry had the same gap. In the public prc-db
+   collection, every one of 2,820 globals and 2,818 extra-geometry sections
+   leaves room for a user_data, and 2,733 and 2,734 end with exactly one.
+   None ends on its last field. */
 int
 prc_write_extra_geometry_section_to_stream(prc_context *ctx, prc_bit_write_state *s)
 {
@@ -385,6 +395,7 @@ prc_write_extra_geometry_section_to_stream(prc_context *ctx, prc_bit_write_state
     if (prc_bitwrite_uint32(ctx, s, 0) != 0) goto fail; /* base.attribute_count */
     if (prc_bitwrite_bit(ctx, s, 1) != 0) goto fail;     /* base.name.same */
     if (prc_bitwrite_uint32(ctx, s, 0) != 0) goto fail; /* extra_geom_count */
+    if (prc_bitwrite_uint32(ctx, s, 0) != 0) goto fail; /* user_data.stream_size */
 
     return 0;
 

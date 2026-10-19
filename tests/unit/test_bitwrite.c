@@ -517,6 +517,53 @@ test_compressed_indice_array_of_size(prc_context *ctx, uint32_t count)
     LEAK_CHECK_END(ctx);
 }
 
+/* point_reference_array's form: no compression bit, and 3 or fewer known
+   references means the delta table is written plain, one 8-bit Character
+   per value. A negative delta must then be a whole signed char (-1 = 0xFF),
+   not the 6-bit pattern the Huffman form uses (-1 = 0x3F), which other
+   readers take as +63. References 0, 9, 14 need 2, 6 and 5 bits, so the
+   last delta is -1. num_known = 4 takes the mandatory Huffman form. */
+static void
+test_short_indice_array_signed_char(prc_context *ctx, uint32_t num_known)
+{
+    static const int32_t data[4] = { 0, 9, 14, 15 };
+    int32_t *out = NULL;
+    uint32_t out_size = 0xFFFFFFFFu;
+    prc_bit_write_state w;
+    prc_bit_state r;
+    uint32_t i;
+    LEAK_CHECK_BEGIN(ctx);
+
+    PRC_ASSERT_EQ(prc_bitwrite_init(ctx, &w, 16), 0);
+    PRC_ASSERT_EQ(prc_bitwrite_compressed_indice_array(ctx, &w, data, num_known, 0, num_known), 0);
+    PRC_ASSERT_EQ(w.error, 0);
+    PRC_ASSERT_EQ(prc_bitwrite_flush(ctx, &w), 0);
+
+    if (num_known <= 3)
+    {
+        uint8_t raw[3];
+
+        prc_init_bit_state(ctx, &r, w.buf, w.byte_pos);
+        PRC_ASSERT_EQ(prc_bitread_uint32(ctx, &r), num_known);
+        for (i = 0; i < num_known; i++)
+            raw[i] = prc_bitread_uint8(ctx, &r);
+        PRC_ASSERT_EQ(raw[0], 2);
+        PRC_ASSERT_EQ(raw[1], 4);
+        PRC_ASSERT_EQ(raw[2], 0xFF);
+    }
+
+    prc_init_bit_state(ctx, &r, w.buf, w.byte_pos);
+    out = prc_bitread_compressed_indice_array(ctx, &r, &out_size, 0, num_known);
+    PRC_ASSERT_NOT_NULL(out);
+    PRC_ASSERT_EQ(out_size, num_known);
+    for (i = 0; i < num_known; i++)
+        PRC_ASSERT_EQ(out[i], data[i]);
+    prc_free(ctx, out);
+
+    prc_bitwrite_release(ctx, &w);
+    LEAK_CHECK_END(ctx);
+}
+
 static void
 test_compressed_arrays(prc_context *ctx)
 {
@@ -529,6 +576,8 @@ test_compressed_arrays(prc_context *ctx)
         test_compressed_integer_array_of_size(ctx, ARRAY_SIZES[i]);
         test_compressed_indice_array_of_size(ctx, ARRAY_SIZES[i]);
     }
+    test_short_indice_array_signed_char(ctx, 3);
+    test_short_indice_array_signed_char(ctx, 4);
 }
 
 /* ------------------------------------------------------------------ */

@@ -2059,6 +2059,7 @@ prc_bitwrite_compressed_indice_array(prc_context *ctx, prc_bit_write_state *stat
     uint8_t *bit_lengths;
     uint32_t *needed;
     uint32_t k;
+    uint8_t plain;
     int result;
 
     if (state->error)
@@ -2145,10 +2146,20 @@ prc_bitwrite_compressed_indice_array(prc_context *ctx, prc_bit_write_state *stat
        (int)bit_lengths[k]; temp = prc_bitread_int_variable_bit(ctx, state,
        (uint8_t)bit_count); data[k] = temp + data[k-1]; } (prc_bit.c
        1559-1581) -- bit_lengths[k] (k>=1) is a delta against the running
-       bit_count, not an absolute length; values in [-32,-1] are stored as
-       the 6-bit two's-complement patterns 32-63 (i.e. `delta & 0x3F` below
-       is exactly the inverse of the reader's `| 0xc0` sign-extension), so
-       delta must stay within [-32, 31] to be unambiguous both ways. */
+       bit_count, not an absolute length, and is signed (SS9.9 stores
+       `cTemp - cLastBitCount` in a char). How a negative delta is stored
+       depends on how prc_bitwrite_character_array writes the array:
+       Huffman-compressed, each value is a 6-bit leaf, so -1 is 0x3F; plain,
+       each value is a whole 8-bit Character (SS9.6 WriteCharacter), so -1
+       is 0xFF. The reader's `| 0xc0` restores both. Other readers take the
+       plain value as a signed char, so writing 0x3F there made them read
+       +63 and lose their place: point_reference_array with 3 or fewer
+       references is always plain, and every negative delta in such arrays
+       in the public prc-db collection (88 in 16 files) is in the 8-bit
+       form. delta must stay within [-32, 31] for the 6-bit form. */
+    plain = has_comp_bit
+        ? (prc_diag_getenv("PRC_DIAG_FORCE_UNCOMPRESSED_CHARARRAY") != NULL)
+        : (num_known <= 3);
     for (k = 1; k < data_size; k++)
     {
         int64_t diff = (int64_t)data[k] - (int64_t)data[k - 1];
@@ -2180,7 +2191,7 @@ prc_bitwrite_compressed_indice_array(prc_context *ctx, prc_bit_write_state *stat
             prc_error(ctx, PRC_ERROR_PARSE, "Bit-length delta out of range in prc_bitwrite_compressed_indice_array\n");
             return -1;
         }
-        bit_lengths[k] = (uint8_t)(delta & 0x3F);
+        bit_lengths[k] = plain ? (uint8_t)(int8_t)delta : (uint8_t)(delta & 0x3F);
     }
 
     /* matches: bit_lengths = prc_bitread_character_array(ctx, state, &size,

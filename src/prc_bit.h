@@ -165,6 +165,7 @@ int prc_bitwrite_float(prc_context *ctx, prc_bit_write_state *state, float val);
 int prc_bitwrite_string(prc_context *ctx, prc_bit_write_state *state, const prc_string *string);
 int prc_bitwrite_uint_variable_bit(prc_context *ctx, prc_bit_write_state *state, uint32_t value, uint32_t bit_length);
 int prc_bitwrite_int_variable_bit(prc_context *ctx, prc_bit_write_state *state, int32_t value, uint32_t bit_length);
+int prc_bitwrite_number_of_bits_then_unsigned_int(prc_context *ctx, prc_bit_write_state *state, uint32_t val);
 int prc_bitwrite_compressed_integer_array(prc_context *ctx, prc_bit_write_state *state, const int32_t *data, uint32_t data_size);
 int prc_bitwrite_character_array(prc_context *ctx, prc_bit_write_state *state, const uint8_t *data, uint32_t data_size, uint8_t num_bits, uint8_t has_comp_bit, uint32_t num_known);
 int prc_bitwrite_short_array(prc_context *ctx, prc_bit_write_state *state, const int32_t *data, uint32_t data_size, uint8_t has_comp_bit, uint8_t number_of_bits);

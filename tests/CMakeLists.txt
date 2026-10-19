@@ -44,6 +44,11 @@ target_link_libraries(test_write_materials prc_static)
 target_include_directories(test_write_materials PRIVATE tests)
 add_test(NAME test_write_materials COMMAND test_write_materials)
 
+add_executable(test_compressed_texture_write tests/unit/test_compressed_texture_write.c)
+target_link_libraries(test_compressed_texture_write prc_static)
+target_include_directories(test_compressed_texture_write PRIVATE tests)
+add_test(NAME test_compressed_texture_write COMMAND test_compressed_texture_write)
+
 add_executable(test_tess_primitives tests/unit/test_tess_primitives.c)
 target_link_libraries(test_tess_primitives prc_static)
 target_include_directories(test_tess_primitives PRIVATE tests)

@@ -1249,19 +1249,26 @@ typedef struct prc_api_write_tessellation_s
         type; see src/prc_write_tess_3d.h for the exact wire format).
         Ignored for COMPRESSED and WIRE. */
     int must_calculate_normals;
-    /** TRIANGLES only: optional texture coordinates, as num_tex_coords (u,v)
-        PAIRS -- 2 doubles each. NULL/0 writes none, which is the default and
-        was the only possibility before this field existed. Must be NULL for
-        WIRE and for COMPRESSED: the compressed encoder has no texture path,
-        and silently dropping supplied UVs would be worse than refusing them,
-        so PRC_API_WRITE_TESS_KIND_COMPRESSED rejects a non-NULL value rather
-        than ignoring it. */
+    /** TRIANGLES and COMPRESSED: optional texture coordinates, as
+        num_tex_coords (u,v) PAIRS -- 2 doubles each. NULL/0 writes none,
+        which is the default and was the only possibility before this field
+        existed. Must be NULL for WIRE.
+
+        COMPRESSED textures every face of the entry. Where corners that share
+        a vertex carry different UVs (a texture seam), the encoder splits the
+        vertex into one per UV, so the seam becomes an open edge in the
+        compressed mesh; when normals are recalculated (`normals` NULL), they
+        are therefore not smoothed across it. Supply `normals` if that
+        matters. */
     const double *tex_coords;
     uint32_t      num_tex_coords;
-    /** TRIANGLES only: 3 texture indices per triangle (into `tex_coords`,
+    /** TRIANGLES and COMPRESSED: 3 texture indices per triangle (into `tex_coords`,
         counted in PAIRS -- index 2 means the third (u,v) pair), parallel to
         tri_indices. Required if and only if `tex_coords` is non-NULL. Every
         face is then written with one texture index per vertex.
+
+        The rest of this note is about TRIANGLES. COMPRESSED takes textures
+        with or without `normals`.
 
         Not legal together with the computed-one-normal-per-face path
         (`normals` NULL and `must_calculate_normals` 0): that combination

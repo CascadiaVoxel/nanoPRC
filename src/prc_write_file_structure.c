@@ -175,11 +175,10 @@ prc_write_tessellation_section_to_stream(prc_context *ctx, prc_bit_write_state *
            cannot be honoured. Both halves must be present: prc_write_tess_3d
            treats a partial pair as "no textures", which would silently drop
            a caller's UVs, and silence is the wrong answer for data the
-           caller went to the trouble of supplying. Likewise the kinds that
-           have no texture path at all -- the compressed encoder has none,
-           and wire tessellation is line geometry. A demoted COMPRESSED entry
-           reaches the TRIANGLES branch below, but cannot be carrying UVs,
-           because the same check rejected them on the way in. */
+           caller went to the trouble of supplying. Likewise wire
+           tessellation, which is line geometry. A demoted COMPRESSED entry
+           reaches the TRIANGLES branch below with its UVs, which that
+           writer takes as they are. */
         if (e->tex_indices != NULL && e->tex_coords == NULL)
         {
             prc_error(ctx, PRC_ERROR_INTERNAL,
@@ -198,11 +197,12 @@ prc_write_tessellation_section_to_stream(prc_context *ctx, prc_bit_write_state *
                 "texture coordinates but no tex_indices for them\n", i);
             goto fail;
         }
-        if (e->tex_coords != NULL && e->kind != PRC_WRITE_TESS_KIND_3D)
+        if (e->tex_coords != NULL && e->kind != PRC_WRITE_TESS_KIND_3D &&
+            e->kind != PRC_WRITE_TESS_KIND_COMPRESSED)
         {
             prc_error(ctx, PRC_ERROR_INTERNAL,
                 "prc_write_file_structure: tessellation entry %u supplies texture "
-                "coordinates, which only PRC_API_WRITE_TESS_KIND_TRIANGLES can write\n", i);
+                "coordinates, which only TRIANGLES and COMPRESSED entries can write\n", i);
             goto fail;
         }
 
@@ -303,7 +303,8 @@ prc_write_tessellation_section_to_stream(prc_context *ctx, prc_bit_write_state *
             if (prc_bitwrite_uint32(ctx, s, PRC_TYPE_TESS_3D_Compressed) != 0) goto fail;
             if (prc_write_compress_tess_entry(ctx, s, e->positions, e->num_positions,
                     e->normals, e->num_normals, e->tri_indices, e->norm_indices, e->num_triangles,
-                    e->face_tri_counts, e->num_faces, tol, crease) != 0)
+                    e->face_tri_counts, e->num_faces, e->tex_coords, e->num_tex_coords, e->tex_indices,
+                    tol, crease) != 0)
                 goto fail;
         }
         else

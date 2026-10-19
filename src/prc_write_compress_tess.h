@@ -55,6 +55,11 @@ typedef struct prc_encode_mesh_s
        doc comment (include/prc_api.h) for why callers may want to check
        this before choosing COMPRESSED. */
     uint32_t  nonmanifold_vertices;
+    /* Set by the caller (preprocessing leaves it 0) when the entry carries
+       texture coordinates: prc_encode_traversal then rotates each chain
+       start so the decoder never swaps its first two corners (see
+       prc_encode_chain_start). */
+    uint8_t   avoid_chain_start_swap;
 } prc_encode_mesh;
 
 /* MITIGATION (2026-07-26, mixed_chains/UK_original.stl/beetle_1000000.stl Acrobat blank-tree
@@ -241,6 +246,29 @@ int prc_write_compress_tess_to_stream(prc_context *ctx, prc_bit_write_state *sta
     const uint8_t *normal_binary_data, uint32_t normal_binary_data_size,
     uint8_t must_recalculate_normals, const uint8_t *is_face_planar);
 
+/* The texture coordinates of one compressed tessellation, in the order the
+   decoder reads them: one bit per triangle corner in traversal order (0 =
+   take the next pair from `pairs`, 1 = repeat a pair already on that
+   vertex, chosen by the next entry of `refs`). Every face is textured. */
+typedef struct prc_encode_texture_block_s
+{
+    uint8_t  *bits;       /* one byte (0/1) per corner */
+    uint32_t  num_bits;
+    uint32_t *refs;       /* one per set bit */
+    uint32_t  num_refs;
+    float    *pairs;      /* num_pairs (u,v) pairs */
+    uint32_t  num_pairs;
+} prc_encode_texture_block;
+
+/* prc_write_compress_tess_to_stream, plus texture: NULL writes no_texture. */
+int prc_write_compress_tess_to_stream_ex(prc_context *ctx, prc_bit_write_state *state,
+    const prc_encode_traversal_result *trav, double tolerance_mm,
+    const uint8_t *normal_is_reversed_c1, double crease_angle_degrees,
+    const int32_t *normal_angle_array, uint32_t normal_angle_array_count,
+    const uint8_t *normal_binary_data, uint32_t normal_binary_data_size,
+    uint8_t must_recalculate_normals, const uint8_t *is_face_planar,
+    const prc_encode_texture_block *texture);
+
 /* Full orchestration (Steps A through E) for one PRC_TYPE_TESS_3D_Compressed
    tessellation entry, from raw caller-supplied geometry straight to bits:
    preprocess (dedup + degenerate removal) -> traversal -> normal encoding
@@ -251,12 +279,19 @@ int prc_write_compress_tess_to_stream(prc_context *ctx, prc_bit_write_state *sta
    these two extra parameters (tolerance, crease_angle_degrees; both only
    meaningful for the encoder's own quantization/weld and C1's flat-normal
    reconstruction) differ. face_tri_counts/num_faces may be NULL/0 to treat
-   the whole entry as one face. */
+   the whole entry as one face.
+
+   tex_coords (num_tex_coords (u,v) pairs) and tex_indices (3 pair indices
+   per triangle, parallel to tri_indices) are optional and go together:
+   with them every face is textured. A vertex whose corners carry different
+   UVs (a texture seam) is split into one vertex per UV, so each decoded
+   vertex holds exactly one pair. */
 int prc_write_compress_tess_entry(prc_context *ctx, prc_bit_write_state *s,
     const double *positions, uint32_t num_positions,
     const double *normals, uint32_t num_normals,
     const uint32_t *tri_indices, const uint32_t *norm_indices, uint32_t num_triangles,
     const uint32_t *face_tri_counts, uint32_t num_faces,
+    const double *tex_coords, uint32_t num_tex_coords, const uint32_t *tex_indices,
     prc_write_tolerance tolerance, double crease_angle_degrees);
 
 #endif

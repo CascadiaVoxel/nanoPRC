@@ -33,5 +33,8 @@ docs/doxygen/xml-public/
 docs/doxygen/*.log
 CLAUDE.md
 
+# Ignore local personal CMake configurations
+CMakeUserPresets.json
+
 # Local Claude Code config (personal tool permissions, not project-wide)
 .claude/

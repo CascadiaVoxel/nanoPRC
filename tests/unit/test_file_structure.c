@@ -36,6 +36,7 @@
 #include "prc_bit.h"
 #include "prc_parse_common.h"
 #include "prc_parse_tess.h"
+#include "prc_parse_global.h"
 #include "zlib.h"
 
 static const char *TEST_PRC_FILENAME = "test_file_structure_output.prc";
@@ -1064,6 +1065,71 @@ test_tessellation_section_ends_with_user_data(void)
     prc_release_context(ctx);
 }
 
+/* The globals and extra-geometry sections end with user_data too. Same
+   measure as above: the bits written, less the bits the section's fields
+   account for, must be exactly the one bit of an empty user_data. */
+static void
+test_globals_and_extra_geometry_end_with_user_data(void)
+{
+    /* A context of its own, for the same reason as the tessellation case:
+       the parsed global data is left to it. */
+    prc_context *ctx = prc_new_context(NULL);
+    prc_write_global_tables tables;
+    prc_bit_write_state s;
+    prc_bit_state bs;
+    prc_content_prc_base base;
+    prc_file_struct_internal_global_data global_data;
+    prc_file_structure_header header;
+    prc_rgb_color color;
+    size_t written_bits;
+
+    printf("  sub-case: globals and extra geometry end with user_data\n");
+
+    /* Globals, with a colour in the tables so the section has content. */
+    PRC_ASSERT_EQ(prc_write_global_tables_init(ctx, &tables), 0);
+    color.red = 0.25; color.green = 0.5; color.blue = 0.75;
+    PRC_ASSERT(prc_write_color_add(ctx, &tables, &color) != 0);
+    PRC_ASSERT_EQ(prc_bitwrite_init(ctx, &s, 256), 0);
+    PRC_ASSERT_EQ(prc_write_schema_and_globals_to_stream(ctx, &s, &tables), 0);
+    written_bits = s.byte_pos * 8 + s.bit_fill;
+    PRC_ASSERT_EQ(prc_bitwrite_flush(ctx, &s), 0);
+
+    prc_init_bit_state(ctx, &bs, s.buf, s.byte_pos);
+    PRC_ASSERT_EQ(prc_bitread_uint32(ctx, &bs), 0);   /* schema_count */
+    PRC_ASSERT_EQ(prc_bitread_uint32(ctx, &bs), PRC_TYPE_ASM_FileStructureGlobals);
+    memset(&base, 0, sizeof(base));
+    PRC_ASSERT(prc_parse_content_prc_base(ctx, &bs, &base) >= 0);
+    PRC_ASSERT_EQ(prc_bitread_uint32(ctx, &bs), 0);   /* file_count */
+    memset(&global_data, 0, sizeof(global_data));
+    memset(&header, 0, sizeof(header));
+    PRC_ASSERT(prc_parse_global_data(ctx, &bs, &global_data, &header) >= 0);
+
+    PRC_ASSERT_EQ((uint64_t)written_bits - (uint64_t)bs.bit_position, 1);
+    PRC_ASSERT_EQ(prc_bitread_uint32(ctx, &bs), 0);   /* user_data.stream_size */
+    PRC_ASSERT_EQ(bs.overrun, 0);
+    prc_bitwrite_release(ctx, &s);
+    prc_write_global_tables_free(ctx, &tables);
+
+    /* Extra geometry. */
+    PRC_ASSERT_EQ(prc_bitwrite_init(ctx, &s, 64), 0);
+    PRC_ASSERT_EQ(prc_write_extra_geometry_section_to_stream(ctx, &s), 0);
+    written_bits = s.byte_pos * 8 + s.bit_fill;
+    PRC_ASSERT_EQ(prc_bitwrite_flush(ctx, &s), 0);
+
+    prc_init_bit_state(ctx, &bs, s.buf, s.byte_pos);
+    PRC_ASSERT_EQ(prc_bitread_uint32(ctx, &bs), PRC_TYPE_ASM_FileStructureExtraGeometry);
+    memset(&base, 0, sizeof(base));
+    PRC_ASSERT(prc_parse_content_prc_base(ctx, &bs, &base) >= 0);
+    PRC_ASSERT_EQ(prc_bitread_uint32(ctx, &bs), 0);   /* extra_geom_count */
+
+    PRC_ASSERT_EQ((uint64_t)written_bits - (uint64_t)bs.bit_position, 1);
+    PRC_ASSERT_EQ(prc_bitread_uint32(ctx, &bs), 0);   /* user_data.stream_size */
+    PRC_ASSERT_EQ(bs.overrun, 0);
+    prc_bitwrite_release(ctx, &s);
+
+    prc_release_context(ctx);
+}
+
 int
 main(void)
 {
@@ -1085,6 +1151,7 @@ main(void)
     test_texture_chain_roundtrip(ctx);
     test_textured_groups_roundtrip(ctx);
     test_tessellation_section_ends_with_user_data();
+    test_globals_and_extra_geometry_end_with_user_data();
 
     prc_release_context(ctx);
     remove(TEST_PRC_FILENAME);

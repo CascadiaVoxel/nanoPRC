@@ -88,6 +88,15 @@ prc_parse_compressed_vertex(prc_context *ctx, prc_bit_state *bit_state,
         /* Just get the index to the vertex */
         data->point_index = prc_bitread_uint_variable_bit(ctx, bit_state,
             compressed_data->number_bits_for_encoding);
+
+        if (data->point_index > compressed_data->current_vertex_index - 1)
+        {
+            prc_error(ctx, PRC_ERROR_INTERNAL, "Invalid point index in prc_parse_compressed_vertex\n");
+            return PRC_ERROR_INTERNAL;
+        }
+
+        /* The point index is encoded based upon the current size of the array */
+        data->point_index = (compressed_data->current_vertex_index - 1) - data->point_index;
     }
     else
     {

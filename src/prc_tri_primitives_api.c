@@ -3016,6 +3016,10 @@ prc_api_get_exact_geometry_tessellation_vertices(prc_context *ctx, prc_api_data 
     float face_color[4] = { 1.0f, 1.0f, 1.0f, 1.0f };
     uint8_t has_ref_style_defined = false;
 
+    /* Read in the wire branch whenever is_material is set, and in the
+       surface branch even when the face-style lookup fails. */
+    memset(&material, 0, sizeof(material));
+
     if (exact_object_index >= data->exact_geom_tess_part_count)
     {
         prc_error(ctx, PRC_API_ERROR_PARAMETER,

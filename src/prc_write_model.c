@@ -243,48 +243,69 @@ prc_write_main_header_bytes(uint8_t *out, uint32_t section_count, const uint32_t
    independently-produced, proven-working PDF/PRC container) to being the
    difference that keeps real 3D-capable PDF viewers from rendering this
    facility's output. */
-/* Adds one item's own material and returns its biased style index, or 0 on
-   failure. The colour, material and style tables all deduplicate, so two items
-   asking for the same colour share one entry and the file carries one of each.
+/* Adds one colour and returns its biased index, or 0 on failure.
 
-   Ambient, diffuse and specular all take `color` and emissive takes black, for
-   the reason given in prc_api_write_rep_item's doc comment: a material with an
-   unset emissive index is rejected when a viewer resolves it. */
-uint32_t
-prc_write_add_item_style(prc_context *ctx, prc_write_global_tables *tables,
-    const double color[3], double alpha, double shininess,
-    const prc_write_item_texture *texture)
+   No alpha here: an RgbColor is three doubles on the wire, and
+   prc_write_color_add deduplicates on the three components alone.
+   Transparency is a property of the STYLE, set in prc_write_add_item_style. */
+static uint32_t
+prc_write_add_rgb(prc_context *ctx, prc_write_global_tables *tables,
+    const double color[3])
 {
-    prc_rgb_color rgb, black;
-    prc_graph_material material;
-    prc_graph_style style;
-    uint32_t biased_color_index, biased_black_index, biased_material_index;
+    prc_rgb_color rgb;
 
-    /* No alpha here: an RgbColor is three doubles on the wire, and
-       prc_write_color_add deduplicates on the three components alone. The
-       assignment that used to be here reached nothing. Transparency is a
-       property of the STYLE, set below. */
     memset(&rgb, 0, sizeof(rgb));
     rgb.red = color[0];
     rgb.green = color[1];
     rgb.blue = color[2];
-    biased_color_index = prc_write_color_add(ctx, tables, &rgb);
+    return prc_write_color_add(ctx, tables, &rgb);
+}
+
+/* Adds one item's own material and returns its biased style index, or 0 on
+   failure. The colour, material and style tables all deduplicate, so two items
+   asking for the same colour share one entry and the file carries one of each.
+
+   Unless the item sets has_material_slots, ambient, diffuse and specular all
+   take material_color and emissive takes black. Every slot is filled either
+   way, for the reason given in prc_api_write_rep_item's doc comment: a
+   material with an unset emissive index is rejected when a viewer resolves
+   it. */
+uint32_t
+prc_write_add_item_style(prc_context *ctx, prc_write_global_tables *tables,
+    const prc_api_write_rep_item *ri)
+{
+    static const double black[3] = { 0.0, 0.0, 0.0 };
+    prc_graph_material material;
+    prc_graph_style style;
+    uint32_t biased_color_index, biased_material_index;
+    uint32_t biased_ambient, biased_specular, biased_emissive;
+    double alpha = ri->material_alpha;
+
+    biased_color_index = prc_write_add_rgb(ctx, tables, ri->material_color);
     if (biased_color_index == 0)
         return 0;
 
-    memset(&black, 0, sizeof(black));
-    black.alpha = 1.0;
-    biased_black_index = prc_write_color_add(ctx, tables, &black);
-    if (biased_black_index == 0)
+    if (ri->has_material_slots)
+    {
+        biased_ambient  = prc_write_add_rgb(ctx, tables, ri->material_ambient);
+        biased_specular = prc_write_add_rgb(ctx, tables, ri->material_specular);
+        biased_emissive = prc_write_add_rgb(ctx, tables, ri->material_emissive);
+    }
+    else
+    {
+        biased_ambient = biased_specular = biased_color_index;
+        biased_emissive = prc_write_add_rgb(ctx, tables, black);
+    }
+    if (biased_ambient == 0 || biased_specular == 0 || biased_emissive == 0)
         return 0;
 
     memset(&material, 0, sizeof(material));
     material.tag = PRC_TYPE_GRAPH_Material;
-    material.biased_ambient_index = biased_color_index;
+    material.biased_ambient_index = biased_ambient;
     material.biased_diffuse_index = biased_color_index;
-    material.biased_specular_index = biased_color_index;
-    material.biased_emissive_index = biased_black_index;
-    material.shininess = shininess;
+    material.biased_specular_index = biased_specular;
+    material.biased_emissive_index = biased_emissive;
+    material.shininess = ri->material_shininess;
     material.ambient_alpha = alpha;
     material.diffuse_alpha = alpha;
     material.emissive_alpha = 1.0;
@@ -304,13 +325,13 @@ prc_write_add_item_style(prc_context *ctx, prc_write_global_tables *tables,
        So a textured item's colour still comes from the material underneath,
        which is why texture_function is modulate: the image multiplies that
        colour. An all-white material shows the image unaltered. */
-    if (texture != NULL)
+    if (ri->has_texture)
     {
         prc_write_picture pic;
         prc_graph_material app;
         uint32_t biased_picture, biased_definition, biased_app;
 
-        if (texture->image == NULL || texture->image_size == 0)
+        if (ri->texture_image == NULL || ri->texture_image_size == 0)
         {
             prc_error(ctx, PRC_ERROR_INTERNAL,
                 "prc_write_add_item_style: has_texture with no image\n");
@@ -318,7 +339,7 @@ prc_write_add_item_style(prc_context *ctx, prc_write_global_tables *tables,
         }
 
         memset(&pic, 0, sizeof(pic));
-        switch (texture->format)
+        switch (ri->texture_format)
         {
         case PRC_API_WRITE_TEXTURE_RGB:  pic.format = PRC_WRITE_PIX_RGB;  break;
         case PRC_API_WRITE_TEXTURE_RGBA: pic.format = PRC_WRITE_PIX_RGBA; break;
@@ -329,10 +350,10 @@ prc_write_add_item_style(prc_context *ctx, prc_write_global_tables *tables,
                 "prc_write_add_item_style: unknown texture format\n");
             return 0;
         }
-        pic.data = texture->image;
-        pic.data_size = texture->image_size;
-        pic.width = texture->width;
-        pic.height = texture->height;
+        pic.data = ri->texture_image;
+        pic.data_size = ri->texture_image_size;
+        pic.width = ri->texture_width;
+        pic.height = ri->texture_height;
 
         biased_picture = prc_write_picture_add(ctx, tables, &pic);
         if (biased_picture == 0)

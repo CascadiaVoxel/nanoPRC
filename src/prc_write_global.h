@@ -108,19 +108,10 @@ uint32_t prc_write_material_add(prc_context *ctx, prc_write_global_tables *table
 /* One representation item's own material: colour + material + style, all
    deduplicated against what the tables already hold. Returns the biased style
    index, or 0 on failure. */
-/* Optional diffuse texture for prc_write_add_item_style. Mirrors the public
-   prc_api_write_rep_item texture fields; NULL means no texture. */
-typedef struct
-{
-    const uint8_t *image;
-    size_t         image_size;
-    uint32_t       format;      /* prc_api_write_texture_format */
-    uint32_t       width, height;
-} prc_write_item_texture;
-
+/* Reads the item's material and texture fields; the caller has already
+   checked has_material. */
 uint32_t prc_write_add_item_style(prc_context *ctx, prc_write_global_tables *tables,
-    const double color[3], double alpha, double shininess,
-    const prc_write_item_texture *texture);
+    const prc_api_write_rep_item *ri);
 
 uint32_t prc_write_style_add(prc_context *ctx, prc_write_global_tables *tables,
     const prc_graph_style *style);

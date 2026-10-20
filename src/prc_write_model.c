@@ -322,14 +322,16 @@ prc_write_add_item_style(prc_context *ctx, prc_write_global_tables *tables,
        two hops -- prc_style_api.c dispatches on graph_style.is_material and
        hands the application's graph_material to prc_internal_set_texture_style.
 
-       So a textured item's colour still comes from the material underneath,
-       which is why texture_function is modulate: the image multiplies that
-       colour. An all-white material shows the image unaltered. */
+       So with modulate, the default, a textured item's colour still comes
+       from the material underneath: the image multiplies that colour, and an
+       all-white material shows the image unaltered. Replace shows the image
+       whatever the material's colour. */
     if (ri->has_texture)
     {
         prc_write_picture pic;
         prc_graph_material app;
         uint32_t biased_picture, biased_definition, biased_app;
+        PRC_texture_function_t function;
 
         if (ri->texture_image == NULL || ri->texture_image_size == 0)
         {
@@ -359,8 +361,17 @@ prc_write_add_item_style(prc_context *ctx, prc_write_global_tables *tables,
         if (biased_picture == 0)
             return 0;
 
+        switch (ri->texture_function)
+        {
+        case PRC_API_WRITE_TEXTURE_MODULATE: function = PRC_texture_function_modulate; break;
+        case PRC_API_WRITE_TEXTURE_REPLACE:  function = PRC_texture_function_replace;  break;
+        default:
+            prc_error(ctx, PRC_ERROR_INTERNAL,
+                "prc_write_add_item_style: unknown texture function\n");
+            return 0;
+        }
         biased_definition = prc_write_texture_definition_add(ctx, tables,
-            biased_picture, NULL);
+            biased_picture, function, NULL);
         if (biased_definition == 0)
             return 0;
 

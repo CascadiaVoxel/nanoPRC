@@ -61,6 +61,10 @@ typedef struct
     const uint32_t *uv_indices;
 } test_mesh;
 
+/* texture_function for the textured items write_mesh writes. Left at 0
+   (modulate) by every case except test_texture_function. */
+static uint32_t g_texture_function = 0;
+
 static int
 write_mesh(prc_context *ctx, const test_mesh *m, int with_image)
 {
@@ -100,6 +104,7 @@ write_mesh(prc_context *ctx, const test_mesh *m, int with_image)
         ri.texture_format = PRC_API_WRITE_TEXTURE_RGB;
         ri.texture_width = 2;
         ri.texture_height = 2;
+        ri.texture_function = g_texture_function;
     }
 
     memset(&root, 0, sizeof(root));
@@ -416,6 +421,60 @@ test_public_api(prc_context *ctx)
     prc_api_release_data(ctx, data, tesses, num_tess, NULL, 0, NULL, 0, model_tree);
 }
 
+/* Writes a textured quad with the given API texture function and returns
+   the value stored in the file's one texture definition. */
+static uint32_t
+written_texture_function(prc_context *ctx, uint32_t api_function)
+{
+    test_mesh m;
+    prc_data *pd;
+    const prc_file_struct_internal_global_data *gd;
+    uint32_t stored;
+
+    memset(&m, 0, sizeof(m));
+    m.positions = QUAD_POS; m.num_positions = 4;
+    m.tris = QUAD_TRIS; m.num_triangles = 2;
+    m.uvs = QUAD_UV; m.num_uvs = 4; m.uv_indices = QUAD_TRIS;
+    g_texture_function = api_function;
+    PRC_ASSERT_EQ(write_mesh(ctx, &m, 1), 0);
+    g_texture_function = 0;
+
+    pd = (prc_data *)prc_api_open_contents(ctx, TEST_PRC_FILENAME);
+    PRC_ASSERT_NOT_NULL(pd);
+    gd = &pd->file_struct[0].globals->global_data;
+    PRC_ASSERT_EQ(gd->texture_count, 1);
+    stored = (uint32_t)gd->textures[0].texture_function;
+    prc_api_release_data(ctx, (prc_api_data)pd, NULL, 0, NULL, 0, NULL, 0, NULL);
+    return stored;
+}
+
+/* The API's values are not the file's: 0 is modulate here so that a zeroed
+   item keeps its old behaviour, and the file stores modulate as 1 and replace
+   as 2. A writer that copied the API value straight through would store 0
+   (unknown) and 1 (modulate) and pass any test that only compared the two. */
+static void
+test_texture_function(prc_context *ctx)
+{
+    test_mesh m;
+
+    printf("  sub-case: texture function left at 0 is stored as modulate\n");
+    PRC_ASSERT_EQ(written_texture_function(ctx, PRC_API_WRITE_TEXTURE_MODULATE),
+        (uint32_t)PRC_texture_function_modulate);
+
+    printf("  sub-case: texture function replace is stored as replace\n");
+    PRC_ASSERT_EQ(written_texture_function(ctx, PRC_API_WRITE_TEXTURE_REPLACE),
+        (uint32_t)PRC_texture_function_replace);
+
+    printf("  sub-case: an unknown texture function is refused\n");
+    memset(&m, 0, sizeof(m));
+    m.positions = QUAD_POS; m.num_positions = 4;
+    m.tris = QUAD_TRIS; m.num_triangles = 2;
+    m.uvs = QUAD_UV; m.num_uvs = 4; m.uv_indices = QUAD_TRIS;
+    g_texture_function = 2;
+    PRC_ASSERT(write_mesh(ctx, &m, 1) != 0);
+    g_texture_function = 0;
+}
+
 static void
 test_refusals(prc_context *ctx)
 {
@@ -448,6 +507,7 @@ main(void)
     test_seam_band(ctx);
     test_heavy_reuse(ctx);
     test_public_api(ctx);
+    test_texture_function(ctx);
     test_refusals(ctx);
 
     prc_release_context(ctx);

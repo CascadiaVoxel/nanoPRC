@@ -164,22 +164,30 @@ target_compile_definitions(prc_static PUBLIC PRC_DEBUG_MEMORY=$<BOOL:${PRC_ENABL
 target_compile_definitions(prc_static PUBLIC PRC_ENABLE_UNZIPPED_FUZZ=$<BOOL:${PRC_ENABLE_UNZIPPED_FUZZ}>)
 target_compile_definitions(prc_static PUBLIC PRC_ENABLE_DIAG_ENV=$<BOOL:${PRC_ENABLE_DIAG_ENV}>)
 
-if (NANOPRC_BUILD_DEMOS)
+# 1. Check the explicit System Name string set by the NDK/SDK toolchains
+if (CMAKE_SYSTEM_NAME STREQUAL "Android" OR CMAKE_SYSTEM_NAME STREQUAL "iOS" OR ANDROID OR IOS)
+    set(PRC_BUILDING_FOR_MOBILE TRUE)
+else()
+    set(PRC_BUILDING_FOR_MOBILE FALSE)
+endif()
+
+# UPDATE THIS LINE: Add "OR NANOPRC_BUILD_MOBILE_VIEWER" so Windows can step inside
+if (PRC_BUILDING_FOR_MOBILE OR NANOPRC_BUILD_MOBILE_VIEWER)
+	add_subdirectory(mobile_viewer)
+endif()
+
+# Only build desktop demos and tests if we aren't testing the mobile viewer layout natively
+if (NANOPRC_BUILD_DEMOS AND NOT PRC_BUILDING_FOR_MOBILE AND NOT NANOPRC_BUILD_MOBILE_VIEWER)
 	add_subdirectory(demos)
 endif()
 
-if (NANOPRC_BUILD_TESTS)
+if (NANOPRC_BUILD_TESTS AND NOT PRC_BUILDING_FOR_MOBILE AND NOT NANOPRC_BUILD_MOBILE_VIEWER)
 	enable_testing()
 	include(tests/CMakeLists.txt)
 	include(tests/internal/CMakeLists.txt)
-	# test_stl_roundtrip shells out to the nano_prc_stl_export/nano_prc_stl_import
-	# demo executables (see tests/functional/CMakeLists.txt), so it only makes
-	# sense -- and only configures cleanly, since it references their
-	# $<TARGET_FILE:...> -- when demos are also being built.
 	if (NANOPRC_BUILD_DEMOS)
 		include(tests/functional/CMakeLists.txt)
 	endif()
 endif()
 
-# Install what we built
 install(TARGETS nano_prc)

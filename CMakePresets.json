@@ -1,0 +1,52 @@
+{
+  "version": 4,
+  "configurePresets": [
+    {
+      "name": "windows-desktop",
+      "displayName": "Windows Desktop Core",
+      "description": "Standard build profile for native Windows viewer, testing, and desktop demos",
+      "generator": "Visual Studio 17 2022",
+      "binaryDir": "${sourceDir}/out/build/windows",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "NANOPRC_BUILD_DEMOS": "ON",
+        "NANOPRC_BUILD_TESTS": "ON"
+      }
+    },
+    {
+      "name": "android-arm64-base",
+      "displayName": "Android ARM64 Base",
+      "hidden": true,
+      "generator": "Ninja",
+      "cacheVariables": {
+        "ANDROID_ABI": "arm64-v8a",
+        "ANDROID_PLATFORM": "android-26",
+        "CMAKE_BUILD_TYPE": "Release"
+      }
+    },
+    {
+      "name": "ios-arm64-base",
+      "displayName": "iOS ARM64 Base",
+      "hidden": true,
+      "generator": "Xcode",
+      "cacheVariables": {
+        "CMAKE_SYSTEM_NAME": "iOS",
+        "CMAKE_OSX_ARCHITECTURES": "arm64",
+        "CMAKE_BUILD_TYPE": "Release"
+      }
+    },
+	{
+	  "name": "windows-gles-testing",
+	  "displayName": "Windows Desktop (GLES 3.0 Emulation)",
+	  "description": "Compiles the mobile viewer code into a native Windows executable running an OpenGL ES context layer for immediate local testing.",
+	  "generator": "Visual Studio 17 2022",
+	  "binaryDir": "${sourceDir}/out/build/windows-gles",
+	  "cacheVariables": {
+		"CMAKE_BUILD_TYPE": "Debug",
+		"NANOPRC_BUILD_DEMOS": "OFF",
+		"NANOPRC_BUILD_TESTS": "OFF",
+		"NANOPRC_BUILD_MOBILE_VIEWER": "ON"
+	  }
+	}
+  ]
+}

@@ -178,3 +178,118 @@ doxygen Doxyfile.public
 ```
 
 Warnings are written to `docs/doxygen/warnings-public.log` and fail the strict check when present.
+
+
+## Mobile Development Setup (Android & iOS)
+
+This project uses a shared, cross-platform core library (`nano_prc`) managed by CMake. Desktop viewers are developed natively, while mobile applications target Android and iOS via a modular architecture.
+
+### Local Configuration via CMake Presets
+
+To protect the repository from machine-specific absolute file paths, we utilize a dual-preset pattern. The global configurations
+are tracked in Git via `CMakePresets.json`, while your personal local paths are isolated in a private file named
+`CMakeUserPresets.json` at the root of the project.
+
+You will need to install Android studio and add the Cmake and NDK SDK options.
+
+1. Ensure `CMakeUserPresets.json` is added to your local `.gitignore`.
+2. Create a `CMakeUserPresets.json` file at the root of your workspace.
+3. Paste the following setup, updating the paths to match your local Android SDK/NDK folder location:
+
+```json
+{
+  "version": 4,
+  "configurePresets": [
+    {
+      "name": "android-arm64",
+      "displayName": "Android ARM64 (Local)",
+      "description": "Local build profile targeting your local Android NDK directory",
+      "binaryDir": "${sourceDir}/out/build/android-arm64",
+      "cacheVariables": {
+        "CMAKE_SYSTEM_NAME": "Android",
+        "CMAKE_SYSTEM_VERSION": "23",
+        "CMAKE_ANDROID_ARCH_ABI": "arm64-v8a",
+        "CMAKE_ANDROID_NDK": "C:/Users/YOUR_USERNAME/AppData/Local/Android/Sdk/ndk/YOUR_NDK_VERSION",
+        "CMAKE_TOOLCHAIN_FILE": "C:/Users/YOUR_USERNAME/AppData/Local/Android/Sdk/ndk/YOUR_NDK_VERSION/build/cmake/android.toolchain.cmake",
+        "CMAKE_MAKE_PROGRAM": "C:/Users/YOUR_USERNAME/AppData/Local/Android/Sdk/cmake/YOUR_CMAKE_VERSION/bin/ninja.exe"
+      }
+    }
+  ]
+}
+```
+
+### Building the Mobile Viewer in VS Code
+
+1. Open the project root folder in **VS Code**.
+2. Install the *CMake Tools* and *C/C++* extensions.
+3. Press `Ctrl + Shift + P`, select **`CMake: Select Configure Preset`**, and choose your local preset.
+4. Run **`CMake: Configure`**, then hit **`F7`** to build the mobile binaries.
+
+
+### macOS Configuration (For iOS Devices & Mac-based Android Builds)
+
+When configuring your development workflow on a macOS build machine, add explicit platform definition 
+tags directly inside your local `CMakeUserPresets.json` file. 
+
+This approach configures your local environment dynamically without modifying the global Git configurations:
+
+```json
+{
+  "version": 4,
+  "configurePresets": [
+    {
+      "name": "ios-device",
+      "displayName": "iOS Physical Device (Local Mac)",
+      "description": "Generates a native Xcode bundle profile targeting connected iOS devices",
+      "binaryDir": "${sourceDir}/out/build/ios-device",
+      "cacheVariables": {
+        "CMAKE_SYSTEM_NAME": "iOS",
+        "CMAKE_OSX_ARCHITECTURES": "arm64",
+        "CMAKE_OSX_DEPLOYMENT_TARGET": "16.0"
+      }
+    },
+    {
+      "name": "android-mac",
+      "displayName": "Android ARM64 (Local Mac NDK)",
+      "description": "Cross-compiles for Android from your macOS workspace",
+      "binaryDir": "${sourceDir}/out/build/android-mac",
+      "cacheVariables": {
+        "CMAKE_SYSTEM_NAME": "Android",
+        "CMAKE_SYSTEM_VERSION": "23",
+        "CMAKE_ANDROID_ARCH_ABI": "arm64-v8a",
+        "CMAKE_ANDROID_NDK": "/Users/YOUR_MAC_USERNAME/Library/Android/sdk/ndk/YOUR_NDK_VERSION",
+        "CMAKE_TOOLCHAIN_FILE": "/Users/YOUR_MAC_USERNAME/Library/Android/sdk/ndk/YOUR_NDK_VERSION/build/cmake/android.toolchain.cmake"
+		"CMAKE_MAKE_PROGRAM": "/Users/YOUR_MAC_USERNAME/Library/Android/Sdk/cmake/YOUR_CMAKE_VERSION/bin/ninja.exe"
+      }
+    }
+  ]
+}
+```
+
+### Building on macOS
+
+1. Open the project root folder in **VS Code** on your Mac.
+2. Open the Command Palette (`Ctrl + Shift + P` or `Cmd + Shift + P` on Mac).
+3. Run **`CMake: Select Configure Preset`** and select `iOS Physical Device (Local Mac)`.
+4. Trigger **`CMake: Configure`**. 
+5. Because CMake detects Apple's ecosystem constraints through `CMAKE_SYSTEM_NAME`, 
+   it will automatically select the native **Xcode Generator** backend.
+6. It will output a fully linked, structured native **`nano_prc.xcodeproj`** bundle inside your local `out/build/ios-device/` directory.
+7. You can then open that generated folder inside the native Apple **Xcode IDE** to apply 
+   your official developer certificates, handle application code-signing entitlements, and
+   push the 3D viewer directly onto a tethered physical iPhone or iPad!
+   
+### Rapid Prototyping & Emulator Testing
+
+Automation scripts are isolated inside the `scripts/` directory to automatically deploy
+and run graphics loop changes straight onto active emulators.
+
+* **Windows PowerShell:**
+  ```powershell
+  ./scripts/deploy_android.ps1
+  ```
+* **macOS Terminal:**
+  ```bash
+  chmod +x scripts/deploy_android.sh
+  ./scripts/deploy_android.sh
+  ```

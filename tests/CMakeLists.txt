@@ -83,3 +83,8 @@ add_executable(test_compressed_curve_release tests/unit/test_compressed_curve_re
 target_link_libraries(test_compressed_curve_release prc_static)
 target_include_directories(test_compressed_curve_release PRIVATE tests)
 add_test(NAME test_compressed_curve_release COMMAND test_compressed_curve_release)
+
+add_executable(test_pdf_file_id tests/unit/test_pdf_file_id.c)
+target_link_libraries(test_pdf_file_id prc_static)
+target_include_directories(test_pdf_file_id PRIVATE tests)
+add_test(NAME test_pdf_file_id COMMAND test_pdf_file_id)

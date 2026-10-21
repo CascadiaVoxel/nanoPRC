@@ -261,6 +261,20 @@ prc_write_add_rgb(prc_context *ctx, prc_write_global_tables *tables,
     return prc_write_color_add(ctx, tables, &rgb);
 }
 
+/* Maps a prc_api_write_texture_wrap value to the file's wrapping mode. The
+   API counts from repeat at 0 so that a cleared item keeps repeating; the
+   file's 0 means "application chooses", returned here for an unknown value. */
+static PRC_texture_wrapping_mode_t
+prc_write_texture_wrap(uint32_t wrap)
+{
+    switch (wrap)
+    {
+    case PRC_API_WRITE_TEXTURE_WRAP_REPEAT:          return PRC_texture_wrapping_repeat;
+    case PRC_API_WRITE_TEXTURE_WRAP_CLAMP_TO_BORDER: return PRC_texture_wrapping_clamp_to_border;
+    default:                                         return PRC_texture_wrapping_application_choose;
+    }
+}
+
 /* Adds one item's own material and returns its biased style index, or 0 on
    failure. The colour, material and style tables all deduplicate, so two items
    asking for the same colour share one entry and the file carries one of each.
@@ -332,6 +346,7 @@ prc_write_add_item_style(prc_context *ctx, prc_write_global_tables *tables,
         prc_graph_material app;
         uint32_t biased_picture, biased_definition, biased_app;
         PRC_texture_function_t function;
+        PRC_texture_wrapping_mode_t wrap_s, wrap_t;
 
         if (ri->texture_image == NULL || ri->texture_image_size == 0)
         {
@@ -370,8 +385,18 @@ prc_write_add_item_style(prc_context *ctx, prc_write_global_tables *tables,
                 "prc_write_add_item_style: unknown texture function\n");
             return 0;
         }
+        wrap_s = prc_write_texture_wrap(ri->texture_wrap_u);
+        wrap_t = prc_write_texture_wrap(ri->texture_wrap_v);
+        if (wrap_s == PRC_texture_wrapping_application_choose ||
+            wrap_t == PRC_texture_wrapping_application_choose)
+        {
+            prc_error(ctx, PRC_ERROR_INTERNAL,
+                "prc_write_add_item_style: unknown texture wrap mode\n");
+            return 0;
+        }
+
         biased_definition = prc_write_texture_definition_add(ctx, tables,
-            biased_picture, function, NULL);
+            biased_picture, function, wrap_s, wrap_t, NULL);
         if (biased_definition == 0)
             return 0;
 

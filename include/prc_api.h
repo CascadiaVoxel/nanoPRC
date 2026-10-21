@@ -1097,6 +1097,10 @@ typedef struct prc_api_write_rep_item_s
         before; REPLACE shows the image unaltered whatever material_color
         is. Other values are refused. */
     uint32_t texture_function;
+    /** How the image repeats outside 0..1, along u and along v. A
+        prc_api_write_texture_wrap value; 0 is repeat. */
+    uint32_t texture_wrap_u;
+    uint32_t texture_wrap_v;
 } prc_api_write_rep_item;
 
 /** @brief texture_format values for prc_api_write_rep_item. */
@@ -1119,6 +1123,23 @@ typedef enum
     PRC_API_WRITE_TEXTURE_MODULATE = 0,
     PRC_API_WRITE_TEXTURE_REPLACE = 1
 } prc_api_write_texture_function;
+
+/** @brief texture_wrap_u / texture_wrap_v values for prc_api_write_rep_item.
+
+    These API values are not the file's. 0 is repeat here, so that an item
+    cleared to zero keeps the behaviour it had before the fields existed; the
+    writer stores repeat as 1 and clamp to border as 2.
+
+    The format also defines clamp to edge and mirrored repeat. They are not
+    offered: Adobe Acrobat 2026.002.22031 shows clamp to edge as clamp to
+    border and mirrored repeat as plain repeat. */
+typedef enum
+{
+    /** The image tiles. */
+    PRC_API_WRITE_TEXTURE_WRAP_REPEAT = 0,
+    /** Beyond 0..1 the surface shows its own colour. */
+    PRC_API_WRITE_TEXTURE_WRAP_CLAMP_TO_BORDER = 1
+} prc_api_write_texture_wrap;
 
 /**
  * @brief One polyline or line segment for a WIRE tessellation entry.

@@ -65,6 +65,9 @@ typedef struct
    (modulate) by every case except test_texture_function. */
 static uint32_t g_texture_function = 0;
 
+/* Wrap modes for the textured cases; 0 leaves the default. */
+static uint32_t g_wrap_u = 0, g_wrap_v = 0;
+
 static int
 write_mesh(prc_context *ctx, const test_mesh *m, int with_image)
 {
@@ -105,6 +108,8 @@ write_mesh(prc_context *ctx, const test_mesh *m, int with_image)
         ri.texture_width = 2;
         ri.texture_height = 2;
         ri.texture_function = g_texture_function;
+        ri.texture_wrap_u = g_wrap_u;
+        ri.texture_wrap_v = g_wrap_v;
     }
 
     memset(&root, 0, sizeof(root));
@@ -475,6 +480,70 @@ test_texture_function(prc_context *ctx)
     g_texture_function = 0;
 }
 
+/* Reads the written file's one texture definition and returns its wrap modes
+   as stored in the file. */
+static void
+written_wrap(prc_context *ctx, int *s, int *t)
+{
+    prc_data *pd;
+    const prc_graph_texture_definition *d;
+
+    pd = (prc_data *)prc_api_open_contents(ctx, TEST_PRC_FILENAME);
+    if (pd == NULL)
+        prc_print_error_stack(ctx);
+    PRC_ASSERT_NOT_NULL(pd);
+    PRC_ASSERT_EQ(pd->file_struct[0].globals->global_data.texture_count, 1);
+    d = &pd->file_struct[0].globals->global_data.textures[0];
+    *s = (int)d->texture_wrapping_mode_s;
+    *t = (int)d->texture_wrapping_mode_t;
+    prc_api_release_data(ctx, (prc_api_data)pd, NULL, 0, NULL, 0, NULL, 0, NULL);
+}
+
+static void
+test_texture_wrap(prc_context *ctx)
+{
+    test_mesh m;
+    int s, t;
+
+    memset(&m, 0, sizeof(m));
+    m.positions = QUAD_POS; m.num_positions = 4;
+    m.tris = QUAD_TRIS; m.num_triangles = 2;
+    m.uvs = QUAD_UV; m.num_uvs = 4; m.uv_indices = QUAD_TRIS;
+
+    /* The file's numbers differ from the API's, so a writer that copied the
+       API value straight through fails each of these. */
+    printf("  sub-case: wrap left at 0 writes repeat on both axes\n");
+    g_wrap_u = 0; g_wrap_v = 0;
+    PRC_ASSERT_EQ(write_mesh(ctx, &m, 1), 0);
+    written_wrap(ctx, &s, &t);
+    PRC_ASSERT_EQ(s, 1);
+    PRC_ASSERT_EQ(t, 1);
+
+    /* Different modes on the two axes, so swapped axes fail too. */
+    printf("  sub-case: clamp to border on u, repeat on v\n");
+    g_wrap_u = PRC_API_WRITE_TEXTURE_WRAP_CLAMP_TO_BORDER;
+    g_wrap_v = PRC_API_WRITE_TEXTURE_WRAP_REPEAT;
+    PRC_ASSERT_EQ(write_mesh(ctx, &m, 1), 0);
+    written_wrap(ctx, &s, &t);
+    PRC_ASSERT_EQ(s, 2);
+    PRC_ASSERT_EQ(t, 1);
+
+    printf("  sub-case: clamp to border on both axes\n");
+    g_wrap_u = g_wrap_v = PRC_API_WRITE_TEXTURE_WRAP_CLAMP_TO_BORDER;
+    PRC_ASSERT_EQ(write_mesh(ctx, &m, 1), 0);
+    written_wrap(ctx, &s, &t);
+    PRC_ASSERT_EQ(s, 2);
+    PRC_ASSERT_EQ(t, 2);
+
+    /* 2 was clamp to edge before Acrobat showed it as clamp to border. */
+    printf("  sub-case: an unknown wrap mode is refused\n");
+    g_wrap_u = 0; g_wrap_v = 2;
+    PRC_ASSERT(write_mesh(ctx, &m, 1) != 0);
+    g_wrap_u = 3; g_wrap_v = 0;
+    PRC_ASSERT(write_mesh(ctx, &m, 1) != 0);
+    g_wrap_u = g_wrap_v = 0;
+}
+
 static void
 test_refusals(prc_context *ctx)
 {
@@ -508,6 +577,7 @@ main(void)
     test_heavy_reuse(ctx);
     test_public_api(ctx);
     test_texture_function(ctx);
+    test_texture_wrap(ctx);
     test_refusals(ctx);
 
     prc_release_context(ctx);

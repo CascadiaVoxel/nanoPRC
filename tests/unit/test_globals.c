@@ -301,7 +301,8 @@ test_picture_roundtrip(prc_context *ctx)
        material, a definition missing its last four fields round-tripped
        silently, which is exactly how those fields came to be missing. */
     PRC_ASSERT(prc_write_texture_definition_add(ctx, &tables, 1,
-        PRC_texture_function_modulate, NULL) == 1);
+        PRC_texture_function_modulate,
+        PRC_texture_wrapping_repeat, PRC_texture_wrapping_repeat, NULL) == 1);
     {
         prc_graph_material app;
 

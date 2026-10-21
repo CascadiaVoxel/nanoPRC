@@ -3990,6 +3990,7 @@ struct prc_nano_brep_ref_data_s
 struct prc_nano_brep_compressed_data_s
 {
     prc_unsigned_int number_of_vertex_refs;
+    int8_t adjust_ana_indexing;
     uint32_t vertices_capacity;
     prc_compressed_vertex *vertices;
     prc_unsigned_int number_of_edge_refs;

@@ -89,14 +89,30 @@ prc_parse_compressed_vertex(prc_context *ctx, prc_bit_state *bit_state,
         data->point_index = prc_bitread_uint_variable_bit(ctx, bit_state,
             compressed_data->number_bits_for_encoding);
 
-        if (data->point_index > compressed_data->current_vertex_index - 1)
+        /* Check if we can make a determination about ana vertex ref indexing
+         * as some files may use different caches for iso and ana vertexs while
+         * others use a single cache (which we do) */
+        if (!compressed_data->is_iso_type && compressed_data->adjust_ana_indexing == -1)
         {
-            prc_error(ctx, PRC_ERROR_INTERNAL, "Invalid point index in prc_parse_compressed_vertex\n");
-            return PRC_ERROR_INTERNAL;
+            /* This is our first ana vertex. Lets check if it is greater than
+               the max index that the file should have provided for the
+               number of ISO vertex (number_of_vertex_refs) */
+            if (data->point_index < compressed_data->number_of_vertex_refs)
+            {
+                compressed_data->adjust_ana_indexing = 1;
+            }
+            else
+            {
+                compressed_data->adjust_ana_indexing = 0;
+            }
         }
-
-        /* The point index is encoded based upon the current size of the array */
-        data->point_index = (compressed_data->current_vertex_index - 1) - data->point_index;
+        /* Based upon how the very first ana index was handled, if needed
+           adjust the ana vertex index so we reference it properly during
+           tessellation creation from exact geometry */
+        if (compressed_data->adjust_ana_indexing == 1)
+        {
+            data->point_index += compressed_data->number_of_vertex_refs;
+        }
     }
     else
     {
@@ -105,7 +121,7 @@ prc_parse_compressed_vertex(prc_context *ctx, prc_bit_state *bit_state,
                                           compressed_data->tolerance);
         if (code < 0)
         {
-            prc_error(ctx, code, "Failed in prc_parse_compressed_vertex_data\n");
+            prc_error(ctx, code, "Failed in prc_parse_compressed_point\n");
             return code;
         }
         /* Store the vertex in the compressed data */
@@ -4621,7 +4637,16 @@ prc_parse_brep_data_compress(prc_context *ctx, prc_bit_state *bit_state,
        and stored in the context so that it is accessible in many methods. Later
        it is moved to ref_data member variable of prc_topo_brep_data_compress (data) */
     compressed_data->number_bits_for_encoding = data->number_of_bits_to_store_ref;
+
+    /* number_of_vertex_refs gives the number of ISO refs. Ana refs can go beyond
+       this number, but SOME files start ana referencing with zero indexing with
+       the assumption that there are separate iso and ana caches. We attempt
+       to detect this by looking at the very first ana reference that occurs.
+       If it is less than number_of_vertex_refs, then we know we will need to
+       adjust all the ana references (by adding number_of_vertex_refs to the
+       index as we just use a single cache. */
     compressed_data->number_of_vertex_refs = data->number_of_vertex_refs;
+    compressed_data->adjust_ana_indexing = -1;  /* To be set to 0 or 1 when and if we encounter the first ana reference */
     compressed_data->number_of_edge_refs = data->number_of_edge_refs;
     compressed_data->is_a_compressed_face = true;
 

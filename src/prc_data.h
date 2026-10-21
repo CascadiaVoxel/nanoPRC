@@ -3990,7 +3990,6 @@ struct prc_nano_brep_ref_data_s
 struct prc_nano_brep_compressed_data_s
 {
     prc_unsigned_int number_of_vertex_refs;
-    int8_t adjust_ana_indexing;
     uint32_t vertices_capacity;
     prc_compressed_vertex *vertices;
     prc_unsigned_int number_of_edge_refs;
@@ -4004,8 +4003,17 @@ struct prc_nano_brep_compressed_data_s
        pointers cannot, because only the array moves. */
     prc_compressed_curve **curves;
     uint32_t number_bits_for_encoding;
-    uint32_t current_vertex_index; /* Index of next vertex to be added */
-    uint32_t current_curve_index; /* Index of next curve to be added */
+    /* Vertices and curves are stored at the number the file gives them, so a
+       reference is looked up at its own index. Those stored while an iso face
+       is read are numbered from 0 and stay below number_of_vertex_refs (or
+       number_of_edge_refs); all others are numbered from that value. The
+       counts say how many of each have been stored so far. */
+    uint32_t iso_vertex_count;
+    uint32_t ana_vertex_count;
+    uint32_t iso_curve_count;
+    uint32_t ana_curve_count;
+    uint32_t current_vertex_index; /* One past the highest vertex number stored */
+    uint32_t current_curve_index; /* One past the highest curve number stored */
     /* Nesting depth of composite curves currently being parsed. A composite
        curve may contain composite curves, to a depth the file chooses, so the
        parser's own C-stack recursion is file-controlled and must be capped. */

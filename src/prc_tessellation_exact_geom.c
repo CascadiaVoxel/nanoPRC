@@ -4140,6 +4140,13 @@ prc_get_vertex_by_id(prc_context *ctx, prc_nano_brep_compressed_data *compressed
         prc_error(ctx, PRC_ERROR_PARSE, "Vertex ref struct NULL or invalid compressed vertex index: %u\n", index_compressed_vertex);
         return PRC_ERROR_PARSE;
     }
+    /* Vertices are stored at their own numbers, so the numbers between the
+       iso and ana ranges hold nothing. */
+    if (!compressed_data->vertices[index_compressed_vertex].not_already_stored)
+    {
+        prc_error(ctx, PRC_ERROR_PARSE, "Compressed vertex %u was never stored\n", index_compressed_vertex);
+        return PRC_ERROR_PARSE;
+    }
     *vertex = &compressed_data->vertices[index_compressed_vertex];
     return 0;
 }

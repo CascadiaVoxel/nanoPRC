@@ -145,11 +145,12 @@ uint32_t prc_write_embedded_file_add(prc_context *ctx, prc_write_global_tables *
 
 
 /* Binds a picture to UV sampling and returns the 1-biased index for a
-   TextureApplication's biased_texture_definition_index. transformation is
-   optional placement and may be NULL. Only the plain diffuse form is written
-   -- see the implementation for what each field is set to and why. */
+   TextureApplication's biased_texture_definition_index. function is
+   modulate or replace; the others are refused. transformation is optional
+   placement and may be NULL. Only the plain diffuse form is written -- see
+   the implementation for what each field is set to and why. */
 uint32_t prc_write_texture_definition_add(prc_context *ctx, prc_write_global_tables *tables,
-    uint32_t biased_picture_index,
+    uint32_t biased_picture_index, PRC_texture_function_t function,
     const prc_cart_transformation *transformation);
 
 #endif

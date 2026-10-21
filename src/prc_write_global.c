@@ -413,16 +413,18 @@ prc_write_cart_trans(prc_context *ctx, prc_bit_write_state *s,
                               written at all now: the operator is on the wire
                               only for the mapping type that names one.
      texture_mapping_attributes  0, not a channel mask -- see below.
-     texture_function         modulate, the standard diffuse behaviour --
-                              the image multiplies the underlying colour
-                              rather than replacing it. The byte changes with
+     texture_function         the caller's: modulate or replace. Modulate,
+                              the standard diffuse behaviour and the API's
+                              default, multiplies the underlying colour by
+                              the image; replace shows the image alone. Blend
+                              and decal are refused. The byte changed with
                               the rebasing: the constant used to carry 2,
                               which the table assigns to Replace, so every
                               textured file this writer produced asked for the
                               object colour to be replaced where this line
-                              says multiplied. It emits 1 now. Worth an
-                              Acrobat look, since replace and modulate differ
-                              in appearance wherever a base colour is set.
+                              says multiplied. Acrobat follows the field:
+                              modulate tints the image by the material
+                              colour and replace shows it unaltered.
      blend_src_rgb/alpha      0, which suppresses the blend_des_* fields
                               entirely: the reader only reads each
                               destination when its source is non-zero.
@@ -432,7 +434,7 @@ prc_write_cart_trans(prc_context *ctx, prc_bit_write_state *s,
      wrapping mode s/t        application_choose -- see below. */
 uint32_t
 prc_write_texture_definition_add(prc_context *ctx, prc_write_global_tables *tables,
-    uint32_t biased_picture_index,
+    uint32_t biased_picture_index, PRC_texture_function_t function,
     const prc_cart_transformation *transformation)
 {
     prc_graph_texture_definition entry;
@@ -447,6 +449,16 @@ prc_write_texture_definition_add(prc_context *ctx, prc_write_global_tables *tabl
     {
         prc_error(ctx, PRC_ERROR_INTERNAL,
             "prc_write_texture_definition_add: picture index past the end of the table\n");
+        return 0;
+    }
+    /* Blend needs the blend_src/dst fields, which the format marks reserved
+       for future use, and decal appears in no file of the public collection,
+       so neither has a reference to be checked against. */
+    if (function != PRC_texture_function_modulate &&
+        function != PRC_texture_function_replace)
+    {
+        prc_error(ctx, PRC_ERROR_INTERNAL,
+            "prc_write_texture_definition_add: only modulate and replace are written\n");
         return 0;
     }
     /* A placement transformation rides with the mapping operator, and the
@@ -477,7 +489,7 @@ prc_write_texture_definition_add(prc_context *ctx, prc_write_global_tables *tabl
        files do -- so the picture's alpha channel does not select anything
        here, and this function takes no parameter for it. */
     entry.texture_mapping_attributes = 0;
-    entry.texture_function = PRC_texture_function_modulate;
+    entry.texture_function = function;
     entry.blend_src_rgb = 0;
     entry.blend_src_alpha = 0;
     /* combine. Three of the four reference producers write 4 and the fourth

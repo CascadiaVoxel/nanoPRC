@@ -1044,9 +1044,9 @@ typedef struct prc_api_write_rep_item_s
 
     /* --- optional diffuse texture ---
        Set has_texture with has_material to map an image across the item.
-       The image multiplies the material colour rather than replacing it, so
-       material_color still matters: leave it at white to see the image
-       unaltered.
+       By default the image multiplies the material colour rather than
+       replacing it, so material_color still matters: leave it at white to see
+       the image unaltered, or set texture_function to REPLACE.
 
        The item's tessellation must supply texture coordinates. Without them
        the reader has no UVs to sample with and the surface renders
@@ -1092,6 +1092,11 @@ typedef struct prc_api_write_rep_item_s
         fields, it follows these. */
     uint32_t texture_width;
     uint32_t texture_height;
+    /** How the image combines with the material colour, from
+        prc_api_write_texture_function. 0 (MODULATE) multiplies the two, as
+        before; REPLACE shows the image unaltered whatever material_color
+        is. Other values are refused. */
+    uint32_t texture_function;
 } prc_api_write_rep_item;
 
 /** @brief texture_format values for prc_api_write_rep_item. */
@@ -1102,6 +1107,18 @@ typedef enum
     PRC_API_WRITE_TEXTURE_PNG = 2,
     PRC_API_WRITE_TEXTURE_JPEG = 3
 } prc_api_write_texture_format;
+
+/** @brief texture_function values for prc_api_write_rep_item.
+
+    These are not the file's own values: 0 here is modulate, so that a
+    zeroed item keeps the behaviour it had before the field existed. The
+    writer stores modulate as 1 and replace as 2, as the format defines
+    them. */
+typedef enum
+{
+    PRC_API_WRITE_TEXTURE_MODULATE = 0,
+    PRC_API_WRITE_TEXTURE_REPLACE = 1
+} prc_api_write_texture_function;
 
 /**
  * @brief One polyline or line segment for a WIRE tessellation entry.

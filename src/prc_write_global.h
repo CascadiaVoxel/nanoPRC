@@ -127,6 +127,10 @@ uint32_t prc_write_style_add(prc_context *ctx, prc_write_global_tables *tables,
    formats only width*height*components bytes are stored, not the whole of
    `data_size`, since a caller may legitimately pass a larger buffer.
 
+   An image already in the table, with the same format, the same dimensions
+   for the raw formats and the same stored bytes, is not stored again: its
+   picture's index is returned.
+
    Callers may release their own copy as soon as this returns. */
 uint32_t prc_write_picture_add(prc_context *ctx, prc_write_global_tables *tables,
     const prc_write_picture *picture);

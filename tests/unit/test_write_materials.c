@@ -61,6 +61,141 @@ fill_tess(prc_api_write_tessellation *t)
     t->crease_angle_degrees = 30.0;
 }
 
+/* Three textured items through the public API, the second and third with
+   the same image. The file must hold two pictures and two stored images, and
+   each item must still reach its own image: following item -> style ->
+   texture application -> definition -> picture -> stored bytes, rather than
+   counting pictures, catches a writer that shares and then points an item at
+   the wrong picture. The shared image is the SECOND picture so that such a
+   writer cannot be right by accident: a match on the first picture returns 1
+   whether the index is computed correctly or not. */
+static void
+test_shared_pictures(prc_context *ctx)
+{
+    static const uint8_t image_x[2 * 2 * 3] = {
+        0xFF, 0x00, 0x00,   0x00, 0xFF, 0x00,
+        0x00, 0x00, 0xFF,   0xFF, 0xFF, 0x00
+    };
+    static const uint8_t image_y[2 * 2 * 3] = {
+        0x10, 0x20, 0x30,   0x40, 0x50, 0x60,
+        0x70, 0x80, 0x90,   0xA0, 0xB0, 0xC0
+    };
+    static const double uvs[3 * 2] = { 0.0, 0.0,  1.0, 0.0,  0.0, 1.0 };
+    const uint8_t *images[3];
+    prc_api_write_tessellation tess[3];
+    prc_api_write_rep_item items[3];
+    prc_api_write_node leaves[3], root;
+    prc_api_write_node *kids[3];
+    uint8_t *buf = NULL;
+    size_t buf_size = 0;
+    FILE *fid;
+    prc_data *data;
+    const prc_file_struct_internal_global_data *gd;
+    const prc_asm_file_structure_tree *tree;
+    uint32_t found = 0, i, k;
+
+    printf("  sub-case: items with the same image share one picture\n");
+
+    images[0] = image_y;
+    images[1] = image_x;
+    images[2] = image_x;
+    for (k = 0; k < 3; k++)
+    {
+        fill_tess(&tess[k]);
+        tess[k].tex_coords = uvs;
+        tess[k].num_tex_coords = 3;
+        tess[k].tex_indices = tri_indices;
+
+        memset(&items[k], 0, sizeof(items[k]));
+        items[k].kind = PRC_API_WRITE_RI_SURFACE;
+        items[k].biased_tessellation_index = k + 1;
+        items[k].has_material = 1;
+        items[k].material_color[0] = items[k].material_color[1] = items[k].material_color[2] = 1.0;
+        items[k].material_alpha = 1.0;
+        items[k].has_texture = 1;
+        items[k].texture_image = images[k];
+        items[k].texture_image_size = sizeof(image_x);
+        items[k].texture_format = PRC_API_WRITE_TEXTURE_RGB;
+        items[k].texture_width = 2;
+        items[k].texture_height = 2;
+
+        memset(&leaves[k], 0, sizeof(leaves[k]));
+        leaves[k].rep_items = &items[k];
+        leaves[k].num_rep_items = 1;
+        leaves[k].bbox_max[0] = leaves[k].bbox_max[1] = 1.0;
+        kids[k] = &leaves[k];
+    }
+    memset(&root, 0, sizeof(root));
+    root.name = "root";
+    root.children = kids;
+    root.num_children = 3;
+    root.bbox_max[0] = root.bbox_max[1] = 1.0;
+
+    PRC_ASSERT_EQ(prc_api_write_prc_buffer(ctx, "shared_pictures", &root,
+        tess, 3, &buf, &buf_size), 0);
+    fid = fopen(TEST_MATERIALS_FILENAME, "wb");
+    PRC_ASSERT_NOT_NULL(fid);
+    PRC_ASSERT_EQ(fwrite(buf, 1, buf_size, fid), buf_size);
+    fclose(fid);
+    prc_api_write_prc_buffer_free(ctx, buf);
+
+    data = prc_api_open_contents(ctx, TEST_MATERIALS_FILENAME);
+    if (data == NULL)
+        prc_api_print_error_stack(ctx);
+    PRC_ASSERT_NOT_NULL(data);
+    gd = &data->file_struct[0].globals->global_data;
+    PRC_ASSERT_EQ(gd->picture_count, 2);
+    PRC_ASSERT_NOT_NULL(data->file_struct[0].header);
+    PRC_ASSERT_EQ(data->file_struct[0].header->file_count, 2);
+
+    /* The items, in the order written, each followed to its stored image. */
+    tree = data->file_struct[0].tree;
+    PRC_ASSERT_NOT_NULL(tree);
+    for (i = 0; i < tree->parts_count; i++)
+    {
+        const prc_asm_parts_definition *part = &tree->parts[i];
+        uint32_t j;
+
+        for (j = 0; j < part->num_rep_items; j++)
+        {
+            const prc_ri *ri = &part->rep_items[j];
+            const prc_graph_style *st;
+            const prc_graph_material *app;
+            const prc_graph_texture_definition *def;
+            const prc_graph_picture *p;
+            const prc_uncomp_block *blk;
+            uint32_t si, b;
+
+            if (ri->ri_poly_brep_model == NULL)
+                continue;
+            PRC_ASSERT(found < 3);
+            si = ri->ri_poly_brep_model->item_content.base.graphics_content.biased_index_of_line_style;
+            PRC_ASSERT(si >= 1 && si <= gd->style_count);
+            st = &gd->styles[si - 1];
+            PRC_ASSERT(st->is_material);
+            PRC_ASSERT(st->biased_color_index >= 1 && st->biased_color_index <= gd->material_count);
+            app = &gd->materials[st->biased_color_index - 1];
+            PRC_ASSERT_EQ(app->tag, PRC_TYPE_GRAPH_TextureApplication);
+            PRC_ASSERT(app->biased_texture_definition_index >= 1 &&
+                       app->biased_texture_definition_index <= gd->texture_count);
+            def = &gd->textures[app->biased_texture_definition_index - 1];
+            PRC_ASSERT(def->biased_picture_index >= 1 && def->biased_picture_index <= gd->picture_count);
+            p = &gd->pictures[def->biased_picture_index - 1];
+            PRC_ASSERT(p->biased_uncompressed_file_index >= 1 &&
+                       p->biased_uncompressed_file_index <= data->file_struct[0].header->file_count);
+            blk = &data->file_struct[0].header->files[p->biased_uncompressed_file_index - 1];
+            PRC_ASSERT_EQ(blk->block_size, sizeof(image_x));
+            for (b = 0; b < sizeof(image_x); b++)
+                PRC_ASSERT_EQ(blk->block[b], images[found][b]);
+            found++;
+        }
+    }
+    PRC_ASSERT_EQ(found, 3);
+
+    prc_api_release_data(ctx, (prc_api_data)data, NULL, 0, NULL, 0, NULL, 0, NULL);
+    remove(TEST_MATERIALS_FILENAME);
+}
+
 static void
 test_two_materials(prc_context *ctx)
 {
@@ -642,6 +777,7 @@ main(void)
     PRC_ASSERT_NOT_NULL(ctx);
 
     test_two_materials(ctx);
+    test_shared_pictures(ctx);
     test_material_slots(ctx);
     test_default_still_applies(ctx);
     test_face_names_its_style(ctx);

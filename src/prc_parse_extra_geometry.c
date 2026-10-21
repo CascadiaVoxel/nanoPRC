@@ -958,7 +958,7 @@ prc_parse_ref_or_compressed_curve(prc_context *ctx, prc_bit_state *bit_state,
     return 0;
 }
 
-/* Table 231 � AnaFaceTrimLoop */
+/* Table 231 AnaFaceTrimLoop */
 static int
 prc_parse_ana_face_trim_loop(prc_context *ctx, prc_bit_state *bit_state,
     prc_nano_brep_compressed_data *compressed_data, uint32_t *trim_loop_count,
@@ -1027,14 +1027,15 @@ prc_parse_ana_face_trim_loop(prc_context *ctx, prc_bit_state *bit_state,
                 {
                     current_loop->curve_count += 1;
 
-                    /* Need to parse the compressed curve */
-                    current_curve->compressed_curve = (prc_compressed_curve *)prc_calloc(ctx,
-                        1, sizeof(prc_compressed_curve));
+                    /* Add this curve to our table of curves that can be referenced */
+                    current_curve->compressed_curve = prc_curve_table_slot(ctx, compressed_data,
+                        compressed_data->current_curve_index);
                     if (current_curve->compressed_curve == NULL)
                     {
                         prc_error(ctx, PRC_ERROR_MEMORY, "Failed to allocate current_curve->compressed_curve\n");
                         return PRC_ERROR_MEMORY;
                     }
+                    compressed_data->current_curve_index++;
 
                     current_curve->compressed_curve->curve_type = entity_type;
                     switch (entity_type)

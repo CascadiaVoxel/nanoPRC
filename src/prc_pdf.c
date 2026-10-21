@@ -2459,9 +2459,101 @@ pdf_read_hex_string(prc_context *ctx, uint8_t *ptr_in, uint8_t *file_end, uint8_
     return 0;
 }
 
+/* Read a literal string ( ... ) as bytes, decoding it as PDF 32000-1:2008
+   7.3.4.2 describes: balanced parentheses need no escape, \ddd is one to three
+   octal digits, a backslash before an end of line joins the lines, and an
+   unescaped end of line reads as a single line feed. */
+static int
+pdf_read_literal_string(prc_context *ctx, uint8_t *ptr_in, uint8_t *file_end, uint8_t *string,
+    uint32_t max_value_len, uint32_t *value_len_out)
+{
+    uint8_t *ptr = ptr_in;
+    uint32_t k = 0;
+    uint32_t depth = 0;
+    uint32_t value;
+    int digits;
+    uint8_t c;
+
+    if (ptr >= file_end || *ptr != '(')
+    {
+        prc_error(ctx, PRC_ERROR_PARSE, "Did not find ( at start of literal string in PDF file\n");
+        return PRC_ERROR_PARSE;
+    }
+    ptr++; /* Move past ( */
+
+    while (ptr < file_end && k < max_value_len)
+    {
+        c = *ptr++;
+        if (c == ')')
+        {
+            if (depth == 0)
+                break;
+            depth--;
+        }
+        else if (c == '(')
+        {
+            depth++;
+        }
+        else if (c == '\r')
+        {
+            if (ptr < file_end && *ptr == '\n')
+                ptr++;
+            c = '\n';
+        }
+        else if (c == '\\' && ptr < file_end)
+        {
+            c = *ptr++;
+            switch (c)
+            {
+            case 'n': c = 0x0A; break;
+            case 'r': c = 0x0D; break;
+            case 't': c = 0x09; break;
+            case 'b': c = 0x08; break;
+            case 'f': c = 0x0C; break;
+            case '\r':
+                if (ptr < file_end && *ptr == '\n')
+                    ptr++;
+                continue; /* Line continuation, no byte */
+            case '\n':
+                continue; /* Line continuation, no byte */
+            default:
+                if (c >= '0' && c <= '7')
+                {
+                    value = c - '0';
+                    digits = 1;
+                    while (digits < 3 && ptr < file_end && *ptr >= '0' && *ptr <= '7')
+                    {
+                        value = (value << 3) + (*ptr++ - '0');
+                        digits++;
+                    }
+                    c = (uint8_t)(value & 0xFF);
+                }
+                /* Any other escaped character, including ( ) and the
+                   backslash, stands for itself */
+                break;
+            }
+        }
+        string[k++] = c;
+    }
+
+    *value_len_out = k;
+
+    return 0;
+}
+
+/* A file ID string may be written in either form, <hex> or (literal) */
+static int
+pdf_read_id_string(prc_context *ctx, uint8_t *ptr_in, uint8_t *file_end, uint8_t *string,
+    uint32_t max_value_len, uint32_t *value_len_out)
+{
+    if (ptr_in < file_end && *ptr_in == '(')
+        return pdf_read_literal_string(ctx, ptr_in, file_end, string, max_value_len, value_len_out);
+    return pdf_read_hex_string(ctx, ptr_in, file_end, string, max_value_len, value_len_out);
+}
+
 /* In this case we are at the trailer object and we are going to see if /ID
    is present in the dictionary.  If it is then we can deal with the [ < > < > ]
-   delimiters */
+   or [ ( ) ( ) ] delimiters */
 int
 pdf_get_file_id_from_object(prc_context *ctx, uint8_t *ptr_in, uint8_t *file_end,
     uint8_t *file_id, uint32_t *file_id_length)
@@ -2489,10 +2581,8 @@ pdf_get_file_id_from_object(prc_context *ctx, uint8_t *ptr_in, uint8_t *file_end
         return PRC_ERROR_PARSE;
     }
 
-    /* The ID is an array of two strings. We want the first one. It should be a hex
-       string. We will read up to 16 bytes of this string as the ID. */
-       /* The two strings are delimited by  [ < hexstring1> <hexstring2> ]  Just get
-       * the first hexstring as they should be the same */
+    /* The ID is an array of two strings, each either a hex string <...> or a
+       literal string (...). We want the first one. */
     code = pdf_eat_white_space(ctx, &ptr_in, file_end);
     if (code < 0)
     {
@@ -2512,11 +2602,11 @@ pdf_get_file_id_from_object(prc_context *ctx, uint8_t *ptr_in, uint8_t *file_end
         return code;
     }
 
-    /* Use the unencyprted version of read hexstring */
-    code = pdf_read_hex_string(ctx, ptr_in, file_end, file_id, PDF_MAX_DICT_VALUE, file_id_length);
+    /* The /ID strings are never encrypted */
+    code = pdf_read_id_string(ctx, ptr_in, file_end, file_id, PDF_MAX_DICT_VALUE, file_id_length);
     if (code < 0)
     {
-        prc_error(ctx, PRC_ERROR_PARSE, "Did not read ID hex string in PDF file\n");
+        prc_error(ctx, PRC_ERROR_PARSE, "Did not read ID string in PDF file\n");
         return code;
     }
 
@@ -2570,10 +2660,8 @@ pdf_get_file_id(prc_context *ctx, uint8_t *pdf_buff_in, uint32_t size_in,
     }
     ptr += count + PDF_ID_NAME_LEN;
 
-    /* The ID is an array of two strings. We want the first one. It should be a hex
-       string. We will read up to 16 bytes of this string as the ID. */
-    /* The two strings are delimited by  [ < hexstring1> <hexstring2> ]  Just get
-       hexstring1 as they should be the same */
+    /* The ID is an array of two strings, each either a hex string <...> or a
+       literal string (...). We want the first one. */
     code = pdf_eat_white_space(ctx, &ptr, file_end);
     if (code < 0)
     {
@@ -2593,11 +2681,11 @@ pdf_get_file_id(prc_context *ctx, uint8_t *pdf_buff_in, uint32_t size_in,
         return code;
     }
 
-    /* Use the unencyprted version of read hexstring */
-    code = pdf_read_hex_string(ctx, ptr, file_end, file_id, PDF_MAX_DICT_VALUE, file_id_length);
+    /* The /ID strings are never encrypted */
+    code = pdf_read_id_string(ctx, ptr, file_end, file_id, PDF_MAX_DICT_VALUE, file_id_length);
     if (code < 0)
     {
-        prc_error(ctx, PRC_ERROR_PARSE, "Did not read ID hex string in PDF file\n");
+        prc_error(ctx, PRC_ERROR_PARSE, "Did not read ID string in PDF file\n");
         return code;
     }
 

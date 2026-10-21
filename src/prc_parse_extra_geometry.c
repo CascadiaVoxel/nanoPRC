@@ -1993,6 +1993,33 @@ prc_parse_iso_nurbs_trim_curve(prc_context *ctx, prc_bit_state *bit_state,
             prc_error(ctx, code, "Failed in prc_parse_compressed_curve\n");
             return code;
         }
+
+        /* There is a question if the curve should be added to the list of
+           curves that can be referenced if data->trim_curve->iso_boundary. I
+           would guess no since it is not parsed in that case. Just wondering
+           if it eats a slot though... */
+        if (!data->trim_curve.iso_boundary)
+        {
+            /* We need to store this curve for possible use as referenced item */
+            prc_compressed_curve *comp_crv = prc_curve_table_slot(ctx, compressed_data,
+                                            compressed_data->current_curve_index);
+            if (comp_crv == NULL)
+            {
+                prc_error(ctx, PRC_ERROR_MEMORY, "Failed in prc_parse_iso_nurbs_trim_curve\n");
+                return PRC_ERROR_MEMORY;
+            }
+            if (data->trim_curve.is_a_circle)
+            {
+                comp_crv->curve_type = PRC_HCG_Circle;
+                comp_crv->hcg_circle = data->trim_curve.compressed_circle;
+            }
+            else
+            {
+                comp_crv->curve_type = PRC_HCG_Line;
+                comp_crv->hcg_line = data->trim_curve.compressed_line;
+            }
+            compressed_data->current_curve_index++;
+        }
     }
     else
     {   data->trim_curve_index = prc_bitread_uint_variable_bit(ctx,

@@ -1538,30 +1538,11 @@ prc_release_content_body(prc_context *ctx, prc_content_body *data)
 static void
 prc_release_trim_loop_curves(prc_context *ctx, prc_ana_face_trim_loop *data)
 {
-    uint32_t k;
-
     if (data->trim_curves != NULL)
     {
-        for (k = 0; k < data->curve_count; k++)
-        {
-            if (data->trim_curves[k].compressed_curve != NULL)
-            {
-                /* Delegates rather than special-casing one curve type. This
-                   used to release only PRC_HCG_BsplineHermiteCurve, which was
-                   sufficient while a composite curve in a trim loop was never
-                   parsed: the only other type carrying an allocation is
-                   PRC_HCG_CompositeCurve, whose sub-curve array was therefore
-                   always empty here. Now that it is parsed, dropping its
-                   curves array and every curve nested inside it would leak,
-                   and the nesting is file-controlled so the depth is not
-                   bounded by anything we choose. prc_release_compressed_curve
-                   already walks that structure iteratively for exactly this
-                   reason; the Line and Circle cases it covers own no memory,
-                   so routing them through it costs nothing. */
-                prc_release_compressed_curve(ctx, data->trim_curves[k].compressed_curve);
-                prc_free(ctx, data->trim_curves[k].compressed_curve);
-            }
-        }
+        /* The curves themselves are not freed here: each is a slot in the
+           body's curve table, which prc_release_nano_brep_compressed_data
+           releases. Freeing them here as well would free them twice. */
         prc_free(ctx, data->trim_curves);
     }
 }

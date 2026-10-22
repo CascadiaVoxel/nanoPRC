@@ -73,6 +73,49 @@ prc_parse_uv_parameterization(prc_context *ctx, prc_bit_state *bit_state,
     data->v_param_coeff_b = prc_bitread_double(ctx, bit_state);
 }
 
+/* The number the file gives the next vertex or curve it stores. Both kinds of
+   face add to the same numbering, but in two ranges: those stored while an iso
+   face is read are numbered 0, 1, 2 ... and the file says in number_refs
+   (number_of_vertex_refs or number_of_edge_refs) how many there are; those
+   stored anywhere else are numbered number_refs, number_refs + 1 ... So the
+   value of a reference says which range it is in, whatever kind of face it is
+   read on. A wire body has no iso faces, and its number_refs is 0. */
+static int
+prc_next_ref_number(prc_context *ctx, const prc_nano_brep_compressed_data *compressed_data,
+    prc_unsigned_int number_refs, uint32_t *iso_count, uint32_t *ana_count, uint32_t *number)
+{
+    if (compressed_data->is_iso_type && !compressed_data->is_a_SingleWireBodyCompress)
+    {
+        if (*iso_count >= number_refs)
+        {
+            prc_error(ctx, PRC_ERROR_PARSE, "More than the %u references the body declares were stored on iso faces\n",
+                (unsigned)number_refs);
+            return PRC_ERROR_PARSE;
+        }
+        *number = (*iso_count)++;
+    }
+    else
+    {
+        if (*ana_count >= UINT32_MAX - number_refs)
+        {
+            prc_error(ctx, PRC_ERROR_PARSE, "Reference number out of range\n");
+            return PRC_ERROR_PARSE;
+        }
+        *number = number_refs + (*ana_count)++;
+    }
+    return 0;
+}
+
+/* Has the number a reference gives already been stored? */
+static int
+prc_ref_number_is_stored(prc_unsigned_int number_refs, uint32_t iso_count, uint32_t ana_count,
+    uint32_t number)
+{
+    if (number < number_refs)
+        return number < iso_count;
+    return number - number_refs < ana_count;
+}
+
 /* Table 239 CompressedVertex */
 static int
 prc_parse_compressed_vertex(prc_context *ctx, prc_bit_state *bit_state,
@@ -80,6 +123,7 @@ prc_parse_compressed_vertex(prc_context *ctx, prc_bit_state *bit_state,
     prc_compressed_vertex *data)
 {
     int code;
+    uint32_t number;
 
     data->not_already_stored = prc_bitread_bit(ctx, bit_state);
 
@@ -89,14 +133,15 @@ prc_parse_compressed_vertex(prc_context *ctx, prc_bit_state *bit_state,
         data->point_index = prc_bitread_uint_variable_bit(ctx, bit_state,
             compressed_data->number_bits_for_encoding);
 
-        if (data->point_index > compressed_data->current_vertex_index - 1)
+        /* The index is the vertex's own number (see prc_next_ref_number), so
+           it is used as it is, on either kind of face. */
+        if (!prc_ref_number_is_stored(compressed_data->number_of_vertex_refs,
+                compressed_data->iso_vertex_count, compressed_data->ana_vertex_count,
+                data->point_index))
         {
             prc_error(ctx, PRC_ERROR_INTERNAL, "Invalid point index in prc_parse_compressed_vertex\n");
             return PRC_ERROR_INTERNAL;
         }
-
-        /* The point index is encoded based upon the current size of the array */
-        data->point_index = (compressed_data->current_vertex_index - 1) - data->point_index;
     }
     else
     {
@@ -105,27 +150,47 @@ prc_parse_compressed_vertex(prc_context *ctx, prc_bit_state *bit_state,
                                           compressed_data->tolerance);
         if (code < 0)
         {
-            prc_error(ctx, code, "Failed in prc_parse_compressed_vertex_data\n");
+            prc_error(ctx, code, "Failed in prc_parse_compressed_point\n");
             return code;
         }
-        /* Store the vertex in the compressed data */
-        compressed_data->vertices[compressed_data->current_vertex_index] = *data;
-        compressed_data->current_vertex_index++;
-        if (compressed_data->current_vertex_index >= compressed_data->vertices_capacity)
+        /* Store the vertex in the compressed data, at its own number */
+        code = prc_next_ref_number(ctx, compressed_data, compressed_data->number_of_vertex_refs,
+            &compressed_data->iso_vertex_count, &compressed_data->ana_vertex_count, &number);
+        if (code < 0)
+            return code;
+        if (number >= compressed_data->vertices_capacity)
         {
             prc_compressed_vertex *new_vertices;
-            /* Need to reallocate */
-            compressed_data->vertices_capacity *= 2;
+            uint32_t new_capacity = compressed_data->vertices_capacity;
+
+            if (new_capacity == 0)
+                new_capacity = BREP_VERTEX_INITIAL_SIZE;
+            while (new_capacity <= number)
+            {
+                if (new_capacity > UINT32_MAX / 2 / sizeof(prc_compressed_vertex))
+                {
+                    prc_error(ctx, PRC_ERROR_MEMORY, "Vertex number %u is implausible\n", number);
+                    return PRC_ERROR_MEMORY;
+                }
+                new_capacity *= 2;
+            }
             new_vertices = (prc_compressed_vertex *)prc_realloc(ctx,
-                compressed_data->vertices,
-                compressed_data->vertices_capacity * sizeof(prc_compressed_vertex));
+                compressed_data->vertices, new_capacity * sizeof(prc_compressed_vertex));
             if (new_vertices == NULL)
             {
                 prc_error(ctx, PRC_ERROR_MEMORY, "Failed to reallocate compressed_data->vertices\n");
                 return PRC_ERROR_MEMORY;
             }
+            /* The numbers not yet used, between the iso and ana ranges, must
+               read as not stored (not_already_stored 0) */
+            memset(new_vertices + compressed_data->vertices_capacity, 0,
+                (new_capacity - compressed_data->vertices_capacity) * sizeof(prc_compressed_vertex));
             compressed_data->vertices = new_vertices;
+            compressed_data->vertices_capacity = new_capacity;
         }
+        compressed_data->vertices[number] = *data;
+        if (number >= compressed_data->current_vertex_index)
+            compressed_data->current_vertex_index = number + 1;
     }
 
     return 0;
@@ -873,6 +938,23 @@ prc_curve_table_slot(prc_context *ctx, prc_nano_brep_compressed_data *compressed
     return compressed_data->curves[index];
 }
 
+/* The slot for the next curve the file stores, at the number the file gives it
+   (see prc_next_ref_number). */
+static prc_compressed_curve *
+prc_next_curve_slot(prc_context *ctx, prc_nano_brep_compressed_data *compressed_data,
+    uint32_t *number)
+{
+    prc_compressed_curve *slot;
+
+    if (prc_next_ref_number(ctx, compressed_data, compressed_data->number_of_edge_refs,
+            &compressed_data->iso_curve_count, &compressed_data->ana_curve_count, number) < 0)
+        return NULL;
+    slot = prc_curve_table_slot(ctx, compressed_data, *number);
+    if (slot != NULL && *number >= compressed_data->current_curve_index)
+        compressed_data->current_curve_index = *number + 1;
+    return slot;
+}
+
 /* Add an empty place holder for a curve that must be deduced from the other
    curves. In this case, these deduced curves may need to be referenced by
    later objects. We wont compute what the curve is, until we process the
@@ -882,8 +964,8 @@ static int
 prc_parse_add_deduced_curve(prc_context *ctx, prc_nano_brep_compressed_data *compressed_data,
     prc_ref_or_compressed_curve *data)
 {
-    prc_compressed_curve *nano_data = prc_curve_table_slot(ctx, compressed_data,
-        compressed_data->current_curve_index);
+    uint32_t number;
+    prc_compressed_curve *nano_data = prc_next_curve_slot(ctx, compressed_data, &number);
 
     if (nano_data == NULL)
         return PRC_ERROR_MEMORY;
@@ -891,10 +973,9 @@ prc_parse_add_deduced_curve(prc_context *ctx, prc_nano_brep_compressed_data *com
     memset(nano_data, 0, sizeof(*nano_data));
     nano_data->curve_type = PRC_HCG_Deduced;
     data->compressed_curve = nano_data;
+    data->index_compressed_curve = number;
     data->is_deduced_curve = 1;
     data->curve_is_not_already_stored = 1;
-
-    compressed_data->current_curve_index++;
     return 0;
 }
 
@@ -917,12 +998,9 @@ prc_parse_ref_or_compressed_curve(prc_context *ctx, prc_bit_state *bit_state,
            A composite curve appends its own sub-curves to this same table
            while it is being parsed, so leaving the index unadvanced would hand
            the first sub-curve the slot this curve is already writing to. */
-        data->index_compressed_curve = compressed_data->current_curve_index;
-        nano_data = prc_curve_table_slot(ctx, compressed_data,
-            compressed_data->current_curve_index);
+        nano_data = prc_next_curve_slot(ctx, compressed_data, &data->index_compressed_curve);
         if (nano_data == NULL)
             return PRC_ERROR_MEMORY;
-        compressed_data->current_curve_index++;
         data->compressed_curve = nano_data;
 
         code = prc_parse_compressed_curve(ctx, bit_state, compressed_data,
@@ -942,7 +1020,7 @@ prc_parse_ref_or_compressed_curve(prc_context *ctx, prc_bit_state *bit_state,
     return 0;
 }
 
-/* Table 231 � AnaFaceTrimLoop */
+/* Table 231 AnaFaceTrimLoop */
 static int
 prc_parse_ana_face_trim_loop(prc_context *ctx, prc_bit_state *bit_state,
     prc_nano_brep_compressed_data *compressed_data, uint32_t *trim_loop_count,
@@ -1011,9 +1089,9 @@ prc_parse_ana_face_trim_loop(prc_context *ctx, prc_bit_state *bit_state,
                 {
                     current_loop->curve_count += 1;
 
-                    /* Need to parse the compressed curve */
-                    current_curve->compressed_curve = (prc_compressed_curve *)prc_calloc(ctx,
-                        1, sizeof(prc_compressed_curve));
+                    /* Add this curve to our table of curves that can be referenced */
+                    current_curve->compressed_curve = prc_next_curve_slot(ctx, compressed_data,
+                        &current_curve->index_compressed_curve);
                     if (current_curve->compressed_curve == NULL)
                     {
                         prc_error(ctx, PRC_ERROR_MEMORY, "Failed to allocate current_curve->compressed_curve\n");
@@ -1975,6 +2053,40 @@ prc_parse_iso_nurbs_trim_curve(prc_context *ctx, prc_bit_state *bit_state,
         {
             prc_error(ctx, code, "Failed in prc_parse_compressed_curve\n");
             return code;
+        }
+
+        /* A curve with iso_boundary set is the surface's own boundary, so
+           nothing is stored for it, but it still takes a number: across
+           prc-db, number_of_edge_refs equals the count of curves stored on iso
+           faces only when these are counted (1,566 of them, in 63 bodies). */
+        if (data->trim_curve.iso_boundary)
+        {
+            uint32_t number;
+            code = prc_next_ref_number(ctx, compressed_data, compressed_data->number_of_edge_refs,
+                &compressed_data->iso_curve_count, &compressed_data->ana_curve_count, &number);
+            if (code < 0)
+                return code;
+        }
+        else
+        {
+            /* We need to store this curve for possible use as referenced item */
+            uint32_t number;
+            prc_compressed_curve *comp_crv = prc_next_curve_slot(ctx, compressed_data, &number);
+            if (comp_crv == NULL)
+            {
+                prc_error(ctx, PRC_ERROR_MEMORY, "Failed in prc_parse_iso_nurbs_trim_curve\n");
+                return PRC_ERROR_MEMORY;
+            }
+            if (data->trim_curve.is_a_circle)
+            {
+                comp_crv->curve_type = PRC_HCG_Circle;
+                comp_crv->hcg_circle = data->trim_curve.compressed_circle;
+            }
+            else
+            {
+                comp_crv->curve_type = PRC_HCG_Line;
+                comp_crv->hcg_line = data->trim_curve.compressed_line;
+            }
         }
     }
     else
@@ -4621,6 +4733,9 @@ prc_parse_brep_data_compress(prc_context *ctx, prc_bit_state *bit_state,
        and stored in the context so that it is accessible in many methods. Later
        it is moved to ref_data member variable of prc_topo_brep_data_compress (data) */
     compressed_data->number_bits_for_encoding = data->number_of_bits_to_store_ref;
+
+    /* number_of_vertex_refs and number_of_edge_refs are how many vertices and
+       curves are stored on iso faces; see prc_next_ref_number. */
     compressed_data->number_of_vertex_refs = data->number_of_vertex_refs;
     compressed_data->number_of_edge_refs = data->number_of_edge_refs;
     compressed_data->is_a_compressed_face = true;
@@ -4649,6 +4764,10 @@ prc_parse_brep_data_compress(prc_context *ctx, prc_bit_state *bit_state,
 
     compressed_data->current_curve_index = 0;
     compressed_data->current_vertex_index = 0;
+    compressed_data->iso_vertex_count = 0;
+    compressed_data->ana_vertex_count = 0;
+    compressed_data->iso_curve_count = 0;
+    compressed_data->ana_curve_count = 0;
     compressed_data->curve_nesting_depth = 0;
 
     /* Section 7.9.21.11 */

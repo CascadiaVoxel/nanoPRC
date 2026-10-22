@@ -431,10 +431,18 @@ prc_write_cart_trans(prc_context *ctx, prc_bit_write_state *s,
      texture_application_mode combine, with no alpha bit set -- a non-zero
                               alpha bit would make the reader expect two more
                               fields. See below.
-     wrapping mode s/t        application_choose -- see below. */
+     wrapping mode s/t        the caller's, repeat by default -- see below. */
+static int
+prc_write_wrap_is_written(PRC_texture_wrapping_mode_t mode)
+{
+    return mode == PRC_texture_wrapping_repeat ||
+           mode == PRC_texture_wrapping_clamp_to_border;
+}
+
 uint32_t
 prc_write_texture_definition_add(prc_context *ctx, prc_write_global_tables *tables,
     uint32_t biased_picture_index, PRC_texture_function_t function,
+    PRC_texture_wrapping_mode_t wrap_s, PRC_texture_wrapping_mode_t wrap_t,
     const prc_cart_transformation *transformation)
 {
     prc_graph_texture_definition entry;
@@ -459,6 +467,18 @@ prc_write_texture_definition_add(prc_context *ctx, prc_write_global_tables *tabl
     {
         prc_error(ctx, PRC_ERROR_INTERNAL,
             "prc_write_texture_definition_add: only modulate and replace are written\n");
+        return 0;
+    }
+    /* Only repeat and clamp to border are written. Application choose (0)
+       gives the caller nothing predictable, and the format does not say how
+       plain clamp (3) differs from the other clamps. Clamp to edge (4) and
+       mirrored repeat (5) were tried: Acrobat showed them as clamp to border
+       and as repeat. */
+    if (!prc_write_wrap_is_written(wrap_s) || !prc_write_wrap_is_written(wrap_t))
+    {
+        prc_error(ctx, PRC_ERROR_INTERNAL,
+            "prc_write_texture_definition_add: only repeat and clamp to border "
+            "are written\n");
         return 0;
     }
     /* A placement transformation rides with the mapping operator, and the
@@ -496,8 +516,8 @@ prc_write_texture_definition_add(prc_context *ctx, prc_write_global_tables *tabl
        writes 0; 4 is taken as the convention. Neither value sets the alpha
        bit, so no alpha-test fields follow either way. */
     entry.texture_application_mode = PRC_texture_application_combine;
-    /* Repeat on both axes. texture_dimension is 2, so s and t are written and
-       r is not.
+    /* The caller's wrap mode on each axis, repeat by default. texture_dimension
+       is 2, so s and t are written and r is not.
 
        The byte here is unchanged; only the name is. This read
        application_choose, and the note with it said that was "what all four
@@ -508,9 +528,11 @@ prc_write_texture_definition_add(prc_context *ctx, prc_write_global_tables *tabl
        application choose. Re-censused across 1,210 texture definitions in the
        public collection: 1,061 write 1 on both axes, 73 write 0, 67 write 1
        and 0, 7 write 2 and 2 write 4. Repeat is the convention, which is what
-       this writer has been emitting all along under the other name. */
-    entry.texture_wrapping_mode_s = PRC_texture_wrapping_repeat;
-    entry.texture_wrapping_mode_t = PRC_texture_wrapping_repeat;
+       this writer has been emitting all along under the other name, and what
+       a caller who leaves the wrap fields at 0 still gets. None of the 1,210
+       writes 3 or 5. */
+    entry.texture_wrapping_mode_s = wrap_s;
+    entry.texture_wrapping_mode_t = wrap_t;
 
     /* has_transformation stays 0 from the memset. A non-NULL transformation is
        refused above, so there is nothing to copy in here. */

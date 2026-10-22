@@ -372,6 +372,94 @@ test_picture_roundtrip(prc_context *ctx)
     prc_bitwrite_release(ctx, &w);
 }
 
+/* An image added twice is stored once. Each case below differs from the first
+   picture in one way only, so a writer that compared too little shares a
+   picture it should not, and one that compared too much fails the first
+   pair. */
+static void
+test_picture_dedup(prc_context *ctx)
+{
+    static const uint8_t png_a[33] = {
+        0x89, 'P', 'N', 'G', 0x0D, 0x0A, 0x1A, 0x0A,
+        0x00, 0x00, 0x00, 0x0D, 'I', 'H', 'D', 'R',
+        0x00, 0x00, 0x00, 0x10, 0x00, 0x00, 0x00, 0x10,
+        0x08, 0x02, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00
+    };
+    uint8_t png_b[33], png_copy[33];
+    uint8_t pixels[6 * 4 * 3 + 9];
+    prc_write_global_tables tables;
+    prc_write_picture pic;
+    uint32_t k;
+
+    printf("  sub-case: an image added twice is stored once\n");
+
+    for (k = 0; k < sizeof(pixels); k++)
+        pixels[k] = (uint8_t)(k * 5);
+    memcpy(png_b, png_a, sizeof(png_b));
+    png_b[32] = 0x01;   /* one byte differs, in the CRC */
+    memcpy(png_copy, png_a, sizeof(png_copy));
+
+    PRC_ASSERT_EQ(prc_write_global_tables_init(ctx, &tables), 0);
+
+    /* 1: 6x4 RGB. */
+    memset(&pic, 0, sizeof(pic));
+    pic.format = PRC_WRITE_PIX_RGB;
+    pic.data = pixels;
+    pic.data_size = 6 * 4 * 3;
+    pic.width = 6;
+    pic.height = 4;
+    PRC_ASSERT_EQ(prc_write_picture_add(ctx, &tables, &pic), 1);
+
+    /* The same pixels from a larger buffer: only 6*4*3 bytes are stored, so
+       this is the same image. */
+    pic.data_size = sizeof(pixels);
+    PRC_ASSERT_EQ(prc_write_picture_add(ctx, &tables, &pic), 1);
+
+    /* 2: the same bytes as 4x6, a different image. */
+    pic.data_size = 6 * 4 * 3;
+    pic.width = 4;
+    pic.height = 6;
+    PRC_ASSERT_EQ(prc_write_picture_add(ctx, &tables, &pic), 2);
+
+    /* 3: the same bytes as 6x3 RGBA (72 bytes either way), a different
+       format. */
+    pic.format = PRC_WRITE_PIX_RGBA;
+    pic.width = 6;
+    pic.height = 3;
+    PRC_ASSERT_EQ(prc_write_picture_add(ctx, &tables, &pic), 3);
+
+    /* 4: a PNG, then the same PNG again from another buffer. */
+    memset(&pic, 0, sizeof(pic));
+    pic.format = PRC_WRITE_PIX_PNG;
+    pic.data = png_a;
+    pic.data_size = sizeof(png_a);
+    PRC_ASSERT_EQ(prc_write_picture_add(ctx, &tables, &pic), 4);
+    pic.data = png_copy;
+    PRC_ASSERT_EQ(prc_write_picture_add(ctx, &tables, &pic), 4);
+
+    /* 5: a PNG that differs in its last byte. */
+    pic.data = png_b;
+    PRC_ASSERT_EQ(prc_write_picture_add(ctx, &tables, &pic), 5);
+
+    /* The first 6x4 picture again, after the others. */
+    memset(&pic, 0, sizeof(pic));
+    pic.format = PRC_WRITE_PIX_RGB;
+    pic.data = pixels;
+    pic.data_size = 6 * 4 * 3;
+    pic.width = 6;
+    pic.height = 4;
+    PRC_ASSERT_EQ(prc_write_picture_add(ctx, &tables, &pic), 1);
+
+    /* Five pictures, five stored images, each picture on its own. */
+    PRC_ASSERT_EQ(tables.picture_count, 5);
+    PRC_ASSERT_EQ(tables.file_count, 5);
+    for (k = 0; k < 5; k++)
+        PRC_ASSERT_EQ(tables.pictures[k].biased_uncompressed_file_index, k + 1);
+
+    prc_write_global_tables_free(ctx, &tables);
+}
+
 static void
 test_tolerance_modes(prc_context *ctx)
 {
@@ -402,6 +490,7 @@ main(void)
     test_material_roundtrip(ctx);
     test_style_transparency(ctx);
     test_picture_roundtrip(ctx);
+    test_picture_dedup(ctx);
     test_tolerance_modes(ctx);
 
     prc_release_context(ctx);

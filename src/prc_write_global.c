@@ -547,6 +547,36 @@ prc_write_texture_definition_add(prc_context *ctx, prc_write_global_tables *tabl
     return tables->texture_definition_count;
 }
 
+/* Returns the 1-biased index of a picture already in the table with the same
+   format, the same dimensions for the raw formats, and the same stored bytes,
+   or 0 if there is none. blob and blob_size are what the new picture would
+   store. */
+static uint32_t
+prc_write_picture_find(const prc_write_global_tables *tables, prc_picture_data_format_t format,
+    uint32_t width, uint32_t height, const uint8_t *blob, size_t blob_size)
+{
+    uint32_t k;
+
+    for (k = 0; k < tables->picture_count; k++)
+    {
+        const prc_graph_picture *p = &tables->pictures[k];
+        const prc_write_embedded_file *f;
+
+        if (p->format != format || p->biased_uncompressed_file_index == 0 ||
+            p->biased_uncompressed_file_index > tables->file_count)
+            continue;
+        /* PNG and JPEG store 0 for both dimensions (see below), and their
+           bytes carry their own, so for them the bytes decide. */
+        if ((format == KEPRCPicture_BITMAP_RGB_BYTE || format == KEPRCPicture_BITMAP_RGBA_BYTE) &&
+            (p->pixel_width != width || p->pixel_height != height))
+            continue;
+        f = &tables->files[p->biased_uncompressed_file_index - 1];
+        if (f->size == blob_size && memcmp(f->data, blob, blob_size) == 0)
+            return k + 1;
+    }
+    return 0;
+}
+
 uint32_t
 prc_write_picture_add(prc_context *ctx, prc_write_global_tables *tables, const prc_write_picture *picture)
 {
@@ -644,6 +674,19 @@ prc_write_picture_add(prc_context *ctx, prc_write_global_tables *tables, const p
             prc_error(ctx, PRC_ERROR_INTERNAL,
                 "prc_write_picture_add: image is empty or too large to address\n");
             return 0;
+        }
+
+        /* An image already in the table is not stored again. Every textured
+           item used to bring its own copy, so a model whose parts all share
+           one texture carried the same image once per part. Matching is by
+           content, so callers need do nothing to share: the same bytes give
+           the same picture, and the items' texture definitions all point at
+           it. */
+        {
+            uint32_t existing = prc_write_picture_find(tables, entry.format,
+                width, height, picture->data, blob_size);
+            if (existing != 0)
+                return existing;
         }
 
         entry.biased_uncompressed_file_index =

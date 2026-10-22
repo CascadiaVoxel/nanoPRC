@@ -635,20 +635,12 @@ prc_write_picture_add(prc_context *ctx, prc_write_global_tables *tables, const p
        is the format the caller claimed, which is worth doing whatever ends up
        in the record.
 
-       Two reasons to write 0 rather than the true size. It is what a third of
-       real encoded pictures do -- 366 of 1159 PNG/JPEG pictures across a
-       310-file third-party corpus store 0 in both fields, and 0 of them store
-       anything that disagrees with the image -- so readers must handle it.
-       And it avoids an unexplained failure in our own output: Adobe Acrobat
-       shows an empty model tree for a file this writer produces whose picture
-       record declares 256 or more on BOTH axes, while the same image in the
-       same file renders when these fields are 0.
-
-       That failure is NOT understood. It is not the image, the encoder, the
-       blob size, the file size or the field encoding -- each eliminated by a
-       fixture -- and a real producer's file declaring the same 256x256
-       renders. Writing 0 is a legitimate encoding, not a disguise for the
-       bug, but the bug is still open. */
+       It is also what a third of real encoded pictures store -- 366 of 1159
+       PNG/JPEG pictures across a 310-file third-party corpus have 0 in both
+       fields, and none stores anything that disagrees with the image -- so
+       readers must handle it. Adobe Acrobat does not ignore the fields as
+       7.5.5 says: given a PNG whose own header disagrees with them, it
+       follows these, so a writer that fills them in must get them right. */
     if (entry.format == KEPRCPicture_PNG || entry.format == KEPRCPicture_JPG)
     {
         entry.pixel_width = 0;

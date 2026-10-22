@@ -37,6 +37,7 @@
 #include "prc_parse_common.h"
 #include "prc_parse_tess.h"
 #include "prc_parse_global.h"
+#include "prc_parse_tree.h"
 #include "zlib.h"
 
 static const char *TEST_PRC_FILENAME = "test_file_structure_output.prc";
@@ -1130,6 +1131,65 @@ test_globals_and_extra_geometry_end_with_user_data(void)
     prc_release_context(ctx);
 }
 
+/* The tree section leaves one 0 bit after its user_data. No field accounts
+   for it, but Acrobat showed an empty model tree when the section ended
+   exactly on a byte boundary, and every tree section in real files leaves
+   at least one bit there. Same measure as above, plus that one bit. */
+static void
+test_tree_section_ends_with_one_spare_bit(void)
+{
+    /* A context of its own: the parsed part and product are left to it. */
+    prc_context *ctx = prc_new_context(NULL);
+    prc_write_tree_node root;
+    prc_bit_write_state s;
+    prc_bit_state bs;
+    prc_content_prc_base base;
+    prc_asm_parts_definition part;
+    prc_asm_product_occurrence product;
+    uint32_t root_index = 0;
+    size_t written_bits;
+
+    printf("  sub-case: tree section ends with one spare bit\n");
+
+    memset(&root, 0, sizeof(root));
+    root.name = "root";
+    root.has_empty_part = 1;
+    root.bbox_max[0] = root.bbox_max[1] = root.bbox_max[2] = 1.0;
+
+    PRC_ASSERT_EQ(prc_bitwrite_init(ctx, &s, 256), 0);
+    PRC_ASSERT_EQ(prc_write_tree_to_stream(ctx, &s, &root, &root_index, 0, NULL), 0);
+    written_bits = s.byte_pos * 8 + s.bit_fill;
+    PRC_ASSERT_EQ(prc_bitwrite_flush(ctx, &s), 0);
+    PRC_ASSERT_EQ(root_index, 1);
+
+    prc_init_bit_state(ctx, &bs, s.buf, s.byte_pos);
+    PRC_ASSERT_EQ(prc_bitread_uint32(ctx, &bs), PRC_TYPE_ASM_FileStructureTree);
+    memset(&base, 0, sizeof(base));
+    PRC_ASSERT(prc_parse_content_prc_base(ctx, &bs, &base) >= 0);
+    PRC_ASSERT_EQ(prc_bitread_uint32(ctx, &bs), 1);   /* parts_count */
+    memset(&part, 0, sizeof(part));
+    PRC_ASSERT(prc_parse_parts(ctx, &bs, &part) >= 0);
+    PRC_ASSERT_EQ(prc_bitread_uint32(ctx, &bs), 1);   /* product_count */
+    memset(&product, 0, sizeof(product));
+    PRC_ASSERT(prc_parse_product_occurrence(ctx, &bs, &product) >= 0);
+
+    /* Table 38 internal data */
+    PRC_ASSERT_EQ(prc_bitread_uint32(ctx, &bs), PRC_TYPE_ASM_FileStructure);
+    memset(&base, 0, sizeof(base));
+    PRC_ASSERT(prc_parse_content_prc_base(ctx, &bs, &base) >= 0);
+    PRC_ASSERT_EQ(prc_bitread_uint32(ctx, &bs), 2);   /* next_available_index */
+    PRC_ASSERT_EQ(prc_bitread_uint32(ctx, &bs), 1);   /* index_product_occurrence */
+
+    PRC_ASSERT_EQ((uint64_t)written_bits - (uint64_t)bs.bit_position, 2);
+    PRC_ASSERT_EQ(prc_bitread_uint32(ctx, &bs), 0);   /* user_data.stream_size */
+    PRC_ASSERT_EQ(prc_bitread_bit(ctx, &bs), 0);      /* the spare bit */
+    PRC_ASSERT_EQ((uint64_t)written_bits, (uint64_t)bs.bit_position);
+    PRC_ASSERT_EQ(bs.overrun, 0);
+
+    prc_bitwrite_release(ctx, &s);
+    prc_release_context(ctx);
+}
+
 int
 main(void)
 {
@@ -1152,6 +1212,7 @@ main(void)
     test_textured_groups_roundtrip(ctx);
     test_tessellation_section_ends_with_user_data();
     test_globals_and_extra_geometry_end_with_user_data();
+    test_tree_section_ends_with_one_spare_bit();
 
     prc_release_context(ctx);
     remove(TEST_PRC_FILENAME);

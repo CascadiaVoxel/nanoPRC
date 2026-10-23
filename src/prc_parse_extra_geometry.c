@@ -79,12 +79,20 @@ prc_parse_uv_parameterization(prc_context *ctx, prc_bit_state *bit_state,
    (number_of_vertex_refs or number_of_edge_refs) how many there are; those
    stored anywhere else are numbered number_refs, number_refs + 1 ... So the
    value of a reference says which range it is in, whatever kind of face it is
-   read on. A wire body has no iso faces, and its number_refs is 0. */
-static int
+   read on. A wire body has no iso faces, and its number_refs is 0.
+
+   When number_refs is 0 the two ranges are one: everything is numbered 0, 1,
+   2 ... in the order stored, iso faces included. That is what the arithmetic
+   gives at a threshold of 0, and one writer (an OpenSCAD-based exporter, up to
+   its version 0.6.0) declares 0 on every body whatever it holds. A non-zero
+   count that is then exceeded is still refused: past it, the two ranges
+   overlap and a reference could mean either. */
+int
 prc_next_ref_number(prc_context *ctx, const prc_nano_brep_compressed_data *compressed_data,
     prc_unsigned_int number_refs, uint32_t *iso_count, uint32_t *ana_count, uint32_t *number)
 {
-    if (compressed_data->is_iso_type && !compressed_data->is_a_SingleWireBodyCompress)
+    if (compressed_data->is_iso_type && !compressed_data->is_a_SingleWireBodyCompress
+        && number_refs > 0)
     {
         if (*iso_count >= number_refs)
         {
@@ -107,7 +115,7 @@ prc_next_ref_number(prc_context *ctx, const prc_nano_brep_compressed_data *compr
 }
 
 /* Has the number a reference gives already been stored? */
-static int
+int
 prc_ref_number_is_stored(prc_unsigned_int number_refs, uint32_t iso_count, uint32_t ana_count,
     uint32_t number)
 {

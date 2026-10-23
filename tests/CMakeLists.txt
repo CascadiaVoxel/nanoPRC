@@ -88,3 +88,8 @@ add_executable(test_pdf_file_id tests/unit/test_pdf_file_id.c)
 target_link_libraries(test_pdf_file_id prc_static)
 target_include_directories(test_pdf_file_id PRIVATE tests)
 add_test(NAME test_pdf_file_id COMMAND test_pdf_file_id)
+
+add_executable(test_ref_numbering tests/unit/test_ref_numbering.c)
+target_link_libraries(test_ref_numbering prc_static)
+target_include_directories(test_ref_numbering PRIVATE tests)
+add_test(NAME test_ref_numbering COMMAND test_ref_numbering)

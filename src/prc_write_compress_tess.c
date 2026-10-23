@@ -580,36 +580,16 @@ prc_encode_preprocess_grouped(prc_context *ctx,
 
     if (num_triangles > 0)
     {
-        uint32_t removed = 0;
-        /* Sliver-triangle filtering (default ON, 2026-07-23): the a==b/
-           b==c/a==c check above only catches EXACT welded-duplicate
-           corners. Real-world meshes (3D scans, CAD exports) commonly
-           contain triangles with three DISTINCT welded corners that are
-           still nearly collinear (near-zero area) -- confirmed via a real
-           customer file (757-3516-1.STL, otherwise perfectly topologically
-           clean: watertight, zero non-manifold edges/vertices, single
-           component) to independently cause an Adobe-Acrobat-specific
-           blank-model-tree rejection, distinct from the non-manifold-edge
-           defect class fixed elsewhere in this function -- Acrobat's own
-           (opaque) geometry validation apparently rejects some slivers
-           outright even though this write facility's own encoder/decoder
-           round-trip every position bit-for-bit self-consistently either
-           way (i.e. this is NOT a bug in OUR bit-packing; every other
-           reader tried tolerates the same bits fine). A sin(angle)-between-
-           edges threshold of 0.01 (~0.57 degrees) is used: small enough
-           that legitimate thin CAD features survive (a real, independently-
-           produced, Acrobat-working reference file for a DIFFERENT
-           investigation this session had its own thinnest sliver at
-           sin-angle ~1.1e-3, an order of magnitude below this threshold,
-           and opened fine), large enough to catch the confirmed-bad
-           757-3516-1.STL case (worst sliver there: sin-angle ~4.9e-3).
-           PRC_DIAG_SLIVER_SIN_THRESHOLD overrides this default (e.g. "0" to
-           disable entirely for diagnostic comparison, or another positive
-           value to tune) but is not required for normal operation. */
-        const char *sliver_env = prc_diag_getenv("PRC_DIAG_SLIVER_SIN_THRESHOLD");
-        double sliver_sin_threshold = sliver_env != NULL ? atof(sliver_env) : 0.01;
-        uint32_t sliver_removed = 0;
-
+        /* Only triangles two of whose corners weld to the same vertex are
+           dropped; the compressed traversal cannot encode them. Thin but
+           real triangles are kept. An earlier filter also dropped every
+           triangle with a corner under about 0.57 degrees, because one file
+           (757-3516-1.STL) had shown an empty model tree in Adobe Acrobat.
+           That was not the triangles: the writer then ended its
+           tessellation section without the closing user_data, and a section
+           ending exactly on a byte boundary gives an empty model tree
+           whatever it contains. The filter discarded real geometry, almost
+           5% of one assembly's triangles. */
         out->tri_indices = (uint32_t *)prc_malloc(ctx, (size_t)num_triangles * 3 * sizeof(uint32_t));
         out->tri_orig_index = (uint32_t *)prc_malloc(ctx, (size_t)num_triangles * sizeof(uint32_t));
         if (out->tri_indices == NULL || out->tri_orig_index == NULL)
@@ -625,34 +605,7 @@ prc_encode_preprocess_grouped(prc_context *ctx,
             uint32_t b = remap[tri_indices[(size_t)i * 3 + 1]];
             uint32_t c = remap[tri_indices[(size_t)i * 3 + 2]];
             if (a == b || b == c || a == c)
-            {
-                removed++;
                 continue;
-            }
-            if (sliver_sin_threshold > 0.0)
-            {
-                double *pa = &out->positions[(size_t)a * 3];
-                double *pb = &out->positions[(size_t)b * 3];
-                double *pc = &out->positions[(size_t)c * 3];
-                double e0[3], e1[3], cr[3];
-                double len_e0, len_e1, len_cr, denom;
-                uint32_t d;
-
-                for (d = 0; d < 3; d++) { e0[d] = pb[d] - pa[d]; e1[d] = pc[d] - pa[d]; }
-                cr[0] = e0[1]*e1[2] - e0[2]*e1[1];
-                cr[1] = e0[2]*e1[0] - e0[0]*e1[2];
-                cr[2] = e0[0]*e1[1] - e0[1]*e1[0];
-                len_e0 = sqrt(e0[0]*e0[0]+e0[1]*e0[1]+e0[2]*e0[2]);
-                len_e1 = sqrt(e1[0]*e1[0]+e1[1]*e1[1]+e1[2]*e1[2]);
-                len_cr = sqrt(cr[0]*cr[0]+cr[1]*cr[1]+cr[2]*cr[2]);
-                denom = len_e0 * len_e1;
-                if (denom > 0.0 && (len_cr / denom) < sliver_sin_threshold)
-                {
-                    removed++;
-                    sliver_removed++;
-                    continue;
-                }
-            }
             out->tri_indices[(size_t)clean_tris * 3 + 0] = a;
             out->tri_indices[(size_t)clean_tris * 3 + 1] = b;
             out->tri_indices[(size_t)clean_tris * 3 + 2] = c;
@@ -660,10 +613,6 @@ prc_encode_preprocess_grouped(prc_context *ctx,
             clean_tris++;
         }
         out->num_triangles = clean_tris;
-        (void)removed;
-        if (sliver_removed > 0 && prc_diag_getenv("PRC_DIAG_MESH_QUALITY") != NULL)
-            printf("PRC_DIAG_SLIVER_SIN_THRESHOLD=%.6g: removed %u sliver triangles (of %u total removed)\n",
-                sliver_sin_threshold, sliver_removed, removed);
 
         if (clean_tris == 0)
         {
@@ -1028,8 +977,8 @@ prc_encode_preprocess_grouped(prc_context *ctx,
            at that one point (a "bowtie"). Confirmed via a real customer
            file (UK_original.stl) that has non-manifold vertices in every
            one of its 7 connected parts and still failed in Acrobat after
-           the edge fix and the sliver-triangle filter above were both
-           already active -- this was previously only diagnosed (read-only
+           the edge fix and a sliver-triangle filter (since removed) were
+           both already active -- this was previously only diagnosed (read-only
            census), never fixed. Same general remedy as the edge case: keep
            the first fan on the original vertex, give every OTHER fan its
            own private, imperceptibly-offset copy of that vertex's

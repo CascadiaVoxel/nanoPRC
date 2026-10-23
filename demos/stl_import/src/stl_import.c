@@ -676,69 +676,6 @@ stl_mesh_load(const char *path, stl_mesh *mesh)
     return rc;
 }
 
-/* Compacts degenerate triangles out of `mesh` in place: both exactly (or
-   near-) zero-area triangles (three collinear/coincident points) and
-   extreme "sliver" triangles (real, nonzero area, but one edge orders of
-   magnitude shorter than the other two -- three nearly-collinear points).
-   Neither contributes meaningful surface detail. Filtering here, before
-   these triangles reach vertex welding or the write API, isn't just
-   hygiene: real customer STL data (from a mesh-cutting operation) was
-   found, during this importer's own real-world dataset testing, to
-   contain both kinds and to trigger a write/decode-path bug
-   (`points_is_reference_index out of range` from an otherwise-unrelated
-   part of the library, `prc_decode_compressed_tess.c`, when reading the
-   written file back) when they reached the COMPRESSED tessellation
-   encoder -- an exactly-zero-area triangle alone was not sufficient to
-   reproduce it; a cluster of extreme slivers (aspect ratios from ~2e4 up
-   to several million, confirmed by direct inspection of the failing
-   triangles) in the same region was. Degenerate input the encoder isn't
-   expected to handle gracefully either way, and none of it carries real
-   geometric information, so this drops both classes rather than
-   depending on downstream encoder robustness to either.
-   `area_threshold` is an absolute area (not squared); `aspect_threshold`
-   bounds `longest_edge^2 / area` (dimensionally a length, so it scales
-   naturally with `area_threshold` -- see the caller for how both are
-   chosen). Returns the number of triangles removed. */
-static uint32_t
-stl_filter_degenerate_triangles(stl_mesh *mesh, double area_threshold, double aspect_threshold)
-{
-    uint32_t src, dst = 0;
-
-    for (src = 0; src < mesh->num_triangles; src++)
-    {
-        const double *v0 = &mesh->raw_positions[(size_t)src * 9 + 0];
-        const double *v1 = &mesh->raw_positions[(size_t)src * 9 + 3];
-        const double *v2 = &mesh->raw_positions[(size_t)src * 9 + 6];
-        double ux = v1[0] - v0[0], uy = v1[1] - v0[1], uz = v1[2] - v0[2]; /* v0->v1 */
-        double wx = v2[0] - v0[0], wy = v2[1] - v0[1], wz = v2[2] - v0[2]; /* v0->v2 */
-        double vx = v2[0] - v1[0], vy = v2[1] - v1[1], vz = v2[2] - v1[2]; /* v1->v2 */
-        double cx = uy * wz - uz * wy, cy = uz * wx - ux * wz, cz = ux * wy - uy * wx;
-        double area = 0.5 * sqrt(cx * cx + cy * cy + cz * cz);
-        double e0_sq = ux * ux + uy * uy + uz * uz;
-        double e1_sq = vx * vx + vy * vy + vz * vz;
-        double e2_sq = wx * wx + wy * wy + wz * wz;
-        double max_edge_sq = e0_sq;
-        if (e1_sq > max_edge_sq) max_edge_sq = e1_sq;
-        if (e2_sq > max_edge_sq) max_edge_sq = e2_sq;
-
-        if (area <= area_threshold || max_edge_sq / area > aspect_threshold)
-            continue; /* degenerate or extreme sliver: drop it */
-
-        if (dst != src)
-        {
-            memcpy(&mesh->raw_positions[(size_t)dst * 9], &mesh->raw_positions[(size_t)src * 9], sizeof(double) * 9);
-            memcpy(&mesh->facet_normals[(size_t)dst * 3], &mesh->facet_normals[(size_t)src * 3], sizeof(double) * 3);
-        }
-        dst++;
-    }
-
-    {
-        uint32_t removed = mesh->num_triangles - dst;
-        mesh->num_triangles = dst;
-        return removed;
-    }
-}
-
 /* ---------------------------------------------------------------------
  * Section 2: vertex welding + connected-component analysis.
  *
@@ -2080,7 +2017,7 @@ main(int argc, char *argv[])
 
     /* TEST: PRC_DIAG_TRI_RANGE="START,END" -- restrict to a contiguous
        slice [START,END) of the RAW, file-order triangle stream, before any
-       degenerate-filtering or welding. For bisecting which region of a
+       welding. For bisecting which region of a
        large STL file (triangles are just a flat list, no spatial ordering
        guarantee) triggers an Acrobat rejection that survives all
        currently-known fixes -- halve/quarter the range repeatedly to
@@ -2119,31 +2056,6 @@ main(int argc, char *argv[])
         for (a = 0; a < 3; a++) ext[a] = bbox_max[a] - bbox_min[a];
         diagonal = sqrt(ext[0] * ext[0] + ext[1] * ext[1] + ext[2] * ext[2]);
         if (diagonal < 1e-9) diagonal = 1.0; /* degenerate (single-point) mesh guard */
-    }
-
-    /* Drop degenerate/sliver triangles before they reach welding or the
-       write API -- see stl_filter_degenerate_triangles's own comment for
-       why this matters beyond hygiene. area_threshold: a triangle is
-       degenerate if its area is below (1e-9 * bbox diagonal)^2 -- three
-       orders of magnitude tighter than the default vertex-weld tolerance
-       (1e-6), so this alone only catches triangles degenerate at the
-       mesh's own scale (collinear/coincident points, floating-point
-       noise), not legitimately small detail triangles in a fine mesh.
-       aspect_threshold (1e5) additionally catches extreme slivers with
-       real but tiny area relative to their longest edge -- chosen well
-       above any aspect ratio a normally-shaped mesh triangle would have,
-       but well below the ~2e4-8e6 range observed on the real slivers that
-       motivated this filter in the first place. */
-    {
-        double area_eps = 1e-9 * diagonal;
-        uint32_t removed = stl_filter_degenerate_triangles(&mesh, area_eps * area_eps, 1e5);
-        if (removed > 0)
-            printf("Filtered %u degenerate (near-zero-area) triangle%s\n", (unsigned)removed, removed == 1 ? "" : "s");
-        if (mesh.num_triangles == 0)
-        {
-            fprintf(stderr, "Error: %s contains no non-degenerate triangles\n", input_path);
-            goto cleanup;
-        }
     }
 
     if (weld_grid_init(&grid, weld_tolerance_fraction * diagonal, mesh.num_triangles * 3) != 0)

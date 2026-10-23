@@ -528,6 +528,14 @@ prc_write_tree_to_stream(prc_context *ctx, prc_bit_write_state *s,
 
     if (prc_write_user_data_empty(ctx, s) != 0) goto fail;
 
+    /* One more 0 bit after the section's last field. No field in Table 47
+       or Table 38 accounts for it, but Adobe Acrobat reads it: when the tree
+       ended exactly on a byte boundary, Acrobat showed an empty model tree.
+       Every one of 2,789 tree sections in a 310-file third-party corpus
+       leaves at least one bit after this point, spread evenly from 1 to 8,
+       which is what this bit produces. */
+    if (prc_bitwrite_bit(ctx, s, 0) != 0) goto fail;
+
     if (root_biased_index_out != NULL)
         *root_biased_index_out = flat.count; /* root is last: biased index == count */
 

@@ -1077,6 +1077,15 @@ typedef struct prc_api_write_rep_item_s
         prc_api_write_texture_wrap value; 0 is repeat. */
     uint32_t texture_wrap_u;
     uint32_t texture_wrap_v;
+    /** Where the image sits on the surface, as an OBJ material's map -s and
+        -o options give it: the image is sampled at
+        u' = texture_scale[0] * u + texture_offset[0], and at the same with
+        index 1 for v. A scale of 0 is read as 1, so an item cleared to zero
+        places the image exactly as before, and nothing is written for a
+        scale of 1 with an offset of 0. A negative or non-finite scale, or a
+        non-finite offset, is refused. */
+    double   texture_scale[2];
+    double   texture_offset[2];
 } prc_api_write_rep_item;
 
 /** @brief texture_format values for prc_api_write_rep_item. */

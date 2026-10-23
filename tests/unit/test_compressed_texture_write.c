@@ -68,6 +68,9 @@ static uint32_t g_texture_function = 0;
 /* Wrap modes for the textured cases; 0 leaves the default. */
 static uint32_t g_wrap_u = 0, g_wrap_v = 0;
 
+/* Texture placement for the textured cases; zeros leave the default. */
+static double g_scale[2] = { 0, 0 }, g_offset[2] = { 0, 0 };
+
 static int
 write_mesh(prc_context *ctx, const test_mesh *m, int with_image)
 {
@@ -110,6 +113,10 @@ write_mesh(prc_context *ctx, const test_mesh *m, int with_image)
         ri.texture_function = g_texture_function;
         ri.texture_wrap_u = g_wrap_u;
         ri.texture_wrap_v = g_wrap_v;
+        ri.texture_scale[0] = g_scale[0];
+        ri.texture_scale[1] = g_scale[1];
+        ri.texture_offset[0] = g_offset[0];
+        ri.texture_offset[1] = g_offset[1];
     }
 
     memset(&root, 0, sizeof(root));
@@ -544,6 +551,137 @@ test_texture_wrap(prc_context *ctx)
     g_wrap_u = g_wrap_v = 0;
 }
 
+/* Writes a textured quad with the current g_scale and g_offset, then copies
+   out the file's one texture definition and, through the public API, the UV
+   at each of the quad's four corners in QUAD_POS order. */
+static void
+write_and_read_placement(prc_context *ctx, prc_graph_texture_definition *def,
+    float uv[4][2])
+{
+    test_mesh m;
+    prc_data *pd;
+    prc_api_data data;
+    prc_api_product *model_tree = NULL;
+    uint32_t num_parts = 0, num_products = 0, num_markups = 0;
+    uint32_t num_tess = 0, num_line_tess = 0, num_extra = 0;
+    prc_api_tess *tesses;
+    uint8_t has_lines = 0;
+    size_t v;
+    uint32_t q;
+
+    memset(&m, 0, sizeof(m));
+    m.positions = QUAD_POS; m.num_positions = 4;
+    m.tris = QUAD_TRIS; m.num_triangles = 2;
+    m.uvs = QUAD_UV; m.num_uvs = 4; m.uv_indices = QUAD_TRIS;
+    PRC_ASSERT_EQ(write_mesh(ctx, &m, 1), 0);
+
+    pd = (prc_data *)prc_api_open_contents(ctx, TEST_PRC_FILENAME);
+    PRC_ASSERT_NOT_NULL(pd);
+    PRC_ASSERT_EQ(pd->file_struct[0].globals->global_data.texture_count, 1);
+    *def = pd->file_struct[0].globals->global_data.textures[0];
+    prc_api_release_data(ctx, (prc_api_data)pd, NULL, 0, NULL, 0, NULL, 0, NULL);
+
+    data = prc_api_open_contents(ctx, TEST_PRC_FILENAME);
+    PRC_ASSERT_NOT_NULL(data);
+    PRC_ASSERT(prc_api_prep_model_tree(ctx, data, &num_parts, &num_products, &num_markups) >= 0);
+    PRC_ASSERT(prc_api_create_model_tree(ctx, data, &model_tree, num_parts, num_products, num_markups) >= 0);
+    PRC_ASSERT(prc_api_get_number_tessellations(ctx, data, model_tree, &num_tess,
+        &num_line_tess, &num_extra, 0) >= 0);
+    PRC_ASSERT(num_tess >= 1);
+    tesses = (prc_api_tess *)calloc(num_tess, sizeof(prc_api_tess));
+    PRC_ASSERT_NOT_NULL(tesses);
+    tesses[0].num_faces = prc_api_get_number_faces(ctx, data, 0);
+    PRC_ASSERT(tesses[0].num_faces >= 1);
+    tesses[0].tess_faces = (prc_api_face *)calloc(tesses[0].num_faces, sizeof(prc_api_face));
+    PRC_ASSERT_NOT_NULL(tesses[0].tess_faces);
+    PRC_ASSERT(prc_api_initialize_tessellation(ctx, data, model_tree, 0, &tesses[0], NULL, &has_lines) >= 0);
+    PRC_ASSERT(prc_api_get_tessellation_vertices(ctx, data, 0, 0, &tesses[0].tess_faces[0], &tesses[0]) >= 0);
+    PRC_ASSERT_EQ(tesses[0].tess_vertices.num_vertices, 4);
+
+    for (q = 0; q < 4; q++)
+    {
+        int found = 0;
+        for (v = 0; v < tesses[0].tess_vertices.num_vertices; v++)
+        {
+            const prc_api_vertex *pv = &tesses[0].tess_vertices.vertices[v];
+            if (fabs(pv->position[0] - QUAD_POS[q * 3 + 0]) < 1e-4 &&
+                fabs(pv->position[1] - QUAD_POS[q * 3 + 1]) < 1e-4)
+            {
+                PRC_ASSERT(pv->uv_set);
+                uv[q][0] = pv->uv[0];
+                uv[q][1] = pv->uv[1];
+                found = 1;
+            }
+        }
+        PRC_ASSERT(found);
+    }
+    prc_api_release_data(ctx, data, tesses, num_tess, NULL, 0, NULL, 0, model_tree);
+}
+
+/* Each corner's UV through the public API, against u' = su * u + ou and
+   v' = sv * v + ov followed by the reader's V flip. */
+static void
+check_placed_uvs(float uv[4][2], double su, double sv, double ou, double ov)
+{
+    uint32_t q;
+
+    for (q = 0; q < 4; q++)
+    {
+        PRC_ASSERT_NEAR(uv[q][0], su * QUAD_UV[q * 2 + 0] + ou, 1e-5);
+        PRC_ASSERT_NEAR(uv[q][1], 1.0 - (sv * QUAD_UV[q * 2 + 1] + ov), 1e-5);
+    }
+}
+
+static void
+test_texture_transform(prc_context *ctx)
+{
+    prc_graph_texture_definition d;
+    float uv[4][2];
+    test_mesh m;
+
+    printf("  sub-case: placement left at 0 writes no texture transformation\n");
+    g_scale[0] = g_scale[1] = 0; g_offset[0] = g_offset[1] = 0;
+    write_and_read_placement(ctx, &d, uv);
+    PRC_ASSERT_EQ(d.has_texture_transformation, 0);
+    check_placed_uvs(uv, 1, 1, 0, 0);
+
+    /* Different values on the two axes, and a negative offset, so swapped
+       axes, a dropped sign or an offset applied before the scale all fail. */
+    printf("  sub-case: per-axis scale with an offset\n");
+    g_scale[0] = 2; g_scale[1] = 3; g_offset[0] = 0.25; g_offset[1] = -0.5;
+    write_and_read_placement(ctx, &d, uv);
+    PRC_ASSERT_EQ(d.has_texture_transformation, 1);
+    PRC_ASSERT_EQ(d.texture_transformation.invert_s, 0);
+    PRC_ASSERT_EQ(d.texture_transformation.invert_t, 0);
+    PRC_ASSERT_EQ(d.texture_transformation.transform_2d, 1);
+    PRC_ASSERT_EQ(d.texture_transformation.transform.behavior,
+        PRC_TRANSFORMATION_Translate | PRC_TRANSFORMATION_NonUniformScale);
+    PRC_ASSERT_NEAR(d.texture_transformation.transform.translation.x, 0.25, 1e-12);
+    PRC_ASSERT_NEAR(d.texture_transformation.transform.translation.y, -0.5, 1e-12);
+    PRC_ASSERT_NEAR(d.texture_transformation.transform.non_uniform_scale.x, 2, 1e-12);
+    PRC_ASSERT_NEAR(d.texture_transformation.transform.non_uniform_scale.y, 3, 1e-12);
+    check_placed_uvs(uv, 2, 3, 0.25, -0.5);
+
+    printf("  sub-case: the same scale on both axes is written as uniform scale\n");
+    g_scale[0] = g_scale[1] = 4; g_offset[0] = g_offset[1] = 0;
+    write_and_read_placement(ctx, &d, uv);
+    PRC_ASSERT_EQ(d.has_texture_transformation, 1);
+    PRC_ASSERT_EQ(d.texture_transformation.transform.behavior, PRC_TRANSFORMATION_Scale);
+    PRC_ASSERT_NEAR(d.texture_transformation.transform.scale, 4, 1e-12);
+    check_placed_uvs(uv, 4, 4, 0, 0);
+
+    printf("  sub-case: a negative scale or a non-finite offset is refused\n");
+    memset(&m, 0, sizeof(m));
+    m.positions = QUAD_POS; m.num_positions = 4;
+    m.tris = QUAD_TRIS; m.num_triangles = 2;
+    m.uvs = QUAD_UV; m.num_uvs = 4; m.uv_indices = QUAD_TRIS;
+    g_scale[0] = -1; g_scale[1] = 1; g_offset[0] = g_offset[1] = 0;
+    PRC_ASSERT(write_mesh(ctx, &m, 1) != 0);
+    g_scale[0] = g_scale[1] = 1; g_offset[1] = NAN;
+    PRC_ASSERT(write_mesh(ctx, &m, 1) != 0);
+    g_scale[0] = g_scale[1] = 0; g_offset[0] = g_offset[1] = 0;
+}
+
 static void
 test_refusals(prc_context *ctx)
 {
@@ -578,6 +716,7 @@ main(void)
     test_public_api(ctx);
     test_texture_function(ctx);
     test_texture_wrap(ctx);
+    test_texture_transform(ctx);
     test_refusals(ctx);
 
     prc_release_context(ctx);

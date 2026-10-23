@@ -380,6 +380,41 @@ prc_write_cart_trans(prc_context *ctx, prc_bit_write_state *s,
     return 0;
 }
 
+/* Writes a PRC_TYPE_GRAPH_TextureTransformation, in the order
+   prc_parse_texture_trans and prc_parse_cartesian_transformation_2d read it.
+
+   That reader takes the 2D transformation's optional fields in a different
+   order from the 2D Transformation table (rotation and scale before the
+   non-orthogonal matrix, uniform scale before non-uniform). The difference
+   cannot show here: prc_write_texture_definition_add accepts only translate
+   and one of the two scales, and for those both orders are translation, then
+   the scale. */
+static int
+prc_write_texture_transformation(prc_context *ctx, prc_bit_write_state *s,
+    const prc_graph_texture_transformation *t)
+{
+    const prc_cartesian_trans_2d *c = &t->transform;
+
+    if (prc_bitwrite_uint32(ctx, s, PRC_TYPE_GRAPH_TextureTransformation) != 0) return -1;
+    if (prc_bitwrite_bit(ctx, s, t->invert_s ? 1 : 0) != 0) return -1;
+    if (prc_bitwrite_bit(ctx, s, t->invert_t ? 1 : 0) != 0) return -1;
+    if (prc_bitwrite_bit(ctx, s, t->transform_2d ? 1 : 0) != 0) return -1;
+    if (prc_bitwrite_uint8(ctx, s, c->behavior) != 0) return -1;
+    if (c->behavior & PRC_TRANSFORMATION_Translate)
+    {
+        if (prc_bitwrite_double(ctx, s, c->translation.x) != 0) return -1;
+        if (prc_bitwrite_double(ctx, s, c->translation.y) != 0) return -1;
+    }
+    if (c->behavior & PRC_TRANSFORMATION_Scale)
+        if (prc_bitwrite_double(ctx, s, c->scale) != 0) return -1;
+    if (c->behavior & PRC_TRANSFORMATION_NonUniformScale)
+    {
+        if (prc_bitwrite_double(ctx, s, c->non_uniform_scale.x) != 0) return -1;
+        if (prc_bitwrite_double(ctx, s, c->non_uniform_scale.y) != 0) return -1;
+    }
+    return 0;
+}
+
 /* Adds a texture definition (Table 96) binding a picture to UV sampling, and
    returns the 1-biased index a PRC_TYPE_GRAPH_TextureApplication's
    biased_texture_definition_index takes. 0 on failure.
@@ -431,7 +466,8 @@ prc_write_cart_trans(prc_context *ctx, prc_bit_write_state *s,
      texture_application_mode combine, with no alpha bit set -- a non-zero
                               alpha bit would make the reader expect two more
                               fields. See below.
-     wrapping mode s/t        the caller's, repeat by default -- see below. */
+     wrapping mode s/t        the caller's, repeat by default -- see below.
+     texture transformation   the caller's, or none -- see below. */
 static int
 prc_write_wrap_is_written(PRC_texture_wrapping_mode_t mode)
 {
@@ -439,10 +475,31 @@ prc_write_wrap_is_written(PRC_texture_wrapping_mode_t mode)
            mode == PRC_texture_wrapping_clamp_to_border;
 }
 
+/* The forms of texture transformation that are written: translate, and one of
+   uniform or per-axis scale, with neither axis inverted. That is every form
+   the public collection uses -- of 99 texture transformations in 7 files, 83
+   are the identity and the rest combine exactly these -- so nothing else has
+   a real file to be checked against. */
+static int
+prc_write_uv_transform_is_written(const prc_graph_texture_transformation *t)
+{
+    uint8_t b = t->transform.behavior;
+
+    if (t->invert_s || t->invert_t || !t->transform_2d)
+        return 0;
+    if (b & ~(PRC_TRANSFORMATION_Translate | PRC_TRANSFORMATION_Scale |
+              PRC_TRANSFORMATION_NonUniformScale))
+        return 0;
+    if ((b & PRC_TRANSFORMATION_Scale) && (b & PRC_TRANSFORMATION_NonUniformScale))
+        return 0;
+    return 1;
+}
+
 uint32_t
 prc_write_texture_definition_add(prc_context *ctx, prc_write_global_tables *tables,
     uint32_t biased_picture_index, PRC_texture_function_t function,
     PRC_texture_wrapping_mode_t wrap_s, PRC_texture_wrapping_mode_t wrap_t,
+    const prc_graph_texture_transformation *uv_transform,
     const prc_cart_transformation *transformation)
 {
     prc_graph_texture_definition entry;
@@ -479,6 +536,13 @@ prc_write_texture_definition_add(prc_context *ctx, prc_write_global_tables *tabl
         prc_error(ctx, PRC_ERROR_INTERNAL,
             "prc_write_texture_definition_add: only repeat and clamp to border "
             "are written\n");
+        return 0;
+    }
+    if (uv_transform != NULL && !prc_write_uv_transform_is_written(uv_transform))
+    {
+        prc_error(ctx, PRC_ERROR_INTERNAL,
+            "prc_write_texture_definition_add: only translate and scale are "
+            "written in a texture transformation\n");
         return 0;
     }
     /* A placement transformation rides with the mapping operator, and the
@@ -535,7 +599,16 @@ prc_write_texture_definition_add(prc_context *ctx, prc_write_global_tables *tabl
     entry.texture_wrapping_mode_t = wrap_t;
 
     /* has_transformation stays 0 from the memset. A non-NULL transformation is
-       refused above, so there is nothing to copy in here. */
+       refused above, so there is nothing to copy in here.
+
+       The texture transformation is a different field: it acts on the stored
+       texture coordinates themselves, so it needs no mapping operator and is
+       written whatever the mapping type. */
+    if (uv_transform != NULL)
+    {
+        entry.has_texture_transformation = 1;
+        entry.texture_transformation = *uv_transform;
+    }
 
     if (prc_write_global_array_grow(ctx, (void **)&tables->texture_definitions,
             &tables->texture_definition_cap, tables->texture_definition_count,
@@ -869,8 +942,11 @@ prc_write_globals_to_stream(prc_context *ctx, prc_bit_write_state *s, const prc_
             if (prc_bitwrite_int32(ctx, s, (int32_t)d->texture_wrapping_mode_r) != 0) goto fail;
 
         /* A second, texture-space transformation, distinct from the
-           placement transformation written earlier. Not offered. */
-        if (prc_bitwrite_bit(ctx, s, 0) != 0) goto fail;   /* has_texture_transformation */
+           placement transformation written earlier: it moves and scales the
+           stored texture coordinates. */
+        if (prc_bitwrite_bit(ctx, s, d->has_texture_transformation ? 1 : 0) != 0) goto fail;
+        if (d->has_texture_transformation)
+            if (prc_write_texture_transformation(ctx, s, &d->texture_transformation) != 0) goto fail;
     }
 
     /* materials */

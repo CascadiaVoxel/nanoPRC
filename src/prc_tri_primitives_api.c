@@ -3740,11 +3740,22 @@ prc_api_get_tessellation_vertices(prc_context *ctx, prc_api_data data_in,
             PRC_API_FAIL(code,
                 "Failed to decode tessellation vertices in prc_api_get_tessellation_vertices\n");
         }
-    }
 
-    /* From the vertices compute a bounding box for this tessellation. This can be
-       used for the default views */
-    prc_internal_api_find_bounding_box(ctx, tess, api_tess);
+        /* From the vertices compute a bounding box for this tessellation. This
+           can be used for the default views. Once per file tessellation, when
+           its vertices are fetched: it is a pass over every vertex, and this
+           function is called once per face. */
+        prc_internal_api_find_bounding_box(ctx, tess, api_tess);
+    }
+    else
+    {
+        api_tess->bounding_box_min[0] = tess->bounding_box_min[0];
+        api_tess->bounding_box_min[1] = tess->bounding_box_min[1];
+        api_tess->bounding_box_min[2] = tess->bounding_box_min[2];
+        api_tess->bounding_box_max[0] = tess->bounding_box_max[0];
+        api_tess->bounding_box_max[1] = tess->bounding_box_max[1];
+        api_tess->bounding_box_max[2] = tess->bounding_box_max[2];
+    }
 
     /* Only 3D and 3D compressed have normals */
     if (has_normals)
@@ -4937,9 +4948,9 @@ uncompressed_done:
         /* The decoded position/normal/color/style data built in this block is
            identical across every face_index of a GIVEN api_tess instance's
            compressed tessellation -- the compressed format doesn't cleanly
-           separate per-face data, so the (uncached, always-run) loop below
-           this one processes the whole tessellation's indices on every
-           call regardless of face_index. It is NOT necessarily identical
+           separate per-face data, so the loop below this one processes the
+           whole tessellation's indices, on the instance's first call only
+           (see that loop's own comment). It is NOT necessarily identical
            across DIFFERENT api_tess instances that happen to reference the
            same underlying PRC tess_index: style can be assigned by
            reference at the part/product-instance level
@@ -5147,8 +5158,17 @@ uncompressed_done:
 
         /* Now lets start going through the prc indices, assigning multiple normals to
            vertex positions and creating new vertex data that includes position,
-           normal, and color (texture or vertex color) */
-        for (k = 0; k < num_prc_indices; k++)
+           normal, and color (texture or vertex color).
+
+           Only on this instance's first call. The loop builds the instance's
+           vertex list and its position/normal lists, both cached on
+           api_tess->reserved; once a call has completed (which is what sets
+           vertex_indices_cache_valid, tested as vertex_indices_cache_hit),
+           every later call would find every corner already present and add
+           nothing, yet it still walked every index of the tessellation: one
+           pass per face, so faces times indices in all, about 40 of 50
+           seconds on one 1,840-tessellation file. */
+        for (k = 0; k < num_prc_indices && !vertex_indices_cache_hit; k++)
         {
             /* Get the position index in the PRC data */
             prc_position_index = prc_vertex_indices[k];

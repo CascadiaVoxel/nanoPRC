@@ -3595,9 +3595,7 @@ prc_api_get_tessellation_vertices(prc_context *ctx, prc_api_data data_in,
 
                 /* stderr, not stdout: this is a diagnostic about the file, and
                    on stdout it interleaves with whatever the caller is emitting
-                   there. Matches the zero-volume-bbox warning in
-                   prc_parse_tree.c, the codebase's only other file-level
-                   warning. */
+                   there. */
                 fprintf(stderr, "Warning: Tess %u has no triangulated data.\n", tess_index);
                 face_out->disable_face = 1;
                 return 0;

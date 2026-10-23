@@ -1397,18 +1397,15 @@ typedef struct prc_api_write_node_s
     /** Axis-aligned bounding box of this node's geometry, in the same
         units as its tessellation entries' positions.
 
-        Still written into the PartDefinition entity (and still worth
-        setting to something meaningful, e.g. the union of this node's
-        children) even when num_rep_items == 0 and has_empty_part == 1: an
-        earlier version of this comment claimed the box is "ignored" in
-        that case, on the assumption that a reader has no use for a
-        bounding box on a node with no geometry of its own. Real-Acrobat
-        testing found otherwise -- a degenerate (0,0,0)-(0,0,0) box left at
-        its zero-initialized default on an empty-part ancestor node
-        silently blanked the entire model tree beneath it, even though the
-        actual geometry a few levels further down was completely intact
-        and valid. Leaving this field zeroed for an empty-part node is not
-        a safe no-op. */
+        Written into the PartDefinition entity even when num_rep_items == 0
+        and has_empty_part == 1, so set it to something meaningful, such as
+        the union of this node's children's boxes. An earlier version of
+        this comment said a zero (0,0,0)-(0,0,0) box on such a node blanks
+        Adobe Acrobat's model tree. That was a misdiagnosis: the file it came
+        from failed because its tree section ended exactly on a byte
+        boundary (see prc_write_tree_to_stream), and changing the box only
+        moved where the section ended. Zero boxes on empty parts are common
+        in files Acrobat displays. */
     double bbox_min[3];
     double bbox_max[3];
 

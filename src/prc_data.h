@@ -4006,7 +4006,8 @@ struct prc_nano_brep_compressed_data_s
     /* Vertices and curves are stored at the number the file gives them, so a
        reference is looked up at its own index. Those stored while an iso face
        is read are numbered from 0 and stay below number_of_vertex_refs (or
-       number_of_edge_refs); all others are numbered from that value. The
+       number_of_edge_refs); all others are numbered from that value. When the
+       declared count is 0, all are numbered from 0 in the order stored. The
        counts say how many of each have been stored so far. */
     uint32_t iso_vertex_count;
     uint32_t ana_vertex_count;

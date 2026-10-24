@@ -26,8 +26,9 @@
  * the library builds for that tree, emitting a JSON document with two top
  * level sections:
  *
- *   - "model_tree": the product/part hierarchy (names, transforms, and a
- *     reference to the tessellation index each part uses, where present).
+ *   - "model_tree": the product/part hierarchy (names, transforms, and the
+ *     index into "tessellations" that each part and each of its
+ *     representation items draws, or null where it has none).
  *   - "tessellations": one entry per tessellation, including its faces,
  *     vertex buffers (position/normal/color/uv), and graphics primitives
  *     (the index lists that assemble vertices into triangles/fans/strips
@@ -808,8 +809,45 @@ static void write_transform(json_writer *w, const prc_api_transform *t)
 /** Write the part-specific fields of a node (tessellation linkage, in
  *  particular, which is how a JSON consumer connects model_tree entries
  *  back to entries in the top-level "tessellations" array). */
+/** "tess_index": the index of this part's (or item's) own tessellation in
+ *  the top-level "tessellations" array, or null if it has none. That array
+ *  uses the API's numbering, so this is part_detail_index, not
+ *  biased_tess_index - 1 (see prc_api.h). */
+static void write_tess_index(json_writer *w, const prc_api_part *part)
+{
+    if (part->biased_tess_index > 0)
+    {
+        json_writer_kv_uint32(w, "tess_index", part->part_detail_index);
+    }
+    else
+    {
+        json_writer_key(w, "tess_index");
+        json_writer_null(w);
+    }
+}
+
+/** One representation item. Items nested inside it are counted, not
+ *  written: their depth comes from the file, and nothing here recurses on
+ *  file-controlled depth (see the header comment). */
+static void write_rep_item(json_writer *w, const prc_api_part *item)
+{
+    json_writer_begin_object(w);
+    if (item->name != NULL)
+    {
+        json_writer_kv_string(w, "name", item->name);
+    }
+    write_tess_index(w, item);
+    if (item->num_rep_items > 0)
+    {
+        json_writer_kv_size(w, "num_rep_items", item->num_rep_items);
+    }
+    json_writer_end_object(w);
+}
+
 static void write_part_info(json_writer *w, const prc_api_part *part)
 {
+    size_t k;
+
     json_writer_begin_object_key(w, "part");
 
     if (part->name != NULL)
@@ -817,8 +855,17 @@ static void write_part_info(json_writer *w, const prc_api_part *part)
         json_writer_kv_string(w, "name", part->name);
     }
 
-    json_writer_kv_uint32(w, "tess_index", part->biased_tess_index);
+    write_tess_index(w, part);
     json_writer_kv_size(w, "num_rep_items", part->num_rep_items);
+    if (part->num_rep_items > 0)
+    {
+        json_writer_begin_array_key(w, "rep_items");
+        for (k = 0; k < part->num_rep_items; k++)
+        {
+            write_rep_item(w, &part->rep_items[k]);
+        }
+        json_writer_end_array(w);
+    }
     json_writer_kv_bool(w, "has_inherited_style", part->has_inherited_style);
 
     if (part->attributes.num_base_attributes > 0)

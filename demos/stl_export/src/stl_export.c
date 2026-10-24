@@ -66,28 +66,30 @@
  */
 static int compute_geometric_normal(const float v1[3], const float v2[3], const float v3[3], float out_normal[3])
 {
-    float u[3] = { v2[0] - v1[0], v2[1] - v1[1], v2[2] - v1[2] };
-    float v[3] = { v3[0] - v1[0], v3[1] - v1[1], v3[2] - v1[2] };
+    /* In double, and only an exactly zero area counts as degenerate. A fixed
+       threshold on the cross product is a threshold on area in the model's
+       own units: 1e-7 dropped small real triangles from models drawn in
+       metres. */
+    double u[3] = { (double)v2[0] - v1[0], (double)v2[1] - v1[1], (double)v2[2] - v1[2] };
+    double v[3] = { (double)v3[0] - v1[0], (double)v3[1] - v1[1], (double)v3[2] - v1[2] };
+    double n[3], length;
 
     /* Cross product: U x V */
-    out_normal[0] = u[1] * v[2] - u[2] * v[1];
-    out_normal[1] = u[2] * v[0] - u[0] * v[2];
-    out_normal[2] = u[0] * v[1] - u[1] * v[0];
+    n[0] = u[1] * v[2] - u[2] * v[1];
+    n[1] = u[2] * v[0] - u[0] * v[2];
+    n[2] = u[0] * v[1] - u[1] * v[0];
+    length = sqrt(n[0] * n[0] + n[1] * n[1] + n[2] * n[2]);
 
-    float length = sqrtf(out_normal[0] * out_normal[0] +
-                         out_normal[1] * out_normal[1] +
-                         out_normal[2] * out_normal[2]);
-
-    if (length < EPSILON)
+    if (!(length > 0.0))
     {
         /* Degenerate triangle / zero area */
         return 0;
     }
 
     /* Normalize */
-    out_normal[0] /= length;
-    out_normal[1] /= length;
-    out_normal[2] /= length;
+    out_normal[0] = (float)(n[0] / length);
+    out_normal[1] = (float)(n[1] / length);
+    out_normal[2] = (float)(n[2] / length);
 
     return 1;
 }
@@ -219,121 +221,6 @@ static void process_and_write_triangle(FILE *out, prc_api_vertex v1, prc_api_ver
 }
 
 /**
- * @brief Returns the vertex buffer a given face of a tessellation draws from,
- * or NULL if it has none.
- *
- * Mirrors the buffer selection in write_tessellation_geometry exactly, so that
- * anything comparing two tessellations compares what would actually be
- * written: COMPRESSED tessellations carry one shared buffer on the
- * tessellation, uncompressed ones carry a separate buffer per face.
- */
-static const prc_api_tess_vertex_buffer *tess_face_vertex_buffer(const prc_api_tess *tess, size_t f)
-{
-    const prc_api_tess_vertex_buffer *buf =
-        (tess->type == PRC_API_TESS_3D_Compressed) ? &tess->tess_vertices : &tess->tess_faces[f].face_vertices;
-
-    if (buf->vertices == NULL || buf->num_vertices == 0)
-        return NULL;
-    return buf;
-}
-
-/**
- * @brief Number of faces whose geometry a tessellation actually contributes.
- *
- * One for COMPRESSED, where every face_index returns the same complete mesh;
- * num_faces for uncompressed. Same rule as write_tessellation_geometry.
- */
-static size_t tess_geometry_face_count(const prc_api_tess *tess)
-{
-    return (tess->type == PRC_API_TESS_3D_Compressed) ? 1 : tess->num_faces;
-}
-
-/**
- * @brief 64-bit FNV-1a over a tessellation's untransformed vertex positions,
- * plus its total vertex count in *num_vertices_out.
- *
- * Positions only, and deliberately: the whole point is to recognise two
- * tessellations that hold the same part, which differ in the world transform
- * applied at write time but not in the geometry they carry. Normals, colours
- * and styles are excluded because they do not reach the STL either.
- *
- * The hash is a filter, never a verdict -- a match is always confirmed by
- * tess_geometry_identical below before anything is skipped, because a hash
- * collision here would silently drop real geometry.
- */
-static uint64_t tess_geometry_hash(const prc_api_tess *tess, size_t *num_vertices_out)
-{
-    uint64_t h = 1469598103934665603ULL;    /* FNV-1a 64 offset basis */
-    size_t faces = tess_geometry_face_count(tess);
-    size_t total = 0;
-    size_t f;
-
-    for (f = 0; f < faces; f++)
-    {
-        const prc_api_tess_vertex_buffer *buf = tess_face_vertex_buffer(tess, f);
-        size_t v;
-
-        if (buf == NULL)
-            continue;
-        total += buf->num_vertices;
-        for (v = 0; v < buf->num_vertices; v++)
-        {
-            const unsigned char *p = (const unsigned char *)buf->vertices[v].position;
-            size_t b;
-
-            for (b = 0; b < sizeof(float) * 3; b++)
-            {
-                h ^= (uint64_t)p[b];
-                h *= 1099511628211ULL;      /* FNV-1a 64 prime */
-            }
-        }
-    }
-    *num_vertices_out = total;
-    return h;
-}
-
-/**
- * @brief Exact comparison of two tessellations' untransformed vertex positions.
- *
- * Byte-wise on the float triples rather than an epsilon comparison: two
- * tessellations that are copies of one part hold bit-identical coordinates,
- * having been decoded from the same stored data. Anything that merely looks
- * similar is a different part and must still be exported.
- */
-static int tess_geometry_identical(const prc_api_tess *a, const prc_api_tess *b)
-{
-    size_t faces_a = tess_geometry_face_count(a);
-    size_t faces_b = tess_geometry_face_count(b);
-    size_t f;
-
-    if (a->type != b->type || faces_a != faces_b)
-        return 0;
-
-    for (f = 0; f < faces_a; f++)
-    {
-        const prc_api_tess_vertex_buffer *ba = tess_face_vertex_buffer(a, f);
-        const prc_api_tess_vertex_buffer *bb = tess_face_vertex_buffer(b, f);
-        size_t v;
-
-        if (ba == NULL || bb == NULL)
-        {
-            if (ba != bb)
-                return 0;
-            continue;
-        }
-        if (ba->num_vertices != bb->num_vertices)
-            return 0;
-        for (v = 0; v < ba->num_vertices; v++)
-        {
-            if (memcmp(ba->vertices[v].position, bb->vertices[v].position,
-                    sizeof(float) * 3) != 0)
-                return 0;
-        }
-    }
-    return 1;
-}
-
-/**
  * @brief Writes one tessellation's triangle geometry to the STL stream,
  * with a given world-space transform applied to every vertex (NULL/identity
  * for no-op). Body unchanged from this file's original single flat
@@ -452,11 +339,12 @@ static void write_tessellation_geometry(prc_context *ctx, prc_api_data data, FIL
  * position (e.g. a caliper's geometry sitting at the assembly's shared
  * local origin instead of mounted on its bracket).
  *
+ * A part's geometry is either on its items or, when it is a single B-rep
+ * item, on the part itself; both are written. Tessellations are looked up
+ * by part_detail_index, the API's numbering.
+ *
  * Marks each visited tessellation index in tess_visited so the caller can
- * catch any tessellation never referenced by the tree -- should not
- * normally happen in a well-formed file, but degrades gracefully (a
- * fallback identity-transformed pass, see main()) rather than silently
- * dropping geometry if it does.
+ * report any tessellation no part draws.
  */
 static void export_node_recursive(prc_context *ctx, prc_api_data data, FILE *stl_file,
     prc_api_tess *tesses, uint32_t total_tessellations, prc_api_product *node,
@@ -469,17 +357,44 @@ static void export_node_recursive(prc_context *ctx, prc_api_data data, FILE *stl
 
     if (node->part != NULL)
     {
-        size_t ri;
-        for (ri = 0; ri < node->part->num_rep_items; ri++)
+        /* The part and every representation item under it, sets included:
+           an item set holds its own items, to a depth the file chooses, so
+           they are visited from an explicit stack rather than by recursion. */
+        const prc_api_part **stack;
+        size_t depth = 0, capacity = 16;
+
+        stack = (const prc_api_part **)malloc(capacity * sizeof(*stack));
+        if (stack != NULL)
+            stack[depth++] = node->part;
+        while (depth > 0)
         {
-            prc_api_part *rep = &node->part->rep_items[ri];
-            if (rep->biased_tess_index > 0 && rep->biased_tess_index - 1 < total_tessellations)
+            const prc_api_part *item = stack[--depth];
+            size_t ri;
+
+            /* part_detail_index, not biased_tess_index - 1: the tessellations
+               were initialized by the API's numbering, which differs from the
+               file's wherever parts share a file tessellation (see prc_api.h). */
+            if (item->biased_tess_index > 0 && item->part_detail_index < total_tessellations)
             {
-                uint32_t tess_idx = rep->biased_tess_index - 1;
+                uint32_t tess_idx = item->part_detail_index;
                 write_tessellation_geometry(ctx, data, stl_file, &tesses[tess_idx], &node_world, triangles_exported);
                 tess_visited[tess_idx] = 1;
             }
+            for (ri = item->num_rep_items; ri > 0; ri--)
+            {
+                if (depth == capacity)
+                {
+                    const prc_api_part **grown =
+                        (const prc_api_part **)realloc((void *)stack, capacity * 2 * sizeof(*stack));
+                    if (grown == NULL)
+                        break;
+                    stack = grown;
+                    capacity *= 2;
+                }
+                stack[depth++] = &item->rep_items[ri - 1];
+            }
         }
+        free((void *)stack);
     }
 
     for (k = 0; k < node->num_children; k++)
@@ -511,7 +426,6 @@ int main(int argc, char *argv[])
     uint32_t num_parts = 0, num_products = 0, num_markups = 0;
     uint32_t total_tessellations = 0, total_line_tessellations = 0;
     uint32_t triangles_exported = 0;
-    uint32_t redundant_skipped = 0;
     uint32_t num_extra_geom_tess = 0;
 
     /* Initialize PRC context */
@@ -636,93 +550,17 @@ int main(int argc, char *argv[])
             model_tree, root_transform, &triangles_exported, tess_visited);
     }
 
-    /* Fallback: any real 3D surface tessellation never reached via the tree
-       walk above is still exported, identity-transformed, so that geometry the
-       tree does not reference is not silently dropped.
-
-       It used to export every such tessellation unconditionally, on the stated
-       assumption that an unreferenced one "should not happen in a well-formed
-       file". That assumption is false, and the cost of it was severe. Real
-       authoring tools routinely emit one tessellation per instance while the
-       model tree references only one of them: 2368549.stream-147 holds
-       seventeen, of which sixteen are identical copies of the same contact
-       part, and the tree references exactly one. Exporting the other fifteen
-       at identity put fifteen redundant copies at the origin -- 4,368 of that
-       file's 10,495 triangles were duplicates. In a larger assembly the same
-       pattern produced 48% duplicate triangles.
-
-       So an unreferenced tessellation is only exported when it is not a copy
-       of something already written. The check cannot be structural: in
-       ABM8-3D.stream-12 two unreferenced tessellations are genuinely distinct
-       geometry the tree never reaches, and dropping those would lose real
-       data. It is therefore geometric -- a hash to find candidates, then an
-       exact comparison to confirm, because a hash collision here would
-       silently discard a part. */
+    /* A surface tessellation that no part draws is reported, not written.
+       Adobe Acrobat does not draw one either. This used to write such
+       tessellations at the origin, on the strength of files that seemed to
+       hold geometry the tree never reached; in every case checked, the tree
+       did reach it, and the export had looked it up by the file's numbering
+       instead of the API's (see export_node_recursive). */
+    for (uint32_t i = 0; i < total_tessellations; i++)
     {
-        uint64_t *geom_hash = NULL;
-        size_t *geom_verts = NULL;
-
-        if (total_tessellations > 0)
-        {
-            geom_hash = (uint64_t *)calloc(total_tessellations, sizeof(uint64_t));
-            geom_verts = (size_t *)calloc(total_tessellations, sizeof(size_t));
-        }
-
-        for (uint32_t i = 0; i < total_tessellations; i++)
-        {
-            prc_api_tess *tess = &tesses[i];
-
-            if (tess_visited[i])
-                continue;
-            if (tess->type != PRC_API_TESS_3D && tess->type != PRC_API_TESS_3D_Compressed)
-                continue;
-
-            /* Without the scratch arrays the duplicate check cannot run, so
-               fall back to the old unconditional behaviour: exporting a
-               redundant copy is a worse result than dropping a part, but
-               dropping a part is worse still. */
-            if (geom_hash != NULL && geom_verts != NULL)
-            {
-                int is_copy = 0;
-
-                if (geom_verts[i] == 0)
-                    geom_hash[i] = tess_geometry_hash(tess, &geom_verts[i]);
-
-                for (uint32_t j = 0; j < total_tessellations && !is_copy; j++)
-                {
-                    if (!tess_visited[j])
-                        continue;
-                    if (tesses[j].type != PRC_API_TESS_3D &&
-                        tesses[j].type != PRC_API_TESS_3D_Compressed)
-                        continue;
-                    if (geom_verts[j] == 0)
-                        geom_hash[j] = tess_geometry_hash(&tesses[j], &geom_verts[j]);
-                    if (geom_verts[j] != geom_verts[i] || geom_hash[j] != geom_hash[i])
-                        continue;
-                    if (tess_geometry_identical(tess, &tesses[j]))
-                    {
-                        redundant_skipped++;
-                        is_copy = 1;
-                    }
-                }
-                if (is_copy)
-                    continue;
-            }
-
-            fprintf(stderr, "Warning: tessellation %u not referenced by any model-tree node -- exporting with identity placement.\n", i);
-            write_tessellation_geometry(ctx, data, stl_file, tess, NULL, &triangles_exported);
-            /* Mark it exported so later candidates compare against it too. The
-               predicate the duplicate check wants is "already written", not
-               "reached by the tree": whole groups of identical tessellations
-               can be unreferenced together, with no referenced counterpart to
-               match against. Comparing only against tree-visited entries
-               caught 15 of 15 copies in one file and 10 of ~1,100 in another,
-               because in the second the copies duplicated each other. */
-            tess_visited[i] = 1;
-        }
-
-        free(geom_hash);
-        free(geom_verts);
+        if (!tess_visited[i] &&
+            (tesses[i].type == PRC_API_TESS_3D || tesses[i].type == PRC_API_TESS_3D_Compressed))
+            fprintf(stderr, "Warning: tessellation %u is not drawn by any part; not exported.\n", i);
     }
 
     /* Step 4: Seek back to the header placeholder offset to patch the final count */
@@ -736,11 +574,6 @@ int main(int argc, char *argv[])
     }
 
     printf("Export successful. Total valid triangles written: %u\n", triangles_exported);
-    if (redundant_skipped > 0)
-    {
-        printf("Skipped %u unreferenced tessellation(s) holding geometry already exported "
-            "(instance copies).\n", redundant_skipped);
-    }
 
 cleanup:
     free(tess_visited);

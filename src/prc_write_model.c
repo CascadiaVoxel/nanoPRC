@@ -17,6 +17,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <math.h>
 #include "prc_write_model.h"
 #include "prc_data.h"
 #include "prc_diag_env.h"
@@ -275,6 +276,65 @@ prc_write_texture_wrap(uint32_t wrap)
     }
 }
 
+/* Builds the texture transformation for an item's texture_scale and
+   texture_offset. Sets *has to 0 when the placement is the identity, so that
+   nothing is written and the file is unchanged. Returns -1 for a value that
+   is refused.
+
+   The API's meaning is OBJ's, u' = scale * u + offset, and the offset is
+   stored as the translation and the scale as the scale. nanoPRC's reader
+   applies a texture transformation the same way (translation added after the
+   scale). Uniform scale is written when the two axes agree and per-axis scale
+   otherwise, as real files do. */
+static int
+prc_write_texture_uv_transform(prc_context *ctx, const prc_api_write_rep_item *ri,
+    prc_graph_texture_transformation *out, uint8_t *has)
+{
+    double su = ri->texture_scale[0] == 0.0 ? 1.0 : ri->texture_scale[0];
+    double sv = ri->texture_scale[1] == 0.0 ? 1.0 : ri->texture_scale[1];
+    double ou = ri->texture_offset[0];
+    double ov = ri->texture_offset[1];
+    prc_cartesian_trans_2d *c = &out->transform;
+
+    *has = 0;
+    memset(out, 0, sizeof(*out));
+
+    /* A negative scale mirrors the image. No file in the public collection
+       does that and Acrobat has not been checked on it, so it is refused
+       rather than written untested. */
+    if (!isfinite(su) || !isfinite(sv) || !isfinite(ou) || !isfinite(ov) ||
+        su < 0.0 || sv < 0.0)
+    {
+        prc_error(ctx, PRC_ERROR_INTERNAL,
+            "prc_write_add_item_style: texture scale must be positive and "
+            "offset finite\n");
+        return -1;
+    }
+    if (su == 1.0 && sv == 1.0 && ou == 0.0 && ov == 0.0)
+        return 0;
+
+    out->transform_2d = 1;   /* "Always TRUE in this version." */
+    if (ou != 0.0 || ov != 0.0)
+    {
+        c->behavior |= PRC_TRANSFORMATION_Translate;
+        c->translation.x = ou;
+        c->translation.y = ov;
+    }
+    if (su != sv)
+    {
+        c->behavior |= PRC_TRANSFORMATION_NonUniformScale;
+        c->non_uniform_scale.x = su;
+        c->non_uniform_scale.y = sv;
+    }
+    else if (su != 1.0)
+    {
+        c->behavior |= PRC_TRANSFORMATION_Scale;
+        c->scale = su;
+    }
+    *has = 1;
+    return 0;
+}
+
 /* Adds one item's own material and returns its biased style index, or 0 on
    failure. The colour, material and style tables all deduplicate, so two items
    asking for the same colour share one entry and the file carries one of each.
@@ -347,6 +407,8 @@ prc_write_add_item_style(prc_context *ctx, prc_write_global_tables *tables,
         uint32_t biased_picture, biased_definition, biased_app;
         PRC_texture_function_t function;
         PRC_texture_wrapping_mode_t wrap_s, wrap_t;
+        prc_graph_texture_transformation uv_transform;
+        uint8_t has_uv_transform;
 
         if (ri->texture_image == NULL || ri->texture_image_size == 0)
         {
@@ -395,8 +457,12 @@ prc_write_add_item_style(prc_context *ctx, prc_write_global_tables *tables,
             return 0;
         }
 
+        if (prc_write_texture_uv_transform(ctx, ri, &uv_transform, &has_uv_transform) != 0)
+            return 0;
+
         biased_definition = prc_write_texture_definition_add(ctx, tables,
-            biased_picture, function, wrap_s, wrap_t, NULL);
+            biased_picture, function, wrap_s, wrap_t,
+            has_uv_transform ? &uv_transform : NULL, NULL);
         if (biased_definition == 0)
             return 0;
 

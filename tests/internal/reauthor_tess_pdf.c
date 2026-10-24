@@ -328,10 +328,8 @@ int main(int argc, char **argv)
         intermediate.name = part_name;
         intermediate.has_empty_part = 1;
         /* A has_empty_part node's own bbox is still serialized (see
-           prc_write_tree.c's prc_write_part) and, contrary to an earlier
-           assumption, is NOT safely ignorable by real Acrobat -- a
-           degenerate (0,0,0)-(0,0,0) box here silently blanks everything
-           nested beneath it. Reuse the one real child's own bbox. */
+           prc_write_tree.c's prc_write_part), so give it a meaningful
+           value: reuse the one real child's own bbox. */
         intermediate.bbox_min[0] = bbox_min[0]; intermediate.bbox_min[1] = bbox_min[1]; intermediate.bbox_min[2] = bbox_min[2];
         intermediate.bbox_max[0] = bbox_max[0]; intermediate.bbox_max[1] = bbox_max[1]; intermediate.bbox_max[2] = bbox_max[2];
 

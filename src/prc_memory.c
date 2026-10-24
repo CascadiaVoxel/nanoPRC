@@ -123,6 +123,7 @@ prc_debug_dump_pointer_history(prc_context *ctx, void *p, size_t max_matches)
 /* Memory guard pattern for detecting buffer overruns */
 #define PRC_MEMORY_GUARD_SIZE 32  /* Increased from 16 to catch more overruns */
 #define PRC_MEMORY_GUARD_PATTERN 0xDEADBEEF
+#define PRC_MEMORY_FREED_PATTERN 0xDDDDDDDD
 
 typedef struct prc_guarded_block_s {
     size_t size;
@@ -365,9 +366,29 @@ prc_free(prc_context *ctx, void *p)
         /* Add pointer tracking to detect double-free */
         block = ((prc_guarded_block *)p) - 1;
 
+        /* A front guard that no longer holds the live pattern means the
+           header cannot be trusted, size included, so the back guard is
+           not looked for. Freed blocks carry 0xDDDDDDDD there; anything
+           else is corruption. This used to reject any block over 4 GiB
+           as "likely garbage", which aborted a valid 8 GiB allocation the
+           compressed encoder makes for a 146-million-corner mesh. */
+        if (block->front_guard[0] != PRC_MEMORY_GUARD_PATTERN &&
+            block->front_guard[0] != PRC_MEMORY_FREED_PATTERN)
+        {
+            printf("*** HEAP CORRUPTION DETECTED at prc_free ***\n");
+            printf("    Pointer: %p\n", p);
+            printf("    Front guard: 0x%08X (expected 0x%08X)\n",
+                block->front_guard[0], PRC_MEMORY_GUARD_PATTERN);
+#ifdef _WIN32
+            __debugbreak();
+#else
+            __builtin_trap();
+#endif
+            return;
+        }
+
         /* Check if this looks like already-freed memory BEFORE guard check */
-        if (block->front_guard[0] == 0xDDDDDDDD ||
-            block->size > 0x100000000ULL) /* Sanity check on size */
+        if (block->front_guard[0] == PRC_MEMORY_FREED_PATTERN)
         {
             printf("*** DOUBLE-FREE DETECTED ***\n");
             printf("    Pointer: %p\n", p);
@@ -418,6 +439,11 @@ prc_free(prc_context *ctx, void *p)
             }
         }
 #endif
+        /* Mark the block freed, so that freeing it again is recognised by
+           the check above in any build. Nothing wrote this marker before:
+           the check relied on the MSVC debug heap's own 0xDD fill of freed
+           memory, so in a Release build a second free went undetected. */
+        block->front_guard[0] = PRC_MEMORY_FREED_PATTERN;
         ctx->hooks.free(ctx->hooks.opaque, block);
 
         if (p == g_tracked_pointer)

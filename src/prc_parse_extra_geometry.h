@@ -23,4 +23,12 @@
 int prc_parse_extra_geometry(prc_context *ctx, prc_bit_state *bit_state, prc_extra_geometry *data);
 int prc_parse_exact_geometry(prc_context *ctx, prc_bit_state *bit_state, prc_file_structure_exact_geometry *data);
 
+/* How compressed B-rep vertices and curves are numbered, and whether a
+   reference's number has been stored yet. Internal to the parser; declared
+   here only so tests/unit/test_ref_numbering.c can reach them. */
+int prc_next_ref_number(prc_context *ctx, const prc_nano_brep_compressed_data *compressed_data,
+    prc_unsigned_int number_refs, uint32_t *iso_count, uint32_t *ana_count, uint32_t *number);
+int prc_ref_number_is_stored(prc_unsigned_int number_refs, uint32_t iso_count, uint32_t ana_count,
+    uint32_t number);
+
 #endif

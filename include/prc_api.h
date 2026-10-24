@@ -872,14 +872,14 @@ PRC_EXPORT double prc_write_tol_resolve(prc_context *ctx, prc_write_tolerance to
  * duplicated-vertex artifact from the mesh's source tool, not a modeling
  * error).
  *
- * PRC_API_WRITE_TESS_KIND_COMPRESSED's non-manifold-vertex handling for
- * this specific case has an open, real-Adobe-Acrobat-confirmed
- * compatibility issue in some Acrobat builds (root cause not yet
- * identified as of this writing -- nanoPRC's own reader, and at least one
- * independent PRC reader, both decode the affected output correctly).
- * Callers building COMPRESSED entries from untrusted/arbitrary mesh
- * sources should call this first and use PRC_API_WRITE_TESS_KIND_TRIANGLES
- * instead whenever it returns 1, to avoid the risk. Uses the same welding
+ * PRC_API_WRITE_TESS_KIND_COMPRESSED handles such vertices itself, so this
+ * is a diagnostic, not a precondition: a mesh for which it returns 1 can
+ * still be written compressed. (Earlier versions advised writing such a
+ * mesh as PRC_API_WRITE_TESS_KIND_TRIANGLES instead, because Adobe Acrobat
+ * had shown an empty model tree for some of them. That was not the
+ * vertices: the writer then ended its tessellation section without the
+ * closing user_data, and a section ending exactly on a byte boundary
+ * gives an empty model tree whatever it contains.) Uses the same welding
  * tolerance and vertex-dedup logic COMPRESSED itself would use, so the
  * check reflects what COMPRESSED would actually encode.
  *
@@ -906,9 +906,9 @@ PRC_EXPORT int prc_api_mesh_has_nonmanifold_fans(prc_context *ctx,
  * shared.
  *
  * WHY THIS EXISTS: `prc_api_mesh_has_nonmanifold_fans` only ANSWERS whether
- * a mesh has this defect; callers that detect it and fall back to
- * PRC_API_WRITE_TESS_KIND_TRIANGLES still need the defect actually fixed,
- * not just diagnosed. A blunt fix -- fully expanding every triangle corner
+ * a mesh has this defect; a caller writing such a mesh as
+ * PRC_API_WRITE_TESS_KIND_TRIANGLES (which, unlike COMPRESSED, does no
+ * repair of its own) may want the defect actually fixed. A blunt fix -- fully expanding every triangle corner
  * into its own private vertex, discarding ALL index sharing -- also works,
  * but at a real cost: on ordinary real-world meshes this both roughly
  * triples output size AND silently degrades a reader's normal

@@ -3840,6 +3840,17 @@ prc_api_release_exact_geometry_tessellation(prc_context *ctx, prc_api_tess *tess
     tess->num_text_primitives = 0;
 }
 
+/* Looks for an entry already made for this file tessellation and style, so
+   parts drawing the same thing could share one.
+
+   Currently inactive: it searches data->unique_part_count entries, and that
+   count is only filled in after prc_api_get_number_tessellations has made
+   them all, so while they are being made it is 0 and nothing is ever found.
+   Every part therefore gets an entry of its own, which is the behaviour every
+   consumer has been built and tested against. Making sharing work changes
+   how many tessellations a consumer sees, and so is a change of its own; a
+   part that shares an entry would also need part->tess set, which
+   prc_api_initialize_tessellation does only for the part that made it. */
 static int
 prc_api_helper(prc_context *ctx, prc_data *data_in, uint32_t file_index,
     uint32_t tess_index, uint32_t part_index, uint32_t style_index,
@@ -4042,6 +4053,11 @@ prc_api_get_number_tessellations(prc_context *ctx, prc_api_data data_in,
                     part_detail = &data->part_details[num_part_tessellations];
                     part_detail->style_leaf = (void *)reserve->parts[k].RI_item_style_node;
                     part_detail->part_reserve_index = k;
+                    /* The part needs its entry's index to find its
+                       tessellation; only the reuse path above used to set it,
+                       and that never runs (see prc_api_helper), so every part
+                       read 0, the first entry's index. */
+                    reserve->parts[k].part_detail_index = num_part_tessellations;
                     part_detail->tessellation_index = j;
                     part_detail->tess_file_index = i;
                     part_detail->tessellation = NULL; /* This gets set later when we do the tessellations */

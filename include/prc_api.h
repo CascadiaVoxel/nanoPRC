@@ -308,7 +308,15 @@ struct prc_api_part_s
     uint8_t has_inherited_style;
     prc_api_inherited_style color;
     prc_api_inherited_style transparency;
-    uint32_t part_detail_index; /* Index into tess_style_file_part *part_details in prc_data_s */
+    /** This part's tessellation in the API's numbering: the index to pass to
+        prc_api_initialize_tessellation, prc_api_get_number_faces and
+        prc_api_get_tessellation_vertices. Only meaningful when
+        biased_tess_index > 0. It is not biased_tess_index - 1, which numbers
+        the file's tessellations: the API gives each part that draws a file
+        tessellation an entry of its own, so where parts share a file
+        tessellation (instances of one component, say) the two numberings
+        drift apart from the first shared one on. */
+    uint32_t part_detail_index;
     uint8_t has_entity_ref;
     prc_api_entity_ref entity_ref;
     prc_api_object_style *RI_item_style_node; /* This is a pointer to the RI style tree leaf. We can traverse this backwards to get everything */

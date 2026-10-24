@@ -111,64 +111,6 @@ prc_diag_surgical_split_part_allowed(uint32_t one_based_part_number)
     return 0;
 }
 
-/* Minimal, single-block-only MD5 (RFC 1321), duplicated from src/prc_write_compress_tess.c's
-   own (private/static) copy -- see that copy's comment for why this exists (replicating an
-   earlier externally-scripted, empirically-confirmed-working mitigation byte-for-byte, after
-   several simpler-hash variants failed to reproduce the same result). Input is always exactly
-   12 bytes (3 packed float32 coordinates), always fits one 64-byte MD5 block. */
-static void
-prc_md5_12bytes(const uint8_t in[12], uint8_t out[16])
-{
-    static const uint32_t K[64] = {
-        0xd76aa478,0xe8c7b756,0x242070db,0xc1bdceee,0xf57c0faf,0x4787c62a,0xa8304613,0xfd469501,
-        0x698098d8,0x8b44f7af,0xffff5bb1,0x895cd7be,0x6b901122,0xfd987193,0xa679438e,0x49b40821,
-        0xf61e2562,0xc040b340,0x265e5a51,0xe9b6c7aa,0xd62f105d,0x02441453,0xd8a1e681,0xe7d3fbc8,
-        0x21e1cde6,0xc33707d6,0xf4d50d87,0x455a14ed,0xa9e3e905,0xfcefa3f8,0x676f02d9,0x8d2a4c8a,
-        0xfffa3942,0x8771f681,0x6d9d6122,0xfde5380c,0xa4beea44,0x4bdecfa9,0xf6bb4b60,0xbebfbc70,
-        0x289b7ec6,0xeaa127fa,0xd4ef3085,0x04881d05,0xd9d4d039,0xe6db99e5,0x1fa27cf8,0xc4ac5665,
-        0xf4292244,0x432aff97,0xab9423a7,0xfc93a039,0x655b59c3,0x8f0ccc92,0xffeff47d,0x85845dd1,
-        0x6fa87e4f,0xfe2ce6e0,0xa3014314,0x4e0811a1,0xf7537e82,0xbd3af235,0x2ad7d2bb,0xeb86d391 };
-    static const uint32_t S[64] = {
-        7,12,17,22, 7,12,17,22, 7,12,17,22, 7,12,17,22,
-        5, 9,14,20, 5, 9,14,20, 5, 9,14,20, 5, 9,14,20,
-        4,11,16,23, 4,11,16,23, 4,11,16,23, 4,11,16,23,
-        6,10,15,21, 6,10,15,21, 6,10,15,21, 6,10,15,21 };
-    uint8_t block[64];
-    uint32_t M[16];
-    uint32_t a0 = 0x67452301, b0 = 0xefcdab89, c0 = 0x98badcfe, d0 = 0x10325476;
-    uint32_t a = a0, b = b0, c = c0, d = d0;
-    int i;
-
-    memset(block, 0, sizeof(block));
-    memcpy(block, in, 12);
-    block[12] = 0x80;
-    block[56] = 96;
-
-    for (i = 0; i < 16; i++)
-        M[i] = (uint32_t)block[i * 4] | ((uint32_t)block[i * 4 + 1] << 8) |
-               ((uint32_t)block[i * 4 + 2] << 16) | ((uint32_t)block[i * 4 + 3] << 24);
-
-    for (i = 0; i < 64; i++)
-    {
-        uint32_t f, g, tmp;
-        if (i < 16) { f = (b & c) | (~b & d); g = (uint32_t)i; }
-        else if (i < 32) { f = (d & b) | (~d & c); g = (uint32_t)((5 * i + 1) % 16); }
-        else if (i < 48) { f = b ^ c ^ d; g = (uint32_t)((3 * i + 5) % 16); }
-        else { f = c ^ (b | ~d); g = (uint32_t)((7 * i) % 16); }
-        tmp = d;
-        d = c;
-        c = b;
-        f = a + f + K[i] + M[g];
-        b = b + ((f << S[i]) | (f >> (32 - S[i])));
-        a = tmp;
-    }
-    a0 += a; b0 += b; c0 += c; d0 += d;
-    out[0] = (uint8_t)a0; out[1] = (uint8_t)(a0 >> 8); out[2] = (uint8_t)(a0 >> 16); out[3] = (uint8_t)(a0 >> 24);
-    out[4] = (uint8_t)b0; out[5] = (uint8_t)(b0 >> 8); out[6] = (uint8_t)(b0 >> 16); out[7] = (uint8_t)(b0 >> 24);
-    out[8] = (uint8_t)c0; out[9] = (uint8_t)(c0 >> 8); out[10] = (uint8_t)(c0 >> 16); out[11] = (uint8_t)(c0 >> 24);
-    out[12] = (uint8_t)d0; out[13] = (uint8_t)(d0 >> 8); out[14] = (uint8_t)(d0 >> 16); out[15] = (uint8_t)(d0 >> 24);
-}
-
 /* ====================================================================
  * STL_IMPORT_SINGLE_MODEL_PART_THRESHOLD -- adjust this to change when
  * stl_import switches from one-model-per-part to a single lumped model.
@@ -199,64 +141,24 @@ prc_md5_12bytes(const uint8_t in[12], uint8_t out[16])
  * setting in practice, so this define is not meant to be set to 0. */
 #define STL_IMPORT_SINGLE_MODEL_PART_THRESHOLD 100
 
-/* Why a file is lumped, or isn't. Both the real decision (in
-   stl_import_build_parts) and the prediction of it made earlier by
-   stl_import_jitter_needs_per_triangle_scope go through this one function:
-   the jitter magnitude that predictor picks is only correct if it agreed
-   with what the builder actually did, and when the two were written out
-   separately they did not -- the predictor read the #define and its own
-   copy of the known-bad list, never the PRC_DIAG_LUMP_THRESHOLD override,
-   so setting that override made them disagree.
+/* Whether a file with this many disjoint parts is written as one lumped
+   model. PRC_DIAG_LUMP_THRESHOLD replaces the threshold, for testing.
 
-   MITIGATION (2026-07-26, mixed_chains/UK_original.stl Acrobat blank-tree
-   investigation): a real, reproducible Acrobat defect blanks the model tree for specific
-   TOTAL tessellation-entry counts, independent of content -- confirmed on trivial synthetic
-   geometry at exactly these counts, with a dense sweep of ~25 other counts all working and
-   no formula found relating them. Root cause NOT identified -- see project notes. Since
-   there's no known way to predict other bad counts, this is a narrow, incomplete
-   empirical list of only the counts directly confirmed bad, not a general solution -- a
-   multi-part file whose count isn't in this list could still turn out to be bad; add to
-   this list if/when another one is found. Forcing every multi-part file through the
-   lumped-model path unconditionally (matching the existing 100+-part threshold's own
-   tree shape) would sidestep this class entirely, but a working file with real multi-part
-   semantics (separately selectable parts in a PDF3D viewer) would lose that structure --
-   deemed not worth the tradeoff for a bug this narrow (~3 of ~28 counts tested) until more
-   is known.
-
-   PRC_DIAG_LUMP_THRESHOLD replaces the threshold AND suppresses the
-   known-bad-count list, so that a manually-forced threshold isolates "does
-   lumping alone help" from "did the count mitigation also fire". That
-   coupling is deliberate for a diagnostic and is preserved here unchanged;
-   it is the wrong shape for a user-facing parameter, and is the first thing
-   to revisit if this threshold is ever promoted to one. */
-typedef enum
+   This once also lumped files of exactly 3, 7 or 14 parts, which had shown
+   an empty model tree in Adobe Acrobat. That was not the part count: the
+   writer then omitted the user_data that closes the tessellation section,
+   and a section ending exactly on a byte boundary gives an empty model tree
+   whatever it contains. With the section ended correctly, those counts
+   write normally. */
+static int
+stl_import_should_lump(uint32_t num_components)
 {
-    STL_IMPORT_LUMP_NONE = 0,        /* one tessellation entry per component */
-    STL_IMPORT_LUMP_THRESHOLD,       /* more components than the threshold allows */
-    STL_IMPORT_LUMP_KNOWN_BAD_COUNT  /* the {3,7,14} Acrobat pure-count defect */
-} stl_import_lump_reason;
-
-static stl_import_lump_reason
-stl_import_lump_decision(uint32_t num_components)
-{
-    static const uint32_t known_bad_tess_counts[] = { 3, 7, 14 };
     uint32_t threshold = STL_IMPORT_SINGLE_MODEL_PART_THRESHOLD;
     const char *ov = prc_diag_getenv("PRC_DIAG_LUMP_THRESHOLD");
 
     if (ov != NULL)
         threshold = (uint32_t)atoi(ov);
-    else
-    {
-        size_t bi;
-        for (bi = 0; bi < sizeof(known_bad_tess_counts) / sizeof(known_bad_tess_counts[0]); bi++)
-            if (num_components == known_bad_tess_counts[bi])
-                return STL_IMPORT_LUMP_KNOWN_BAD_COUNT;
-    }
-
-    if (num_components > threshold)
-        return STL_IMPORT_LUMP_THRESHOLD;
-
-    return STL_IMPORT_LUMP_NONE;
+    return num_components > threshold;
 }
 
 /* Default floor for the COMPRESSED entry's own quantization tolerance
@@ -267,14 +169,13 @@ stl_import_lump_decision(uint32_t num_components)
    (independent_tolerance_mm / (nanoPRC_default_tolerance_mm / 1e-6)); see
    project memory project_point_array_bitwidth_and_prcdb_analysis_2026-08-02.md
    for the derivation and validation. Real-Acrobat-confirmed safe (UK_original/
-   Walnut/QCD_Leinweber, each with its own correct weld/jitter configuration
-   otherwise unchanged) and corpus-validated (146 real-world files, zero
-   write/decode regressions, ~20% smaller point_array payload on average,
-   worst-case bit-length 23->20) PROVIDED vertex welding and pre-weld jitter
-   magnitude are computed from a separate, unwidened tolerance -- which is
-   exactly what --weld-tolerance (default 1e-6, untouched by this constant)
-   still governs. Never used to make quantization TIGHTER than the mesh's
-   actual weld tolerance -- see the max() in main()'s resolution logic. */
+   Walnut/QCD_Leinweber, each with its own weld configuration otherwise
+   unchanged) and corpus-validated (146 real-world files, zero write/decode
+   regressions, ~20% smaller point_array payload on average, worst-case
+   bit-length 23->20) PROVIDED vertex welding is computed from a separate,
+   unwidened tolerance -- which is exactly what --weld-tolerance (default
+   1e-6, untouched by this constant) still governs. Never used to make
+   quantization TIGHTER than the mesh's actual weld tolerance -- see the max() in main()'s resolution logic. */
 #define STL_IMPORT_DEFAULT_QUANT_TOLERANCE_FRACTION 6.826086758455277e-6
 
 /* Multiplies `count * elem_size`, checking for size_t overflow first.
@@ -297,79 +198,6 @@ safe_mul_size(size_t count, size_t elem_size, size_t *out)
     if (elem_size != 0 && count > (SIZE_MAX / elem_size))
         return -1;
     *out = count * elem_size;
-    return 0;
-}
-
-/* Sort key for PRC_DIAG_JITTER_SKIP_REPEATED_AXES's per-axis exact-value-repeat
-   detection: sorting is O(n log n) vs. the O(n^2) linear-scan frequency table
-   the prototype originally used, which only scaled to tiny (11-33 vertex) repros. */
-typedef struct
-{
-    double val;
-    uint32_t vi;
-} prc_diag_axis_val_t;
-
-static int
-prc_diag_axis_val_cmp(const void *a, const void *b)
-{
-    double da = ((const prc_diag_axis_val_t *)a)->val;
-    double db = ((const prc_diag_axis_val_t *)b)->val;
-    if (da < db) return -1;
-    if (da > db) return 1;
-    return 0;
-}
-
-/* Exact-position dedup key for the same probe: a raw (unwelded) STL corner
-   trivially shares its own position with every OTHER corner of the same
-   mesh vertex (any vertex touched by 2+ triangles), which is nearly all of
-   them on a real connected mesh -- that duplication is NOT the "intentional
-   CAD-flat axis alignment between DISTINCT vertices" signal the probe wants.
-   This key groups corners by exact (x,y,z) first so the per-axis repeat
-   check runs over one representative per distinct position, not per corner. */
-typedef struct
-{
-    double x, y, z;
-    uint32_t vi;
-} prc_diag_corner_xyz_t;
-
-static int
-prc_diag_corner_xyz_cmp(const void *a, const void *b)
-{
-    const prc_diag_corner_xyz_t *pa = (const prc_diag_corner_xyz_t *)a;
-    const prc_diag_corner_xyz_t *pb = (const prc_diag_corner_xyz_t *)b;
-    if (pa->x < pb->x) return -1;
-    if (pa->x > pb->x) return 1;
-    if (pa->y < pb->y) return -1;
-    if (pa->y > pb->y) return 1;
-    if (pa->z < pb->z) return -1;
-    if (pa->z > pb->z) return 1;
-    return 0;
-}
-
-/* Same probe as prc_diag_axis_val_t, but scoped per connected component
-   (2026-08-12 fix, see the repeated-axis-skip block's own comment for why:
-   an unscoped/whole-assembly version of this check misreads a coincidental
-   axis-value match between two UNRELATED parts of a multi-part assembly --
-   e.g. two standardized/mirrored sub-components placed at different
-   locations -- as the "intentional CAD-flatness" signal it's meant to
-   detect, confirmed on a real 126-part regression). Sorting by (comp, val)
-   makes same-component/same-value runs contiguous. */
-typedef struct
-{
-    double val;
-    uint32_t comp;
-    uint32_t vi;
-} prc_diag_axis_val_comp_t;
-
-static int
-prc_diag_axis_val_comp_cmp(const void *a, const void *b)
-{
-    const prc_diag_axis_val_comp_t *pa = (const prc_diag_axis_val_comp_t *)a;
-    const prc_diag_axis_val_comp_t *pb = (const prc_diag_axis_val_comp_t *)b;
-    if (pa->comp < pb->comp) return -1;
-    if (pa->comp > pb->comp) return 1;
-    if (pa->val < pb->val) return -1;
-    if (pa->val > pb->val) return 1;
     return 0;
 }
 
@@ -1177,132 +1005,6 @@ uf_union(uint32_t *parent, uint8_t *rank, uint32_t a, uint32_t b)
         rank[a]++;
 }
 
-/* --- 2c: does this file's pre-weld jitter need per-triangle scope? ---
- *
- * The per-triangle jitter-magnitude fix (2026-07-29, commit 9076dd0) targets
- * a specific fragility: mixed COMPRESSED+TRIANGLES trees are sensitive to
- * over-jittering in a way same-kind trees aren't (see the jitter block's own
- * comment in main() for the full mechanism/evidence). But it collapses the
- * jitter magnitude far below the file's own weld tolerance for any file made
- * of many small triangles relative to its whole bounding box -- confirmed
- * real-Acrobat-regressive on UK_original.stl (460017 triangles, per-triangle
- * magnitude ~378x smaller than the pre-fix whole-mesh magnitude that used to
- * work for it). Mixed-kind trees can only arise when MULTIPLE separate
- * tessellation entries are written (a single lumped entry never mixes with a
- * sibling) AND at least one of those entries would contain a non-manifold
- * vertex (triggering the TRIANGLES fallback) while at least one other
- * wouldn't. This function estimates that via a throwaway trial weld of the
- * RAW (un-jittered) positions -- real jitter and the real weld both still run
- * afterward, unaffected by this trial; the only cost is one extra O(n) weld
- * pass. Conservative on any ambiguity or allocation failure: returns 1 (use
- * the finer, proven-safe-for-mixed-kind magnitude) rather than risk
- * reintroducing the mixed-kind regression the 2026-07-29 fix exists to
- * prevent. */
-static uint8_t
-stl_import_jitter_needs_per_triangle_scope(const stl_mesh *mesh, double weld_tolerance_fraction, double diagonal)
-{
-    weld_grid trial_grid;
-    uint32_t *trial_weld_index = NULL;
-    uint32_t *trial_parent = NULL;
-    uint8_t *trial_rank = NULL;
-    uint32_t *trial_component_of_root = NULL;
-    uint32_t num_components = 0;
-    uint8_t result = 1; /* conservative default */
-    uint32_t i, t;
-    uint8_t ok = 0;
-    double abs_tol = weld_tolerance_fraction * diagonal;
-
-    memset(&trial_grid, 0, sizeof(trial_grid));
-
-    if (mesh->num_triangles == 0)
-        return 0;
-
-    if (weld_grid_init(&trial_grid, abs_tol, mesh->num_triangles * 3) != 0)
-        return 1;
-
-    trial_weld_index = (uint32_t *)malloc(sizeof(uint32_t) * (size_t)mesh->num_triangles * 3);
-    if (trial_weld_index == NULL)
-    {
-        weld_grid_free(&trial_grid);
-        return 1;
-    }
-
-    for (i = 0; i < mesh->num_triangles * 3; i++)
-    {
-        uint32_t wv = weld_grid_lookup_or_insert(&trial_grid, &mesh->raw_positions[(size_t)i * 3], abs_tol);
-        if (wv == UINT32_MAX)
-            goto done;
-        trial_weld_index[i] = wv;
-    }
-
-    trial_parent = (uint32_t *)malloc(sizeof(uint32_t) * trial_grid.count);
-    trial_rank = (uint8_t *)calloc(trial_grid.count, sizeof(uint8_t));
-    if (trial_parent == NULL || trial_rank == NULL)
-        goto done;
-    for (i = 0; i < trial_grid.count; i++)
-        trial_parent[i] = i;
-    for (t = 0; t < mesh->num_triangles; t++)
-    {
-        uf_union(trial_parent, trial_rank, trial_weld_index[t * 3 + 0], trial_weld_index[t * 3 + 1]);
-        uf_union(trial_parent, trial_rank, trial_weld_index[t * 3 + 1], trial_weld_index[t * 3 + 2]);
-    }
-    trial_component_of_root = (uint32_t *)malloc(sizeof(uint32_t) * trial_grid.count);
-    if (trial_component_of_root == NULL)
-        goto done;
-    for (i = 0; i < trial_grid.count; i++)
-        trial_component_of_root[i] = UINT32_MAX;
-    for (i = 0; i < trial_grid.count; i++)
-    {
-        uint32_t r = uf_find(trial_parent, i);
-        if (trial_component_of_root[r] == UINT32_MAX)
-            trial_component_of_root[r] = num_components++;
-    }
-    ok = 1;
-
-done:
-    if (!ok)
-    {
-        free(trial_weld_index); free(trial_parent); free(trial_rank); free(trial_component_of_root);
-        weld_grid_free(&trial_grid);
-        return 1;
-    }
-
-    if (num_components <= 1)
-    {
-        result = 0; /* only one part -- nothing to mix with */
-    }
-    else
-    {
-        /* Whatever stl_import_build_parts will decide, decided here the same
-           way -- a lumped file has no sibling entry to mix kinds with. */
-        if (stl_import_lump_decision(num_components) != STL_IMPORT_LUMP_NONE)
-        {
-            result = 0; /* forced into a single lumped entry -- no sibling to mix with */
-        }
-        else
-        {
-            /* Multiple genuinely separate entries will be written. Check
-               whether ANY non-manifold vertex exists anywhere in the file:
-               if none, every part will be COMPRESSED (homogeneous, safe for
-               the coarser magnitude); if at least one exists, at least one
-               part risks being written as TRIANGLES alongside COMPRESSED
-               siblings -- conservatively keep result=1 (mixed-kind risk). */
-            prc_context *check_ctx = prc_api_new_context(NULL);
-            if (check_ctx != NULL)
-            {
-                int has_nm = prc_api_mesh_has_nonmanifold_fans(check_ctx, trial_grid.positions, trial_grid.count,
-                    trial_weld_index, mesh->num_triangles, prc_write_tol_relative(weld_tolerance_fraction));
-                prc_api_release_context(check_ctx);
-                result = (has_nm > 0) ? 1 : 0;
-            }
-        }
-    }
-
-    free(trial_weld_index); free(trial_parent); free(trial_rank); free(trial_component_of_root);
-    weld_grid_free(&trial_grid);
-    return result;
-}
-
 /* ---------------------------------------------------------------------
  * Section 3: normal-index deduplication for --original-normals.
  *
@@ -1658,8 +1360,8 @@ stl_import_build_single_lumped_model(const stl_mesh *mesh, const double *welded_
                the encoding tolerance outright "if the mesh lacks
                connectivity" -- this function is only ever reached when
                merging multiple originally-disjoint connected components
-               into one entry (forced either by the >100-part threshold or
-               the {3,7,14} known-bad-count list), i.e. exactly that case,
+               into one entry (forced by the >100-part threshold), i.e.
+               exactly that case,
                unconditionally, every time. Tested against three real files
                that reproducibly blank the Acrobat model tree via this exact
                path (davidgbarnes-submitted-version.stream-90,
@@ -1676,16 +1378,9 @@ stl_import_build_single_lumped_model(const stl_mesh *mesh, const double *welded_
                tolerance (quantization step + internal re-weld) is governed
                by quant_tolerance_fraction, independent of
                weld_tolerance_fraction -- which still alone drives this
-               importer's STL-level pre-weld radius (Section 2a) and the
-               pre-weld jitter magnitude below. Motivated by a real-Acrobat
-               finding: widening weld_tolerance_fraction itself to shrink
-               point_array bit-lengths also scaled UK_original.stl's
-               automatic jitter magnitude by the same factor (it's a direct
-               multiple of weld_tolerance_fraction), pushing it out of the
-               narrow, empirically-validated window that escapes the
-               mixed_chains Acrobat collision family -- see project memory
-               project_nonmanifold_split_rootcause_2026-07-31.md.
-               quant_tolerance_fraction defaults to weld_tolerance_fraction
+               importer's STL-level pre-weld radius (Section 2a), so
+               quantization can be coarsened without changing which raw
+               corners weld together. quant_tolerance_fraction defaults to weld_tolerance_fraction
                (main() resolves the sentinel before either function here is
                called), so omitting --quant-tolerance is a no-op. Real-
                Acrobat-validated at 6.826e-6 (vs. nanoPRC's 1e-6 default) on
@@ -1696,23 +1391,16 @@ stl_import_build_single_lumped_model(const stl_mesh *mesh, const double *welded_
             tess->tolerance = prc_write_tol_relative(effective_fraction);
         }
 
-        /* MITIGATION (2026-07-27, narrowed same day): this lump path
-           (forced either by the >100-part threshold or by the {3,7,14}
-           known-bad-tessellation-count list above) used to skip the
-           non-manifold-fan check entirely -- it's only performed in
-           stl_import_build_parts' per-component loop below, which this
-           path bypasses via the early `goto cleanup` above. Confirmed via
-           a real prc-db file (2368549.stream-147.stl, whose 3 parts hit
-           the known-bad-count lump specifically): 2 of its 3 parts DO
-           contain non-manifold vertices and would have gotten the safe
-           TRIANGLES fallback on the normal per-part path, but the lumped
-           lookup order let a real Acrobat blank-tree defect back in
-           through this gap.
+        /* The per-part path (stl_import_build_parts) checks every part
+           for non-manifold fans; this lumped path does so only when
+           `check_nonmanifold` is set, which is now only through the
+           PRC_DIAG_FORCE_LUMP_NONMANIFOLD_CHECK diagnostic. It was added
+           for files lumped by the old {3,7,14} part-count list (since
+           withdrawn, see stl_import_should_lump), whose parts would
+           otherwise have had the per-part check.
 
-           Only run this check when `check_nonmanifold` is set (i.e. only
-           for the {3,7,14} known-bad-count lump, never for the ordinary
-           >100-part threshold lump) -- confirmed the SAME day this was
-           first tried unconditionally: 3D-PDF-Sample-Carburetor.stream-
+           Not run for the ordinary >100-part threshold lump -- found when
+           this was first tried unconditionally: 3D-PDF-Sample-Carburetor.stream-
            48.stl (759 real parts, lumped only by the >100 threshold, was
            already real-Acrobat-confirmed working as a plain COMPRESSED
            lump before this whole investigation) has its own non-manifold
@@ -1858,18 +1546,12 @@ stl_import_build_single_lumped_model(const stl_mesh *mesh, const double *welded_
         intermediate->has_empty_part = 1;
         intermediate->children = &parts->child_ptrs[0];
         intermediate->num_children = 1;
-        /* prc_api.h documents bbox_min/bbox_max as "ignored if
-           num_rep_items == 0", which this intermediate always has -- left
-           unset (zero-initialized above) on that basis, this wrote a
-           degenerate (0,0,0)-(0,0,0) PartDefinition bounding box. Real
-           Acrobat testing (a 4-triangle minimal repro, section-swapped
-           against an independent encoder's otherwise-identical output)
-           traced a silent blank-model-tree failure to exactly this: the
-           box is NOT actually ignored by Acrobat for an empty-part
-           ancestor, and a zero-volume one blanks everything nested
-           beneath it. Since this intermediate always wraps exactly the
-           one child part just built above (whose own bbox is already a
-           real, padded box around real geometry), reuse it here too. */
+        /* The box is written even for an empty part, so give it a
+           meaningful value. This intermediate always wraps exactly the one
+           child part just built above, whose own bbox is already a real,
+           padded box around real geometry, so reuse it. (A zero box here
+           was once blamed for a blank Acrobat model tree; that was a
+           misdiagnosis, see bbox_min in prc_api.h.) */
         for (a = 0; a < 3; a++)
         {
             intermediate->bbox_min[a] = parts->children[0].bbox_min[a];
@@ -1940,67 +1622,23 @@ stl_import_build_parts(const stl_mesh *mesh, const double *welded_positions, uin
     uint32_t t, c;
     int ok = -1;
     prc_context *nonmanifold_check_ctx = prc_api_new_context(NULL);
-    /* SAFETY CAP (2026-08-15, Gear-Box surgical-split regression): real-
-       Acrobat bisection on a real 30-part file found that applying
-       prc_api_mesh_weld_and_split's fix to 8 of its parts works, but adding
-       a 9th (any 9th -- part 25 in isolation, or any other single part,
-       real-Acrobat-tested individually as fine) makes the whole file fail.
-       No single part's split content is at fault; this is a pure COUNT
-       threshold on how many parts in ONE file get the fix, matching the
-       already-documented, never-fully-explained {3,7,14}-style pure-count
-       Acrobat defect class elsewhere in this file (see
-       STL_IMPORT_SINGLE_MODEL_PART_THRESHOLD's own neighboring comment) --
-       just a different count basis and a different specific number. Only
-       one data point exists for this exact count basis (8 confirmed safe,
-       9 confirmed unsafe, on one real file) -- capped at exactly 8 (the
-       highest directly-tested-safe value) rather than extrapolated any
-       higher, in the same spirit of "list only what's confirmed, don't
-       guess at a formula" as that other threshold's own comment. Applied
-       in per-component PROCESSING ORDER (deterministic and reproducible
-       for a given file, since that order never changes) -- the Nth+
-       component past this cap for a given file falls back to the OLD
-       plain-welded/unsplit TRIANGLES buffer instead, exactly as this
-       write facility behaved before the surgical-split fix existed. Not
-       gated behind a diagnostic env var: this is a real safety limit, not
-       an experiment. */
-    uint32_t surgical_split_count_this_file = 0;
-    /* PRC_DIAG_SURGICAL_SPLIT_CAP overrides the cap for testing only (the
-       cap is one empirical data point from one file, and a file needing
-       MORE than 8 splits -- Voxler-Demo-Inversion needs 9, HeavyDutyCaster
-       16 -- gets the known-defective unsplit fallback for the excess,
-       which is itself a confirmed Acrobat-blank-tree trigger. Being able
-       to A/B that trade-off against real Acrobat is the whole point). */
-    uint32_t PRC_SURGICAL_SPLIT_PER_FILE_CAP = 8;
-    {
-        const char *cap_ov = prc_diag_getenv("PRC_DIAG_SURGICAL_SPLIT_CAP");
-        if (cap_ov != NULL)
-        {
-            long v = strtol(cap_ov, NULL, 10);
-            if (v >= 0)
-                PRC_SURGICAL_SPLIT_PER_FILE_CAP = (uint32_t)v;
-        }
-    }
+    /* Every part that needs it gets the non-manifold vertex split. This was
+       once capped at 8 parts per file: on one 30-part file, splitting 8
+       parts rendered in Adobe Acrobat and splitting all 9 that needed it
+       gave an empty model tree. That was not the count: the writer then
+       omitted the user_data that closes the tessellation section, and the
+       9-part file's section happened to end exactly on a byte boundary. */
 
     memset(parts, 0, sizeof(*parts));
 
     {
-        /* The real lumping decision; stl_import_jitter_needs_per_triangle_scope
-           predicted it earlier through the same function. See
-           stl_import_lump_decision for the threshold, the {3,7,14} Acrobat
-           count mitigation, and how PRC_DIAG_LUMP_THRESHOLD interacts. */
-        stl_import_lump_reason lump = stl_import_lump_decision(num_components);
-        uint8_t force_lump = (uint8_t)(lump == STL_IMPORT_LUMP_KNOWN_BAD_COUNT);
-        if (lump != STL_IMPORT_LUMP_NONE)
+        if (stl_import_should_lump(num_components))
         {
-            /* DIAGNOSTIC (2026-07-28): allow forcing the non-manifold-fan
-               check even when lumping was triggered by PRC_DIAG_LUMP_THRESHOLD
-               rather than the {3,7,14} count bug, so a manually-forced-small
-               threshold test isolates "does lumping alone help" from "did
-               this also lose non-manifold protection". Zero effect unless
-               PRC_DIAG_LUMP_THRESHOLD is also set (this env var alone does
-               nothing since force_lump already covers the real, non-diagnostic
-               path). */
-            uint8_t check_nm = (uint8_t)(force_lump || prc_diag_getenv("PRC_DIAG_FORCE_LUMP_NONMANIFOLD_CHECK") != NULL);
+            /* DIAGNOSTIC (2026-07-28): PRC_DIAG_FORCE_LUMP_NONMANIFOLD_CHECK
+               runs the non-manifold-fan check on the lumped model too, which
+               the ordinary threshold lump skips (see
+               stl_import_build_single_lumped_model). */
+            uint8_t check_nm = (uint8_t)(prc_diag_getenv("PRC_DIAG_FORCE_LUMP_NONMANIFOLD_CHECK") != NULL);
             ok = stl_import_build_single_lumped_model(mesh, welded_positions, num_welded, weld_index,
                 original_normals, global_normal_index, dedup_normals, weld_tolerance_fraction,
                 quant_tolerance_fraction, check_nm, parts);
@@ -2275,22 +1913,7 @@ stl_import_build_parts(const stl_mesh *mesh, const double *welded_positions, uin
                    is redundant (nothing new should merge) but harmless --
                    the split logic needs to run over the same connectivity
                    this component's own COMPRESSED attempt would have used. */
-                if (surgical_split_count_this_file >= PRC_SURGICAL_SPLIT_PER_FILE_CAP &&
-                    prc_diag_surgical_split_part_allowed(c + 1))
-                {
-                    /* Past the cap: this component keeps the old
-                       plain-welded/unsplit TRIANGLES buffer, which is
-                       itself a known real-Acrobat blank-tree trigger for
-                       non-manifold-fan content. Say so rather than
-                       silently shipping the known-bad form. */
-                    fprintf(stderr, "Note: part %u needs the non-manifold vertex split but this file has "
-                        "already used its per-file cap of %u -- writing it unsplit (a known Acrobat "
-                        "compatibility risk). Set PRC_DIAG_SURGICAL_SPLIT_CAP to test a higher cap.\n",
-                        (unsigned)(c + 1), (unsigned)PRC_SURGICAL_SPLIT_PER_FILE_CAP);
-                }
-
-                if (surgical_split_count_this_file < PRC_SURGICAL_SPLIT_PER_FILE_CAP &&
-                    prc_diag_surgical_split_part_allowed(c + 1))
+                if (prc_diag_surgical_split_part_allowed(c + 1))
                 {
                     double *split_positions = NULL;
                     uint32_t *split_indices = NULL;
@@ -2298,7 +1921,6 @@ stl_import_build_parts(const stl_mesh *mesh, const double *welded_positions, uin
                     double *new_positions;
                     uint32_t *new_indices;
 
-                    surgical_split_count_this_file++;
                     if (prc_api_mesh_weld_and_split(nonmanifold_check_ctx, local_positions, local_vertex_count,
                             local_tri_indices, tri_count, comp_tolerance,
                             &split_positions, &split_num_positions,
@@ -2427,12 +2049,9 @@ tess_entry_done:;
             intermediate->has_empty_part = 1;
             intermediate->children = &parts->child_ptrs[c];
             intermediate->num_children = 1;
-            /* See the single-component build's own copy of this comment
-               (above in this file): a degenerate zero bbox on an
-               empty-part ancestor blanks Acrobat's whole model tree
-               beneath it, despite prc_api.h documenting the field as
-               "ignored" for num_rep_items == 0 nodes. Reuse the one real
-               child's already-computed bbox. */
+            /* As in the single-component build above: give the empty
+               part a meaningful box by reusing the one real child's
+               already-computed bbox. */
             for (a = 0; a < 3; a++)
             {
                 intermediate->bbox_min[a] = parts->children[c].bbox_min[a];
@@ -2496,18 +2115,14 @@ print_usage(const char *prog)
         "                       normals at all, letting the reader compute smooth\n"
         "                       per-vertex normals from the welded geometry.\n"
         "  --weld-tolerance F   Vertex-welding tolerance, as a fraction of the mesh's\n"
-        "                       bounding-box diagonal. Default 1e-6. Also sets the\n"
-        "                       pre-weld jitter magnitude (an Acrobat-compatibility\n"
-        "                       mitigation, see the code comment where it's computed) --\n"
-        "                       widening this value changes jitter too, which can\n"
-        "                       reopen an already-escaped Acrobat collision on some\n"
-        "                       files. Use --quant-tolerance instead if you only want\n"
-        "                       smaller COMPRESSED output, not coarser welding.\n"
+        "                       bounding-box diagonal. Default 1e-6. Use\n"
+        "                       --quant-tolerance instead if you only want smaller\n"
+        "                       COMPRESSED output, not coarser welding.\n"
         "  --quant-tolerance F  COMPRESSED tessellations' own quantization tolerance\n"
         "                       (same bounding-box-diagonal-fraction convention as\n"
-        "                       --weld-tolerance), independent of vertex welding and\n"
-        "                       jitter magnitude, both of which stay governed by\n"
-        "                       --weld-tolerance alone. Defaults to the wider of\n"
+        "                       --weld-tolerance), independent of vertex welding,\n"
+        "                       which stays governed by --weld-tolerance alone.\n"
+        "                       Defaults to the wider of\n"
         "                       --weld-tolerance's own value and %.6g (nanoPRC's\n"
         "                       validated default, real-Acrobat- and corpus-tested --\n"
         "                       see project notes) when omitted, so quantization is\n"
@@ -2798,484 +2413,6 @@ main(int argc, char *argv[])
         {
             fprintf(stderr, "Error: %s contains no non-degenerate triangles\n", input_path);
             goto cleanup;
-        }
-    }
-
-    /* MITIGATION (2026-07-26/27, mixed_chains/beetle_1000000.stl Acrobat blank-tree
-       investigation): jitters RAW, pre-weld positions by a small, deterministic,
-       bbox/tolerance-relative amount before this importer's own weld pass runs. Real,
-       reproducible, but still-unidentified Acrobat defect: two independent traversal chains
-       sharing one COMPRESSED entry can, for specific EXACT real-world vertex values, blank the
-       model tree (nanoPRC's own reader, and at least one independent PRC reader, both already
-       decode the un-jittered geometry correctly, so this is Acrobat-side, not a correctness bug
-       here). Root cause not identified -- this is an empirical, BEST-EFFORT mitigation, not a
-       guaranteed fix.
-
-       IMPORTANT, hard-won limitation: the magnitude that actually escapes a given file's own
-       coincidence appears to sit in a NARROW window, not a broad "big enough" range --
-       confirmed via a controlled A/B on beetle_1000000.stl where exactly 1e-2 (absolute) works
-       but 1.1548e-2 (only ~15% more, from an earlier, more "principled"-looking 10x-weld-
-       tolerance formula) does NOT. PRC_ENCODE_JITTER_TOLERANCE_FACTOR below is therefore NOT a
-       theoretically-derived safety margin -- it's reverse-engineered from the one value
-       confirmed (via real Acrobat testing, with the redundant downstream jitter in
-       prc_encode_preprocess correctly disabled to isolate this specific mechanism) to work,
-       expressed as a multiple of weld tolerance so it at least scales with the mesh's own size
-       rather than being a fixed mm constant. There is no guarantee this SAME multiple lands in
-       whatever narrow window a DIFFERENT file's own coincidence has; a file that still fails at
-       this default should be retried with a different PRC_DIAG_PREWELD_JITTER_MAG value (or
-       PRC_DIAG_JITTER_SEED on prc_encode_preprocess's own independent, downstream jitter
-       mechanism) rather than assumed unfixable.
-
-       Exact magnitude and float32-truncation-before-use (below) were both confirmed load-
-       bearing via the same controlled A/B: jittering AFTER this importer's own weld (inside
-       prc_encode_preprocess, downstream) does NOT reproduce this result, only jittering the RAW
-       pre-weld positions here does, because only here can jitter influence WHICH near-duplicate
-       (but not exactly coincident) raw corners end up welding together -- a real topological
-       effect no later-stage jitter can produce. PRC_DIAG_PREWELD_JITTER_MAG overrides the
-       automatic magnitude (absolute units) for testing; PRC_DIAG_DISABLE_PREWELD_JITTER
-       disables this mitigation entirely. */
-    {
-        uint8_t preweld_disabled = (prc_diag_getenv("PRC_DIAG_DISABLE_PREWELD_JITTER") != NULL);
-        const char *preweld_env = prc_diag_getenv("PRC_DIAG_PREWELD_JITTER_MAG");
-        /* FIX (2026-07-29, mixed-kind-tree Acrobat blank-tree investigation; SCOPED 2026-07-31,
-           UK_original.stl jitter regression): per-triangle magnitude is only actually needed for
-           files that risk producing a mixed COMPRESSED+TRIANGLES tree -- the specific fragility
-           this fix targets (see the loop body's own comment below for the mechanism/evidence).
-           For any other file, the coarser, historically-validated whole-mesh-scoped magnitude
-           (this importer's original behavior, pre-9076dd0) is used instead: per-triangle scaling
-           collapses the jitter far below the file's own weld tolerance for meshes made of many
-           small triangles relative to their whole bounding box, confirmed real-Acrobat-regressive
-           on UK_original.stl (460017 triangles, per-triangle magnitude ~378x smaller than the
-           whole-mesh magnitude that used to work for it, unrelated to the mixed-kind mechanism
-           since that file is homogeneous/single-kind). See
-           stl_import_jitter_needs_per_triangle_scope's own comment for how this is decided. */
-        uint8_t use_per_triangle = preweld_disabled ? 0 :
-            stl_import_jitter_needs_per_triangle_scope(&mesh, weld_tolerance_fraction, diagonal);
-        /* PROBE (2026-08-07, PRC_DIAG_JITTER_TRIANGLE_LIST=<path>): chain-bisection
-           tooling for beetle_1000000.stl's still-unexplained jitter-dependence
-           (see project notes RESULT 48-50 -- two earlier attempts at a POST-quantization
-           point_array-value nudge, scoped by chain, both failed real Acrobat even applied
-           to every chain, diagnosed as unable to substitute for jitter's real, upstream
-           effect on raw pre-weld positions). This restricts the REAL, unmodified jitter
-           mechanism above/below to only the triangle indices listed in the given file
-           (one 0-based raw STL triangle index per line, matching this loop's own `ti`,
-           the same index space PRC_DIAG_DUMP_ALLTRI's mesh_tri column uses when the
-           encoder doesn't reorder/drop triangles) -- every other triangle's raw vertex
-           positions are left completely untouched, byte-identical to jitter fully off.
-           Zero cost/behavior change when unset. */
-        uint8_t *jitter_triangle_allow = NULL;
-        {
-            const char *list_path = prc_diag_getenv("PRC_DIAG_JITTER_TRIANGLE_LIST");
-            if (list_path != NULL && !preweld_disabled)
-            {
-                FILE *lf = fopen(list_path, "r");
-                if (lf != NULL)
-                {
-                    unsigned long idx;
-                    jitter_triangle_allow = (uint8_t *)calloc((size_t)mesh.num_triangles, sizeof(uint8_t));
-                    if (jitter_triangle_allow != NULL)
-                    {
-                        while (fscanf(lf, "%lu", &idx) == 1)
-                        {
-                            if (idx < (unsigned long)mesh.num_triangles)
-                                jitter_triangle_allow[idx] = 1;
-                        }
-                    }
-                    fclose(lf);
-                }
-                else
-                {
-                    fprintf(stderr, "Warning: PRC_DIAG_JITTER_TRIANGLE_LIST=%s could not be opened, "
-                        "jitter applying to ALL triangles (no restriction)\n", list_path);
-                }
-            }
-        }
-        /* PROBE (2026-08-07): PRC_DIAG_JITTER_TRIANGLE_LIST above restricts by raw
-           TRIANGLE index, but STL storage is unwelded triangle soup -- two triangles
-           sharing a physical vertex each hold their OWN copy of it. Restricting jitter
-           per-triangle can therefore jitter one copy of a shared vertex while leaving
-           its neighbor's copy untouched, creating a "seam": the two copies, previously
-           within weld tolerance of each other, can end up pushed apart enough to weld
-           into DIFFERENT points -- fracturing mesh topology (extra connected parts) or
-           even triggering the non-manifold-vertex uncompressed-write fallback right at
-           the boundary of whatever region is being tested. Empirically confirmed across
-           a beetle_1000000.stl chain-bisection sweep (rounds 1-10, ALL contaminated:
-           1270 spurious connected parts on the very first, whole-mesh-scale round, down
-           to 1-3 spurious parts plus repeated uncompressed-fallback triggers at
-           finer/thousands-of-triangles granularity), not just a fine-grained-only
-           effect. Fix: promote the per-triangle allowlist to a per-CORNER allowlist
-           where a corner is allowed iff ANY corner sharing its trial-weld group (a
-           throwaway, pre-jitter spatial-hash weld at the SAME tolerance the real weld
-           below will use -- reusing weld_grid/weld_grid_lookup_or_insert, no new
-           infrastructure) belongs to an allowed triangle. This guarantees every raw
-           corner-copy of the same physical vertex gets the identical in/out decision,
-           never split across a seam. jitter_corner_allow is NULL (no restriction) both
-           when PRC_DIAG_JITTER_TRIANGLE_LIST is unset and as a graceful degrade if this
-           trial-weld pass itself fails (falls back to the coarser, seam-prone
-           per-triangle check rather than aborting). */
-        uint8_t *jitter_corner_allow = NULL;
-        if (jitter_triangle_allow != NULL)
-        {
-            weld_grid trial_grid;
-            uint32_t *trial_weld_index = NULL;
-            double abs_tol = weld_tolerance_fraction * diagonal;
-            uint32_t vi2;
-            uint8_t ok = 0;
-
-            memset(&trial_grid, 0, sizeof(trial_grid));
-            if (weld_grid_init(&trial_grid, abs_tol, mesh.num_triangles * 3) == 0)
-            {
-                trial_weld_index = (uint32_t *)malloc(sizeof(uint32_t) * (size_t)mesh.num_triangles * 3);
-                if (trial_weld_index != NULL)
-                {
-                    ok = 1;
-                    for (vi2 = 0; vi2 < mesh.num_triangles * 3; vi2++)
-                    {
-                        uint32_t wv = weld_grid_lookup_or_insert(&trial_grid,
-                            &mesh.raw_positions[(size_t)vi2 * 3], abs_tol);
-                        if (wv == UINT32_MAX) { ok = 0; break; }
-                        trial_weld_index[vi2] = wv;
-                    }
-                    if (ok)
-                    {
-                        uint8_t *group_allow = (uint8_t *)calloc(trial_grid.count, sizeof(uint8_t));
-                        if (group_allow != NULL)
-                        {
-                            uint32_t ti2;
-                            jitter_corner_allow = (uint8_t *)calloc((size_t)mesh.num_triangles * 3, sizeof(uint8_t));
-                            if (jitter_corner_allow != NULL)
-                            {
-                                for (ti2 = 0; ti2 < mesh.num_triangles; ti2++)
-                                {
-                                    if (!jitter_triangle_allow[ti2])
-                                        continue;
-                                    group_allow[trial_weld_index[ti2 * 3 + 0]] = 1;
-                                    group_allow[trial_weld_index[ti2 * 3 + 1]] = 1;
-                                    group_allow[trial_weld_index[ti2 * 3 + 2]] = 1;
-                                }
-                                for (vi2 = 0; vi2 < mesh.num_triangles * 3; vi2++)
-                                    jitter_corner_allow[vi2] = group_allow[trial_weld_index[vi2]];
-                            }
-                            free(group_allow);
-                        }
-                    }
-                    free(trial_weld_index);
-                }
-            }
-            weld_grid_free(&trial_grid);
-        }
-        /* DEFAULT (promoted 2026-08-11, was PRC_DIAG_JITTER_SKIP_REPEATED_AXES probe):
-           avoids jitter's real Acrobat-blank-tree risk (RESULT 9-13 of the
-           hand.stl/chains_3 investigation -- a chain-start's V0/V2
-           reconstruction becomes Acrobat-sensitive when perturbed away from
-           an EXACT value real, unjittered coordinates happen to share) by
-           simply not jittering a coordinate AXIS whose raw value repeats
-           across multiple DISTINCT mesh vertices -- the empirical signature
-           of intentional CAD-precise flatness/alignment (e.g. every vertex
-           of a planar sub-mesh sharing the exact same Z). Per axis, sorts
-           one representative position per distinct (x,y,z) vertex group
-           (O(n log n), practical at real mesh scale) and marks any value
-           occurring 2+ times as a run; an axis is skipped for a given
-           corner if its distinct vertex's value is part of such a run
-           anywhere in the mesh, WITHIN THE SAME CONNECTED COMPONENT (part) --
-           see below for why component-scoping is necessary. The dedup-to-
-           distinct-groups step matters: an earlier version operated on raw
-           (unwelded) corners directly, which trivially "repeats" for every
-           OTHER corner of any vertex touched by 2+ triangles (nearly all
-           vertices in any connected mesh) and swamped the real flatness
-           signal -- confirmed on beetle_1000000.stl, where the raw-corner
-           version flagged 100% of corners (i.e. degenerated into global
-           jitter-off in disguise, already known to fail that file).
-
-           COMPONENT SCOPING (2026-08-12, fixing a real regression): the
-           first shipped version (2026-08-11) checked for a repeated axis
-           value across the WHOLE mesh/assembly, not per part -- confirmed
-           via a real 126-part assembly (car_v76_suspension_brake_pmi.stl,
-           previously working with only the known flat-placement-transform
-           gap) that this breaks multi-part files: two UNRELATED parts
-           (e.g. standardized/mirrored sub-components at different assembly
-           locations) coincidentally sharing one axis-aligned coordinate
-           value gets misread as the "intentional CAD-flatness" signal this
-           probe is meant to detect, suppressing jitter that was never safe
-           to suppress for that vertex and reintroducing the exact
-           quantization-collision risk jitter exists to avoid (turned this
-           file from "working, misplaced parts" into "fully empty scene and
-           model tree"). Fixed by scoping the repeat check to each
-           connected component (part) independently, via a cheap trial
-           weld + union-find over shared edges on the RAW pre-jitter
-           positions (same technique as stl_import_jitter_needs_per_
-           triangle_scope above) -- a value repeating WITHIN one part still
-           counts (genuine intra-part flatness), a coincidental match
-           ACROSS unrelated parts no longer does.
-
-           Validated (real Adobe Acrobat) before promotion: hand.stl 11-
-           triangle repro (fixed -- neither the tilt-inheritance fix nor the
-           origin-choice fix alone resolved it), beetle_1000000.stl and
-           UK_original.stl (both previously required broad per-triangle
-           jitter and do NOT regress with this targeted version), and 12/20
-           (60%) of a real, independently-reviewed "empty model tree"
-           failure sample from a 185-file corpus batch, zero regressions
-           observed across every file tested (see project memory
-           project_jitter_skip_repeated_axes_2026-08-11 for the full
-           evidence table, including the car_v76 regression and this fix).
-           PRC_DIAG_JITTER_DISABLE_SKIP_REPEATED_AXES overrides back to the
-           old (unscoped) jitter behavior, for comparison/regression
-           testing only. */
-        uint8_t *repeated_axis_vertex_flag[3] = {NULL, NULL, NULL};
-        uint8_t skip_repeated_axes = (prc_diag_getenv("PRC_DIAG_JITTER_DISABLE_SKIP_REPEATED_AXES") == NULL);
-        if (skip_repeated_axes && !preweld_disabled)
-        {
-            uint32_t total_corners = mesh.num_triangles * 3;
-            uint32_t *corner_component = (uint32_t *)malloc(sizeof(uint32_t) * total_corners);
-            {
-                weld_grid comp_grid;
-                uint32_t *comp_weld_index = (uint32_t *)malloc(sizeof(uint32_t) * (size_t)total_corners);
-                uint32_t *comp_parent = NULL;
-                uint8_t *comp_rank = NULL;
-                uint32_t *comp_of_root = NULL;
-                uint32_t num_comp = 0;
-                double comp_abs_tol = weld_tolerance_fraction * diagonal;
-                memset(&comp_grid, 0, sizeof(comp_grid));
-                if (corner_component != NULL && comp_weld_index != NULL &&
-                    weld_grid_init(&comp_grid, comp_abs_tol, total_corners) == 0)
-                {
-                    uint32_t i2, t2;
-                    uint8_t comp_ok = 1;
-                    for (i2 = 0; i2 < total_corners; i2++)
-                    {
-                        uint32_t wv = weld_grid_lookup_or_insert(&comp_grid, &mesh.raw_positions[(size_t)i2 * 3], comp_abs_tol);
-                        if (wv == UINT32_MAX) { comp_ok = 0; break; }
-                        comp_weld_index[i2] = wv;
-                    }
-                    if (comp_ok)
-                    {
-                        comp_parent = (uint32_t *)malloc(sizeof(uint32_t) * comp_grid.count);
-                        comp_rank = (uint8_t *)calloc(comp_grid.count, sizeof(uint8_t));
-                        comp_of_root = (uint32_t *)malloc(sizeof(uint32_t) * comp_grid.count);
-                        if (comp_parent != NULL && comp_rank != NULL && comp_of_root != NULL)
-                        {
-                            for (i2 = 0; i2 < comp_grid.count; i2++) comp_parent[i2] = i2;
-                            for (t2 = 0; t2 < mesh.num_triangles; t2++)
-                            {
-                                uf_union(comp_parent, comp_rank, comp_weld_index[t2 * 3 + 0], comp_weld_index[t2 * 3 + 1]);
-                                uf_union(comp_parent, comp_rank, comp_weld_index[t2 * 3 + 1], comp_weld_index[t2 * 3 + 2]);
-                            }
-                            for (i2 = 0; i2 < comp_grid.count; i2++) comp_of_root[i2] = UINT32_MAX;
-                            for (i2 = 0; i2 < comp_grid.count; i2++)
-                            {
-                                uint32_t r2 = uf_find(comp_parent, i2);
-                                if (comp_of_root[r2] == UINT32_MAX) comp_of_root[r2] = num_comp++;
-                            }
-                            for (i2 = 0; i2 < total_corners; i2++)
-                                corner_component[i2] = comp_of_root[uf_find(comp_parent, comp_weld_index[i2])];
-                        }
-                        else
-                        {
-                            comp_ok = 0;
-                        }
-                    }
-                    if (!comp_ok)
-                    {
-                        /* Allocation failure: fall back to one shared component
-                           for everything -- degrades to the old (unscoped)
-                           behavior rather than crashing or leaving
-                           corner_component uninitialized. */
-                        uint32_t i3;
-                        for (i3 = 0; i3 < total_corners; i3++)
-                            if (corner_component != NULL) corner_component[i3] = 0;
-                    }
-                }
-                else if (corner_component != NULL)
-                {
-                    uint32_t i3;
-                    for (i3 = 0; i3 < total_corners; i3++) corner_component[i3] = 0;
-                }
-                free(comp_weld_index); free(comp_parent); free(comp_rank); free(comp_of_root);
-                weld_grid_free(&comp_grid);
-            }
-            prc_diag_corner_xyz_t *xyzbuf = (prc_diag_corner_xyz_t *)malloc(sizeof(prc_diag_corner_xyz_t) * total_corners);
-            uint32_t *corner_group = (uint32_t *)malloc(sizeof(uint32_t) * total_corners);
-            uint32_t *group_first_corner = (uint32_t *)malloc(sizeof(uint32_t) * total_corners);
-            uint32_t num_groups = 0;
-            if (xyzbuf != NULL && corner_group != NULL && group_first_corner != NULL)
-            {
-                uint32_t vi3;
-                for (vi3 = 0; vi3 < total_corners; vi3++)
-                {
-                    xyzbuf[vi3].x = mesh.raw_positions[(size_t)vi3 * 3 + 0];
-                    xyzbuf[vi3].y = mesh.raw_positions[(size_t)vi3 * 3 + 1];
-                    xyzbuf[vi3].z = mesh.raw_positions[(size_t)vi3 * 3 + 2];
-                    xyzbuf[vi3].vi = vi3;
-                }
-                qsort(xyzbuf, total_corners, sizeof(prc_diag_corner_xyz_t), prc_diag_corner_xyz_cmp);
-                for (vi3 = 0; vi3 < total_corners; vi3++)
-                {
-                    if (vi3 == 0 || xyzbuf[vi3].x != xyzbuf[vi3 - 1].x ||
-                        xyzbuf[vi3].y != xyzbuf[vi3 - 1].y || xyzbuf[vi3].z != xyzbuf[vi3 - 1].z)
-                    {
-                        group_first_corner[num_groups] = xyzbuf[vi3].vi;
-                        num_groups++;
-                    }
-                    corner_group[xyzbuf[vi3].vi] = num_groups - 1;
-                }
-            }
-            if (xyzbuf != NULL && corner_group != NULL && group_first_corner != NULL && corner_component != NULL && num_groups > 0)
-            {
-                prc_diag_axis_val_comp_t *sortbuf = (prc_diag_axis_val_comp_t *)malloc(sizeof(prc_diag_axis_val_comp_t) * num_groups);
-                uint8_t *group_axis_flag = (uint8_t *)malloc(num_groups);
-                if (sortbuf != NULL && group_axis_flag != NULL)
-                {
-                    int axis;
-                    for (axis = 0; axis < 3; axis++)
-                    {
-                        uint32_t g, vi3;
-                        repeated_axis_vertex_flag[axis] = (uint8_t *)calloc(total_corners, sizeof(uint8_t));
-                        if (repeated_axis_vertex_flag[axis] == NULL)
-                            continue;
-                        memset(group_axis_flag, 0, num_groups);
-                        for (g = 0; g < num_groups; g++)
-                        {
-                            sortbuf[g].val = mesh.raw_positions[(size_t)group_first_corner[g] * 3 + (size_t)axis];
-                            sortbuf[g].comp = corner_component[group_first_corner[g]];
-                            sortbuf[g].vi = g;
-                        }
-                        qsort(sortbuf, num_groups, sizeof(prc_diag_axis_val_comp_t), prc_diag_axis_val_comp_cmp);
-                        {
-                            uint32_t run_start = 0;
-                            while (run_start < num_groups)
-                            {
-                                uint32_t run_end = run_start + 1;
-                                while (run_end < num_groups && sortbuf[run_end].val == sortbuf[run_start].val &&
-                                    sortbuf[run_end].comp == sortbuf[run_start].comp)
-                                    run_end++;
-                                if (run_end - run_start >= 2)
-                                {
-                                    uint32_t k;
-                                    for (k = run_start; k < run_end; k++)
-                                        group_axis_flag[sortbuf[k].vi] = 1;
-                                }
-                                run_start = run_end;
-                            }
-                        }
-                        for (vi3 = 0; vi3 < total_corners; vi3++)
-                            repeated_axis_vertex_flag[axis][vi3] = group_axis_flag[corner_group[vi3]];
-                    }
-                }
-                if (sortbuf != NULL) free(sortbuf);
-                if (group_axis_flag != NULL) free(group_axis_flag);
-            }
-            if (xyzbuf != NULL) free(xyzbuf);
-            if (corner_group != NULL) free(corner_group);
-            if (group_first_corner != NULL) free(group_first_corner);
-            if (corner_component != NULL) free(corner_component);
-            if (repeated_axis_vertex_flag[0] != NULL && repeated_axis_vertex_flag[1] != NULL && repeated_axis_vertex_flag[2] != NULL)
-            {
-                uint32_t vi3, any_axis = 0, all_axes = 0;
-                for (vi3 = 0; vi3 < total_corners; vi3++)
-                {
-                    int flagged = (repeated_axis_vertex_flag[0][vi3] != 0) + (repeated_axis_vertex_flag[1][vi3] != 0) + (repeated_axis_vertex_flag[2][vi3] != 0);
-                    if (flagged > 0) any_axis++;
-                    if (flagged == 3) all_axes++;
-                }
-                printf("Jitter: %u/%u corners (%.1f%%) skipped on >=1 repeated-value axis, %u (%.1f%%) skipped on all 3 (%u/%u distinct positions)\n",
-                    (unsigned)any_axis, (unsigned)total_corners, 100.0 * any_axis / total_corners,
-                    (unsigned)all_axes, 100.0 * all_axes / total_corners,
-                    (unsigned)num_groups, (unsigned)total_corners);
-            }
-        }
-        if (!preweld_disabled)
-        {
-            uint32_t ti;
-            for (ti = 0; ti < mesh.num_triangles; ti++)
-            {
-                if (jitter_corner_allow == NULL && jitter_triangle_allow != NULL && !jitter_triangle_allow[ti])
-                    continue;
-                /* Each triangle's own 3-vertex bbox diagonal is a cheap, purely local scale proxy
-                   that needs no connectivity pre-pass (component membership isn't known until
-                   AFTER welding, which must run AFTER jitter -- see this block's own header
-                   comment on why jitter has to see raw, pre-weld positions). This errs toward
-                   UNDER-scaling for a part made of many triangles spanning more area than any one
-                   of them, which is the safe direction when it IS needed: nothing in this
-                   investigation ever found insufficient jitter to cause new breakage, only to
-                   occasionally fail to escape an existing collision -- see
-                   stl_import_jitter_needs_per_triangle_scope for when this finer scope applies
-                   instead of the coarser whole-mesh one. */
-                double mag;
-                if (preweld_env != NULL)
-                {
-                    mag = atof(preweld_env);
-                }
-                else if (!use_per_triangle)
-                {
-                    mag = weld_tolerance_fraction * diagonal * 8.65969267656085;
-                }
-                else
-                {
-                    double tri_bbox_min[3], tri_bbox_max[3], tri_ext[3], tri_diag;
-                    int c, a;
-                    bbox_reset(tri_bbox_min, tri_bbox_max);
-                    for (c = 0; c < 3; c++)
-                        bbox_expand(tri_bbox_min, tri_bbox_max, &mesh.raw_positions[(size_t)(ti * 3 + c) * 3]);
-                    for (a = 0; a < 3; a++) tri_ext[a] = tri_bbox_max[a] - tri_bbox_min[a];
-                    tri_diag = sqrt(tri_ext[0] * tri_ext[0] + tri_ext[1] * tri_ext[1] + tri_ext[2] * tri_ext[2]);
-                    if (tri_diag < 1e-9) tri_diag = diagonal; /* degenerate guard: fall back to whole-mesh scale */
-                    mag = weld_tolerance_fraction * tri_diag * 8.65969267656085;
-                }
-                {
-                    int c;
-                    for (c = 0; c < 3; c++)
-                    {
-                        uint32_t vi = ti * 3 + (uint32_t)c;
-                        double *pv;
-                        float fx, fy, fz;
-
-                        if (jitter_corner_allow != NULL && !jitter_corner_allow[vi])
-                            continue;
-                        pv = &mesh.raw_positions[(size_t)vi * 3];
-                        fx = (float)pv[0]; fy = (float)pv[1]; fz = (float)pv[2];
-                        uint8_t in[12], digest[16];
-                        uint32_t hx, hy, hz;
-
-                        memcpy(in + 0, &fx, 4);
-                        memcpy(in + 4, &fy, 4);
-                        memcpy(in + 8, &fz, 4);
-                        prc_md5_12bytes(in, digest);
-                        hx = (uint32_t)digest[0] | ((uint32_t)digest[1] << 8) | ((uint32_t)digest[2] << 16) | ((uint32_t)digest[3] << 24);
-                        hy = (uint32_t)digest[4] | ((uint32_t)digest[5] << 8) | ((uint32_t)digest[6] << 16) | ((uint32_t)digest[7] << 24);
-                        hz = (uint32_t)digest[8] | ((uint32_t)digest[9] << 8) | ((uint32_t)digest[10] << 16) | ((uint32_t)digest[11] << 24);
-                        if (repeated_axis_vertex_flag[0] == NULL || !repeated_axis_vertex_flag[0][vi])
-                            pv[0] += (((double)hx / (double)0xFFFFFFFFu) * 2.0 - 1.0) * mag;
-                        if (repeated_axis_vertex_flag[1] == NULL || !repeated_axis_vertex_flag[1][vi])
-                            pv[1] += (((double)hy / (double)0xFFFFFFFFu) * 2.0 - 1.0) * mag;
-                        if (repeated_axis_vertex_flag[2] == NULL || !repeated_axis_vertex_flag[2][vi])
-                            pv[2] += (((double)hz / (double)0xFFFFFFFFu) * 2.0 - 1.0) * mag;
-                        /* Truncate to float32: an earlier, externally-scripted version of this
-                           mitigation wrote the jittered result back into a binary STL file (float32-
-                           only storage) before nanoPRC ever read it, so the value actually used was
-                           float32-rounded, not full double precision. Confirmed empirically to matter:
-                           without this truncation, the exact same hash/magnitude/application-point
-                           combination (verified byte-identical to the working script's own computation
-                           before this rounding step) still failed on beetle_1000000.stl. */
-                        pv[0] = (double)(float)pv[0];
-                        pv[1] = (double)(float)pv[1];
-                        pv[2] = (double)(float)pv[2];
-                        if (vi == 0 && prc_diag_getenv("PRC_DIAG_JITTER_DEBUG") != NULL)
-                            fprintf(stderr, "PRC_DIAG_JITTER_DEBUG orig=(%.17g,%.17g,%.17g) jittered=(%.17g,%.17g,%.17g)\n",
-                                (double)fx, (double)fy, (double)fz, pv[0], pv[1], pv[2]);
-                    }
-                }
-            }
-        }
-        if (jitter_triangle_allow != NULL)
-            free(jitter_triangle_allow);
-        if (jitter_corner_allow != NULL)
-            free(jitter_corner_allow);
-        {
-            int axis;
-            for (axis = 0; axis < 3; axis++)
-            {
-                if (repeated_axis_vertex_flag[axis] != NULL) free(repeated_axis_vertex_flag[axis]);
-            }
         }
     }
 

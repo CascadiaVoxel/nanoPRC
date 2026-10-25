@@ -161,4 +161,11 @@ uint32_t prc_write_texture_definition_add(prc_context *ctx, prc_write_global_tab
     const prc_graph_texture_transformation *uv_transform,
     const prc_cart_transformation *transformation);
 
+/* Gives an existing texture definition one texture_mapping_attributes bit,
+   with its intensity and component mask. The format allows at most one of
+   each. 0 on success. */
+int prc_write_texture_definition_set_attribute(prc_context *ctx, prc_write_global_tables *tables,
+    uint32_t biased_definition, PRC_texture_mapping_attributes_t attribute, double intensity,
+    PRC_texture_mapping_components_t components);
+
 #endif

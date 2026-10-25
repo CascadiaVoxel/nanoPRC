@@ -998,6 +998,31 @@ typedef enum
 } prc_api_write_ri_kind_t;
 
 /**
+ * @brief One texture layer after an item's main texture.
+ *
+ * The format chains texture applications: each names the next, and a reader
+ * combines them in order. Real files use two kinds after, or instead of, the
+ * diffuse image: an opacity mask, a greyscale image whose brightness is how
+ * opaque the surface is, and a spherical reflection, an environment image
+ * mixed in at a low intensity.
+ */
+typedef struct prc_api_write_texture_layer_s
+{
+    /** A prc_api_write_texture_kind value. */
+    uint32_t kind;
+    /** Raw pixels, or an encoded PNG/JPEG file, per format. */
+    const uint8_t *image;
+    size_t   image_size;
+    /** As texture_format on prc_api_write_rep_item. */
+    uint32_t format;
+    /** Required for the raw formats; parsed from the file for PNG/JPEG. */
+    uint32_t width;
+    uint32_t height;
+    /** 0 to 1; 0 is read as 1. */
+    double   intensity;
+} prc_api_write_texture_layer;
+
+/**
  * @brief One representation item attached to a prc_api_write_node.
  *
  * A representation item does not carry geometry itself -- it points at one
@@ -1060,9 +1085,10 @@ typedef struct prc_api_write_rep_item_s
        the reader has no UVs to sample with and the surface renders
        untextured, which is silent rather than an error.
 
-       Only a plain 2D diffuse texture is written. Blend functions, alpha
-       testing and generated (projected) coordinates all exist in the format
-       and are refused here rather than half-written. */
+       The image is a diffuse texture unless texture_kind says otherwise,
+       and texture_layers can add an opacity mask or a reflection after it.
+       Blend functions, alpha testing and generated (projected) coordinates
+       all exist in the format and are refused here rather than half-written. */
     /** 1 to attach texture_image below. Requires has_material. */
     uint8_t  has_texture;
     /** Raw pixels, or an encoded PNG/JPEG file, per texture_format. */
@@ -1094,6 +1120,17 @@ typedef struct prc_api_write_rep_item_s
         non-finite offset, is refused. */
     double   texture_scale[2];
     double   texture_offset[2];
+    /** What the main texture is, a prc_api_write_texture_kind value. 0
+        (DIFFUSE) colours the surface, as before. */
+    uint32_t texture_kind;
+    /** 0 to 1; 0 is read as 1. How strongly the main texture applies. A
+        diffuse texture with no layers is written as before and ignores it. */
+    double   texture_intensity;
+    /** Further layers, applied after the main texture in this order. Each
+        uses the item's texture coordinates, wrap modes and placement.
+        Requires has_texture. */
+    const prc_api_write_texture_layer *texture_layers;
+    uint32_t num_texture_layers;
 } prc_api_write_rep_item;
 
 /** @brief texture_format values for prc_api_write_rep_item. */
@@ -1133,6 +1170,28 @@ typedef enum
     /** Beyond 0..1 the surface shows its own colour. */
     PRC_API_WRITE_TEXTURE_WRAP_CLAMP_TO_BORDER = 1
 } prc_api_write_texture_wrap;
+
+/** @brief texture_kind and prc_api_write_texture_layer kind values.
+
+    The three kinds real files use. Each is written as those files write it:
+    an opacity mask as the opacity attribute with the alpha component, a
+    reflection as the spherical-reflection attribute with the colour
+    components, and a diffuse texture that other layers follow as the diffuse
+    attribute with the colour components. Adobe Acrobat 2026.002.22031 shows
+    all three, on their own and after a diffuse texture. The format's other
+    attributes (bump, cubical reflection, refraction, specular, ambient,
+    emission) appear in no file of the public collection and are not
+    offered. */
+typedef enum
+{
+    /** Colours the surface. */
+    PRC_API_WRITE_TEXTURE_KIND_DIFFUSE = 0,
+    /** A greyscale image: white is opaque, black fully see-through. */
+    PRC_API_WRITE_TEXTURE_KIND_OPACITY = 1,
+    /** An environment image, typically a 2:1 panorama, reflected by the
+        surface. */
+    PRC_API_WRITE_TEXTURE_KIND_SPHERICAL_REFLECTION = 2
+} prc_api_write_texture_kind;
 
 /**
  * @brief One polyline or line segment for a WIRE tessellation entry.

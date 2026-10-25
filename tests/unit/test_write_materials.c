@@ -766,6 +766,278 @@ test_shared_tessellation_names_no_style(prc_context *ctx)
     remove(TEST_MATERIALS_FILENAME);
 }
 
+/* Writes one leaf per item, each over its own copy of the one-triangle
+   tessellation with texture coordinates, to TEST_MATERIALS_FILENAME. Returns
+   the writer's result; the file is written only on success. */
+static int
+write_textured_items(prc_context *ctx, const char *name, prc_api_write_rep_item *items, uint32_t n)
+{
+    static const double uvs[3 * 2] = { 0.0, 0.0,  1.0, 0.0,  0.0, 1.0 };
+    prc_api_write_tessellation tess[3];
+    prc_api_write_node leaves[3], root;
+    prc_api_write_node *kids[3];
+    uint8_t *buf = NULL;
+    size_t buf_size = 0;
+    FILE *fid;
+    uint32_t k;
+    int rc;
+
+    PRC_ASSERT(n >= 1 && n <= 3);
+    for (k = 0; k < n; k++)
+    {
+        fill_tess(&tess[k]);
+        tess[k].tex_coords = uvs;
+        tess[k].num_tex_coords = 3;
+        tess[k].tex_indices = tri_indices;
+        items[k].kind = PRC_API_WRITE_RI_SURFACE;
+        items[k].biased_tessellation_index = k + 1;
+
+        memset(&leaves[k], 0, sizeof(leaves[k]));
+        leaves[k].rep_items = &items[k];
+        leaves[k].num_rep_items = 1;
+        leaves[k].bbox_max[0] = leaves[k].bbox_max[1] = 1.0;
+        kids[k] = &leaves[k];
+    }
+    memset(&root, 0, sizeof(root));
+    root.name = "root";
+    root.children = kids;
+    root.num_children = n;
+    root.bbox_max[0] = root.bbox_max[1] = 1.0;
+
+    rc = prc_api_write_prc_buffer(ctx, name, &root, tess, n, &buf, &buf_size);
+    if (rc != 0)
+        return rc;
+    fid = fopen(TEST_MATERIALS_FILENAME, "wb");
+    PRC_ASSERT_NOT_NULL(fid);
+    PRC_ASSERT_EQ(fwrite(buf, 1, buf_size, fid), buf_size);
+    fclose(fid);
+    prc_api_write_prc_buffer_free(ctx, buf);
+    return 0;
+}
+
+/* One texture layer as the file holds it, followed from an application. */
+typedef struct
+{
+    uint32_t attributes;
+    uint32_t num_intensities;
+    double   intensity;
+    uint32_t num_components;
+    uint32_t components;
+    uint8_t  first_byte;   /* of the stored image, to tell the images apart */
+    uint32_t wrap_s;
+    uint32_t material;     /* the application's biased_material_generic_index */
+} layer_seen;
+
+/* Follows one item from its style through every texture application in the
+   chain, and returns how many layers it found (at most max). */
+static uint32_t
+follow_layers(const prc_data *data, const prc_ri *ri, layer_seen *out, uint32_t max)
+{
+    const prc_file_struct_internal_global_data *gd = &data->file_struct[0].globals->global_data;
+    const prc_graph_style *st;
+    uint32_t si, mi, n = 0;
+
+    si = ri->ri_poly_brep_model->item_content.base.graphics_content.biased_index_of_line_style;
+    PRC_ASSERT(si >= 1 && si <= gd->style_count);
+    st = &gd->styles[si - 1];
+    PRC_ASSERT(st->is_material);
+    mi = st->biased_color_index;
+    while (mi != 0)
+    {
+        const prc_graph_material *app;
+        const prc_graph_texture_definition *def;
+        const prc_graph_picture *pic;
+        const prc_uncomp_block *blk;
+
+        PRC_ASSERT(n < max);
+        PRC_ASSERT(mi <= gd->material_count);
+        app = &gd->materials[mi - 1];
+        PRC_ASSERT_EQ(app->tag, PRC_TYPE_GRAPH_TextureApplication);
+        PRC_ASSERT_EQ(app->biased_uv_coordinates_index, 1);
+        PRC_ASSERT(app->biased_texture_definition_index >= 1 &&
+                   app->biased_texture_definition_index <= gd->texture_count);
+        def = &gd->textures[app->biased_texture_definition_index - 1];
+        PRC_ASSERT(def->biased_picture_index >= 1 && def->biased_picture_index <= gd->picture_count);
+        pic = &gd->pictures[def->biased_picture_index - 1];
+        PRC_ASSERT(pic->biased_uncompressed_file_index >= 1 &&
+                   pic->biased_uncompressed_file_index <= data->file_struct[0].header->file_count);
+        blk = &data->file_struct[0].header->files[pic->biased_uncompressed_file_index - 1];
+
+        out[n].attributes = (uint32_t)def->texture_mapping_attributes;
+        out[n].num_intensities = def->number_texture_mapping_attributes_intensities;
+        out[n].intensity = out[n].num_intensities ? def->texture_mapping_attributes_intensities[0] : -1.0;
+        out[n].num_components = def->number_of_texture_mapping_attributes_components;
+        out[n].components = out[n].num_components ? def->texture_mapping_attributes_components[0] : 0xFFu;
+        out[n].first_byte = blk->block[0];
+        out[n].wrap_s = (uint32_t)def->texture_wrapping_mode_s;
+        out[n].material = app->biased_material_generic_index;
+        n++;
+        mi = app->biased_next_texture_index;
+    }
+    return n;
+}
+
+/* Three items: a diffuse image followed by an opacity mask and a reflection,
+   a reflection on its own, and a plain diffuse image. Each layer is checked
+   for its kind, intensity, components and image, in order, and for sharing
+   the item's material and wrap mode. The plain item must be written exactly
+   as before layers existed: no attribute and empty arrays.
+
+   The three images differ in their first byte, so a chain written in the
+   wrong order or pointing at the wrong picture fails. The reflection layer's
+   intensity is not 1, so a writer that dropped the intensity, or wrote the
+   main texture's, fails too. */
+static void
+test_texture_layers(prc_context *ctx)
+{
+    static const uint8_t image_x[2 * 2 * 3] = {
+        0x11, 0x00, 0x00,   0x00, 0xFF, 0x00,
+        0x00, 0x00, 0xFF,   0xFF, 0xFF, 0x00
+    };
+    static const uint8_t image_m[2 * 2 * 3] = {
+        0x22, 0x22, 0x22,   0x80, 0x80, 0x80,
+        0xFF, 0xFF, 0xFF,   0x00, 0x00, 0x00
+    };
+    static const uint8_t image_e[2 * 2 * 3] = {
+        0x33, 0x66, 0xCC,   0x33, 0x66, 0xCC,
+        0x66, 0x44, 0x22,   0x66, 0x44, 0x22
+    };
+    prc_api_write_texture_layer layers[2];
+    prc_api_write_rep_item items[3];
+    prc_data *data;
+    const prc_asm_file_structure_tree *tree;
+    layer_seen seen[4];
+    uint32_t found = 0, i, k, n;
+
+    printf("  sub-case: texture layers chain in order with their kinds\n");
+
+    memset(layers, 0, sizeof(layers));
+    layers[0].kind = PRC_API_WRITE_TEXTURE_KIND_OPACITY;
+    layers[0].image = image_m;
+    layers[0].image_size = sizeof(image_m);
+    layers[0].format = PRC_API_WRITE_TEXTURE_RGB;
+    layers[0].width = layers[0].height = 2;
+    layers[1].kind = PRC_API_WRITE_TEXTURE_KIND_SPHERICAL_REFLECTION;
+    layers[1].image = image_e;
+    layers[1].image_size = sizeof(image_e);
+    layers[1].format = PRC_API_WRITE_TEXTURE_RGB;
+    layers[1].width = layers[1].height = 2;
+    layers[1].intensity = 0.25;
+
+    memset(items, 0, sizeof(items));
+    for (k = 0; k < 3; k++)
+    {
+        items[k].has_material = 1;
+        items[k].material_color[0] = items[k].material_color[1] = items[k].material_color[2] = 1.0;
+        items[k].material_alpha = 1.0;
+        items[k].has_texture = 1;
+        items[k].texture_format = PRC_API_WRITE_TEXTURE_RGB;
+        items[k].texture_width = items[k].texture_height = 2;
+        items[k].texture_image_size = sizeof(image_x);
+    }
+    items[0].texture_image = image_x;
+    items[0].texture_wrap_u = PRC_API_WRITE_TEXTURE_WRAP_CLAMP_TO_BORDER;
+    items[0].texture_layers = layers;
+    items[0].num_texture_layers = 2;
+    items[1].texture_image = image_e;
+    items[1].texture_kind = PRC_API_WRITE_TEXTURE_KIND_SPHERICAL_REFLECTION;
+    items[1].texture_intensity = 0.5;
+    items[2].texture_image = image_x;
+
+    PRC_ASSERT_EQ(write_textured_items(ctx, "texture_layers", items, 3), 0);
+    data = prc_api_open_contents(ctx, TEST_MATERIALS_FILENAME);
+    if (data == NULL)
+        prc_api_print_error_stack(ctx);
+    PRC_ASSERT_NOT_NULL(data);
+
+    tree = data->file_struct[0].tree;
+    PRC_ASSERT_NOT_NULL(tree);
+    for (i = 0; i < tree->parts_count; i++)
+    {
+        const prc_asm_parts_definition *part = &tree->parts[i];
+        uint32_t j;
+
+        for (j = 0; j < part->num_rep_items; j++)
+        {
+            const prc_ri *ri = &part->rep_items[j];
+
+            if (ri->ri_poly_brep_model == NULL)
+                continue;
+            n = follow_layers(data, ri, seen, 4);
+            if (found == 0)
+            {
+                PRC_ASSERT_EQ(n, 3);
+                /* diffuse, marked because layers follow */
+                PRC_ASSERT_EQ(seen[0].attributes, 0x1u);
+                PRC_ASSERT_EQ(seen[0].num_intensities, 1);
+                PRC_ASSERT_NEAR(seen[0].intensity, 1.0, 1e-12);
+                PRC_ASSERT_EQ(seen[0].components, 0x7u);
+                PRC_ASSERT_EQ(seen[0].first_byte, 0x11);
+                /* opacity mask, intensity 0 read as 1 */
+                PRC_ASSERT_EQ(seen[1].attributes, 0x4u);
+                PRC_ASSERT_EQ(seen[1].num_intensities, 1);
+                PRC_ASSERT_NEAR(seen[1].intensity, 1.0, 1e-12);
+                PRC_ASSERT_EQ(seen[1].num_components, 1);
+                PRC_ASSERT_EQ(seen[1].components, 0x8u);
+                PRC_ASSERT_EQ(seen[1].first_byte, 0x22);
+                /* reflection */
+                PRC_ASSERT_EQ(seen[2].attributes, 0x8u);
+                PRC_ASSERT_NEAR(seen[2].intensity, 0.25, 1e-12);
+                PRC_ASSERT_EQ(seen[2].components, 0x7u);
+                PRC_ASSERT_EQ(seen[2].first_byte, 0x33);
+                for (k = 0; k < 3; k++)
+                {
+                    PRC_ASSERT_EQ(seen[k].wrap_s, (uint32_t)PRC_texture_wrapping_clamp_to_border);
+                    PRC_ASSERT_EQ(seen[k].material, seen[0].material);
+                }
+            }
+            else if (found == 1)
+            {
+                PRC_ASSERT_EQ(n, 1);
+                PRC_ASSERT_EQ(seen[0].attributes, 0x8u);
+                PRC_ASSERT_NEAR(seen[0].intensity, 0.5, 1e-12);
+                PRC_ASSERT_EQ(seen[0].components, 0x7u);
+                PRC_ASSERT_EQ(seen[0].first_byte, 0x33);
+            }
+            else
+            {
+                PRC_ASSERT_EQ(n, 1);
+                PRC_ASSERT_EQ(seen[0].attributes, 0u);
+                PRC_ASSERT_EQ(seen[0].num_intensities, 0);
+                PRC_ASSERT_EQ(seen[0].num_components, 0);
+                PRC_ASSERT_EQ(seen[0].first_byte, 0x11);
+                PRC_ASSERT_EQ(seen[0].wrap_s, (uint32_t)PRC_texture_wrapping_repeat);
+            }
+            found++;
+        }
+    }
+    PRC_ASSERT_EQ(found, 3);
+    prc_api_release_data(ctx, (prc_api_data)data, NULL, 0, NULL, 0, NULL, 0, NULL);
+    remove(TEST_MATERIALS_FILENAME);
+
+    printf("  sub-case: invalid texture layers are refused\n");
+    items[0].has_texture = 0;
+    PRC_ASSERT(write_textured_items(ctx, "layers_no_texture", items, 1) != 0);
+    items[0].has_texture = 1;
+    items[0].texture_layers = NULL;
+    PRC_ASSERT(write_textured_items(ctx, "layers_null", items, 1) != 0);
+    items[0].texture_layers = layers;
+    layers[1].intensity = 1.5;
+    PRC_ASSERT(write_textured_items(ctx, "layers_intensity", items, 1) != 0);
+    layers[1].intensity = 0.25;
+    layers[0].kind = 3;
+    PRC_ASSERT(write_textured_items(ctx, "layers_kind", items, 1) != 0);
+    layers[0].kind = PRC_API_WRITE_TEXTURE_KIND_OPACITY;
+    layers[0].image = NULL;
+    PRC_ASSERT(write_textured_items(ctx, "layers_no_image", items, 1) != 0);
+    layers[0].image = image_m;
+    items[0].texture_kind = 3;
+    PRC_ASSERT(write_textured_items(ctx, "main_kind", items, 1) != 0);
+    items[0].texture_kind = 0;
+    PRC_ASSERT_EQ(write_textured_items(ctx, "layers_ok_again", items, 1), 0);
+    remove(TEST_MATERIALS_FILENAME);
+}
+
 int
 main(void)
 {
@@ -782,6 +1054,7 @@ main(void)
     test_default_still_applies(ctx);
     test_face_names_its_style(ctx);
     test_shared_tessellation_names_no_style(ctx);
+    test_texture_layers(ctx);
 
     prc_release_context(ctx);
 

@@ -335,6 +335,112 @@ prc_write_texture_uv_transform(prc_context *ctx, const prc_api_write_rep_item *r
     return 0;
 }
 
+/* Adds the picture for one image in any of the API's formats and returns its
+   biased index, or 0 on failure. Shared by an item's main texture and its
+   layers. */
+static uint32_t
+prc_write_texture_picture(prc_context *ctx, prc_write_global_tables *tables, uint32_t format,
+    const uint8_t *image, size_t image_size, uint32_t width, uint32_t height)
+{
+    prc_write_picture pic;
+
+    if (image == NULL || image_size == 0)
+    {
+        prc_error(ctx, PRC_ERROR_INTERNAL,
+            "prc_write_add_item_style: has_texture with no image\n");
+        return 0;
+    }
+
+    memset(&pic, 0, sizeof(pic));
+    switch (format)
+    {
+    case PRC_API_WRITE_TEXTURE_RGB:  pic.format = PRC_WRITE_PIX_RGB;  break;
+    case PRC_API_WRITE_TEXTURE_RGBA: pic.format = PRC_WRITE_PIX_RGBA; break;
+    case PRC_API_WRITE_TEXTURE_PNG:  pic.format = PRC_WRITE_PIX_PNG;  break;
+    case PRC_API_WRITE_TEXTURE_JPEG: pic.format = PRC_WRITE_PIX_JPEG; break;
+    default:
+        prc_error(ctx, PRC_ERROR_INTERNAL,
+            "prc_write_add_item_style: unknown texture format\n");
+        return 0;
+    }
+    pic.data = image;
+    pic.data_size = image_size;
+    pic.width = width;
+    pic.height = height;
+    return prc_write_picture_add(ctx, tables, &pic);
+}
+
+/* Marks a texture definition with its layer kind, as the real files that
+   chain layers write each one: an opacity mask uses the alpha component, a
+   reflection and a diffuse image the colour components. A diffuse texture
+   with no layers is left unmarked, so a file without layers is written
+   exactly as before. An intensity of 0 is read as 1. */
+static int
+prc_write_texture_kind(prc_context *ctx, prc_write_global_tables *tables,
+    uint32_t biased_definition, uint32_t kind, double intensity, int has_layers)
+{
+    if (!(intensity >= 0.0 && intensity <= 1.0))
+    {
+        prc_error(ctx, PRC_ERROR_INTERNAL,
+            "prc_write_add_item_style: texture intensity must be in 0..1\n");
+        return PRC_ERROR_INTERNAL;
+    }
+    if (intensity == 0.0)
+        intensity = 1.0;
+    switch (kind)
+    {
+    case PRC_API_WRITE_TEXTURE_KIND_DIFFUSE:
+        if (!has_layers)
+            return 0;
+        return prc_write_texture_definition_set_attribute(ctx, tables, biased_definition,
+            PRC_texture_mapping_attributes_diffuse, intensity, PRC_texture_mapping_components_rgb);
+    case PRC_API_WRITE_TEXTURE_KIND_OPACITY:
+        return prc_write_texture_definition_set_attribute(ctx, tables, biased_definition,
+            PRC_texture_mapping_attributes_opacity, intensity, PRC_texture_mapping_components_alpha);
+    case PRC_API_WRITE_TEXTURE_KIND_SPHERICAL_REFLECTION:
+        return prc_write_texture_definition_set_attribute(ctx, tables, biased_definition,
+            PRC_texture_mapping_attributes_spherical_reflection, intensity,
+            PRC_texture_mapping_components_rgb);
+    default:
+        prc_error(ctx, PRC_ERROR_INTERNAL,
+            "prc_write_add_item_style: unknown texture kind\n");
+        return PRC_ERROR_INTERNAL;
+    }
+}
+
+/* Adds the texture application for one layer after an item's main texture,
+   over the same material, naming biased_next as the layer after it. Returns
+   its biased index, or 0 on failure. A layer always modulates: every layer
+   after the first in the public collection does. */
+static uint32_t
+prc_write_add_texture_layer(prc_context *ctx, prc_write_global_tables *tables,
+    const prc_api_write_texture_layer *layer, uint32_t biased_material, uint32_t biased_next,
+    PRC_texture_wrapping_mode_t wrap_s, PRC_texture_wrapping_mode_t wrap_t,
+    const prc_graph_texture_transformation *uv_transform)
+{
+    prc_graph_material app;
+    uint32_t biased_picture, biased_definition;
+
+    biased_picture = prc_write_texture_picture(ctx, tables, layer->format, layer->image,
+        layer->image_size, layer->width, layer->height);
+    if (biased_picture == 0)
+        return 0;
+    biased_definition = prc_write_texture_definition_add(ctx, tables, biased_picture,
+        PRC_texture_function_modulate, wrap_s, wrap_t, uv_transform, NULL);
+    if (biased_definition == 0)
+        return 0;
+    if (prc_write_texture_kind(ctx, tables, biased_definition, layer->kind, layer->intensity, 1) != 0)
+        return 0;
+
+    memset(&app, 0, sizeof(app));
+    app.tag = PRC_TYPE_GRAPH_TextureApplication;
+    app.biased_material_generic_index = biased_material;
+    app.biased_texture_definition_index = biased_definition;
+    app.biased_next_texture_index = biased_next;
+    app.biased_uv_coordinates_index = 1;   /* as for the main texture, below */
+    return prc_write_material_add(ctx, tables, &app);
+}
+
 /* Adds one item's own material and returns its biased style index, or 0 on
    failure. The colour, material and style tables all deduplicate, so two items
    asking for the same colour share one entry and the file carries one of each.
@@ -400,41 +506,26 @@ prc_write_add_item_style(prc_context *ctx, prc_write_global_tables *tables,
        from the material underneath: the image multiplies that colour, and an
        all-white material shows the image unaltered. Replace shows the image
        whatever the material's colour. */
+    if (ri->num_texture_layers > 0 && (!ri->has_texture || ri->texture_layers == NULL))
+    {
+        prc_error(ctx, PRC_ERROR_INTERNAL,
+            "prc_write_add_item_style: texture layers need has_texture and a layer array\n");
+        return 0;
+    }
+
     if (ri->has_texture)
     {
-        prc_write_picture pic;
         prc_graph_material app;
         uint32_t biased_picture, biased_definition, biased_app;
+        uint32_t biased_next = 0;
+        uint32_t k;
         PRC_texture_function_t function;
         PRC_texture_wrapping_mode_t wrap_s, wrap_t;
         prc_graph_texture_transformation uv_transform;
         uint8_t has_uv_transform;
 
-        if (ri->texture_image == NULL || ri->texture_image_size == 0)
-        {
-            prc_error(ctx, PRC_ERROR_INTERNAL,
-                "prc_write_add_item_style: has_texture with no image\n");
-            return 0;
-        }
-
-        memset(&pic, 0, sizeof(pic));
-        switch (ri->texture_format)
-        {
-        case PRC_API_WRITE_TEXTURE_RGB:  pic.format = PRC_WRITE_PIX_RGB;  break;
-        case PRC_API_WRITE_TEXTURE_RGBA: pic.format = PRC_WRITE_PIX_RGBA; break;
-        case PRC_API_WRITE_TEXTURE_PNG:  pic.format = PRC_WRITE_PIX_PNG;  break;
-        case PRC_API_WRITE_TEXTURE_JPEG: pic.format = PRC_WRITE_PIX_JPEG; break;
-        default:
-            prc_error(ctx, PRC_ERROR_INTERNAL,
-                "prc_write_add_item_style: unknown texture format\n");
-            return 0;
-        }
-        pic.data = ri->texture_image;
-        pic.data_size = ri->texture_image_size;
-        pic.width = ri->texture_width;
-        pic.height = ri->texture_height;
-
-        biased_picture = prc_write_picture_add(ctx, tables, &pic);
+        biased_picture = prc_write_texture_picture(ctx, tables, ri->texture_format,
+            ri->texture_image, ri->texture_image_size, ri->texture_width, ri->texture_height);
         if (biased_picture == 0)
             return 0;
 
@@ -465,12 +556,26 @@ prc_write_add_item_style(prc_context *ctx, prc_write_global_tables *tables,
             has_uv_transform ? &uv_transform : NULL, NULL);
         if (biased_definition == 0)
             return 0;
+        if (prc_write_texture_kind(ctx, tables, biased_definition, ri->texture_kind,
+                ri->texture_intensity, ri->num_texture_layers > 0) != 0)
+            return 0;
+
+        /* The layers, last first, so that each application can name the one
+           after it. The main texture's application then names the first. */
+        for (k = ri->num_texture_layers; k-- > 0; )
+        {
+            biased_next = prc_write_add_texture_layer(ctx, tables, &ri->texture_layers[k],
+                biased_material_index, biased_next, wrap_s, wrap_t,
+                has_uv_transform ? &uv_transform : NULL);
+            if (biased_next == 0)
+                return 0;
+        }
 
         memset(&app, 0, sizeof(app));
         app.tag = PRC_TYPE_GRAPH_TextureApplication;
         app.biased_material_generic_index = biased_material_index;
         app.biased_texture_definition_index = biased_definition;
-        app.biased_next_texture_index = 0;   /* no second texture layer */
+        app.biased_next_texture_index = biased_next;   /* 0: no further layer */
 
         /* 1, not 0. The reader unbiases this to uv_coordinates_index =
            value - 1, so 0 selects no UV set at all rather than the default

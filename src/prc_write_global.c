@@ -39,7 +39,21 @@ prc_write_global_tables_free(prc_context *ctx, prc_write_global_tables *tables)
     if (tables->materials != NULL) prc_free(ctx, tables->materials);
     if (tables->pictures != NULL) prc_free(ctx, tables->pictures);
     if (tables->styles != NULL) prc_free(ctx, tables->styles);
-    if (tables->texture_definitions != NULL) prc_free(ctx, tables->texture_definitions);
+    if (tables->texture_definitions != NULL)
+    {
+        uint32_t k;
+
+        for (k = 0; k < tables->texture_definition_count; k++)
+        {
+            prc_graph_texture_definition *d = &tables->texture_definitions[k];
+
+            if (d->texture_mapping_attributes_intensities != NULL)
+                prc_free(ctx, d->texture_mapping_attributes_intensities);
+            if (d->texture_mapping_attributes_components != NULL)
+                prc_free(ctx, d->texture_mapping_attributes_components);
+        }
+        prc_free(ctx, tables->texture_definitions);
+    }
     if (tables->files != NULL)
     {
         uint32_t k;
@@ -447,7 +461,9 @@ prc_write_texture_transformation(prc_context *ctx, prc_bit_write_state *s,
                               supplied there is nothing to project. Not
                               written at all now: the operator is on the wire
                               only for the mapping type that names one.
-     texture_mapping_attributes  0, not a channel mask -- see below.
+     texture_mapping_attributes  0 -- see below. A layer's kind is set
+                              afterwards, by
+                              prc_write_texture_definition_set_attribute.
      texture_function         the caller's: modulate or replace. Modulate,
                               the standard diffuse behaviour and the API's
                               default, multiplies the underlying colour by
@@ -565,13 +581,16 @@ prc_write_texture_definition_add(prc_context *ctx, prc_write_global_tables *tabl
     entry.texture_dimension = 2;
     entry.texture_mapping_type = PRC_texture_mapping_3D_tess;
     entry.texture_mapping_operator = PRC_texture_mapping_operator_unknown;
-    /* Zero, not an rgb/rgba channel mask. Measured across four independent
+    /* Zero, with both attribute arrays empty. The field says what the texture
+       does -- diffuse, opacity, reflection and so on
+       (07-base-entities.adoc:1174-1188) -- and the red/green/blue/alpha mask
+       is the separate components array. Measured across four independent
        producers in prc-db -- vis5d, Voxler, a welding-robot animation and a
-       PDF3D export -- every texture definition writes 0 here. The enum
-       (Table 99) offers red/green/blue/alpha bits and none of them is used.
-       Writing a mask is the reading the enum invites and is not what real
-       files do -- so the picture's alpha channel does not select anything
-       here, and this function takes no parameter for it. */
+       PDF3D export -- every plain diffuse texture writes 0 here, and readers
+       take 0 as diffuse. The files that chain layers (Adobe's Shoe,
+       Carburetor and Engine samples) mark every definition, diffuse
+       included; prc_write_texture_definition_set_attribute does that for an
+       item with layers. */
     entry.texture_mapping_attributes = 0;
     entry.texture_function = function;
     entry.blend_src_rgb = 0;
@@ -618,6 +637,41 @@ prc_write_texture_definition_add(prc_context *ctx, prc_write_global_tables *tabl
     tables->texture_definitions[tables->texture_definition_count] = entry;
     tables->texture_definition_count++;
     return tables->texture_definition_count;
+}
+
+int
+prc_write_texture_definition_set_attribute(prc_context *ctx, prc_write_global_tables *tables,
+    uint32_t biased_definition, PRC_texture_mapping_attributes_t attribute, double intensity,
+    PRC_texture_mapping_components_t components)
+{
+    prc_graph_texture_definition *d;
+
+    if (ctx == NULL || tables == NULL || biased_definition == 0 ||
+        biased_definition > tables->texture_definition_count ||
+        !(intensity >= 0.0 && intensity <= 1.0))
+    {
+        prc_error(ctx, PRC_ERROR_INTERNAL,
+            "prc_write_texture_definition_set_attribute: invalid arguments\n");
+        return PRC_ERROR_INTERNAL;
+    }
+    d = &tables->texture_definitions[biased_definition - 1];
+    if (d->texture_mapping_attributes_intensities == NULL)
+        d->texture_mapping_attributes_intensities = (double *)prc_malloc(ctx, sizeof(double));
+    if (d->texture_mapping_attributes_components == NULL)
+        d->texture_mapping_attributes_components = (uint8_t *)prc_malloc(ctx, sizeof(uint8_t));
+    if (d->texture_mapping_attributes_intensities == NULL ||
+        d->texture_mapping_attributes_components == NULL)
+    {
+        prc_error(ctx, PRC_ERROR_MEMORY,
+            "Allocation error in prc_write_texture_definition_set_attribute\n");
+        return PRC_ERROR_MEMORY;
+    }
+    d->texture_mapping_attributes = attribute;
+    d->number_texture_mapping_attributes_intensities = 1;
+    d->texture_mapping_attributes_intensities[0] = intensity;
+    d->number_of_texture_mapping_attributes_components = 1;
+    d->texture_mapping_attributes_components[0] = (uint8_t)components;
+    return 0;
 }
 
 /* Returns the 1-biased index of a picture already in the table with the same
@@ -904,10 +958,15 @@ prc_write_globals_to_stream(prc_context *ctx, prc_bit_write_state *s, const prc_
 
         if (prc_bitwrite_uint32(ctx, s, (uint32_t)d->texture_mapping_attributes) != 0) goto fail;
 
-        /* Both attribute arrays are empty by construction. A non-zero count
-           here would oblige the reader to read that many doubles or bytes. */
-        if (prc_bitwrite_uint32(ctx, s, 0) != 0) goto fail;   /* intensities */
-        if (prc_bitwrite_uint32(ctx, s, 0) != 0) goto fail;   /* components */
+        /* Both arrays are empty unless the definition is a layer, and then
+           hold one entry each: "Multiple procedures for texture application
+           are reserved for future use" (07-base-entities.adoc:1194). */
+        if (prc_bitwrite_uint32(ctx, s, d->number_texture_mapping_attributes_intensities) != 0) goto fail;
+        if (d->number_texture_mapping_attributes_intensities > 0)
+            if (prc_bitwrite_double(ctx, s, d->texture_mapping_attributes_intensities[0]) != 0) goto fail;
+        if (prc_bitwrite_uint32(ctx, s, d->number_of_texture_mapping_attributes_components) != 0) goto fail;
+        if (d->number_of_texture_mapping_attributes_components > 0)
+            if (prc_bitwrite_uint8(ctx, s, d->texture_mapping_attributes_components[0]) != 0) goto fail;
 
         /* blend_src's four doubles follow only for texture_function blend,
            which is refused on the way in. */

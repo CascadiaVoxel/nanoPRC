@@ -490,10 +490,11 @@ assert_rgb_near(const float got[3], const double want[3])
         PRC_ASSERT(got[c] > want[c] - 0.01 && got[c] < want[c] + 0.01);
 }
 
-/* has_material_slots gives each of the four slots its own colour; without it
-   ambient and specular repeat the diffuse colour and emissive is black. Four
-   unrelated colours, so a slot read from the wrong index cannot pass by
-   coincidence. */
+/* has_material_slots gives each of the four slots its own colour, and the
+   shininess is written as given; without it ambient repeats the diffuse
+   colour, specular is a dark grey 0.2, emissive is black, and a shininess of 0
+   is written as 0.3. Four unrelated colours, so a slot read from the wrong
+   index cannot pass by coincidence. */
 static void
 test_material_slots(prc_context *ctx)
 {
@@ -502,6 +503,7 @@ test_material_slots(prc_context *ctx)
     static const double specular[3] = { 0.9, 0.9, 0.4 };
     static const double emissive[3] = { 0.0, 0.7, 0.2 };
     static const double black[3]    = { 0.0, 0.0, 0.0 };
+    static const double grey[3]     = { 0.2, 0.2, 0.2 };
     prc_api_write_rep_item item;
     prc_api_material m;
 
@@ -524,8 +526,15 @@ test_material_slots(prc_context *ctx)
     assert_rgb_near(m.ambient, ambient);
     assert_rgb_near(m.specular, specular);
     assert_rgb_near(m.emissive, emissive);
+    PRC_ASSERT_NEAR(m.shininess, 0.5, 1e-6);
 
-    printf("  sub-case: without has_material_slots, one colour and black emissive\n");
+    /* With slots, a shininess of 0 is written as 0. */
+    item.material_shininess = 0.0;
+    write_and_read_face_material(ctx, &item, &m);
+    PRC_ASSERT_NEAR(m.shininess, 0.0, 1e-6);
+    item.material_shininess = 0.5;
+
+    printf("  sub-case: without has_material_slots, grey specular and black emissive\n");
 
     /* The slot colours stay filled in, so this also shows they are ignored
        when the flag is clear. */
@@ -533,8 +542,14 @@ test_material_slots(prc_context *ctx)
     write_and_read_face_material(ctx, &item, &m);
     assert_rgb_near(m.diffuse, diffuse);
     assert_rgb_near(m.ambient, diffuse);
-    assert_rgb_near(m.specular, diffuse);
+    assert_rgb_near(m.specular, grey);
     assert_rgb_near(m.emissive, black);
+    PRC_ASSERT_NEAR(m.shininess, 0.5, 1e-6);
+
+    /* Without slots, a shininess left at 0 is written as 0.3. */
+    item.material_shininess = 0.0;
+    write_and_read_face_material(ctx, &item, &m);
+    PRC_ASSERT_NEAR(m.shininess, 0.3, 1e-6);
 }
 
 /* An item that asks for no material still gets the shared default, which is

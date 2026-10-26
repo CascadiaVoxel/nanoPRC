@@ -1048,23 +1048,27 @@ typedef struct prc_api_write_rep_item_s
         at all.
 
         A material written here becomes a GRAPH_Material. By default its
-        ambient, diffuse and specular slots all point at material_color, and
-        its emissive slot at black; has_material_slots below gives each slot
-        its own colour. All four slots are always populated: a material with
+        ambient and diffuse slots point at material_color, its specular slot
+        at a dark grey (0.2) and its emissive slot at black;
+        has_material_slots below gives each slot its own colour. All four slots are always populated: a material with
         an unset emissive index is rejected outright when a viewer resolves
         it, even though lighter-weight checks upstream accept it. */
     uint8_t  has_material;
-    /** Linear RGB in 0..1. The diffuse colour, and also the ambient and
-        specular colour unless has_material_slots is 1. */
+    /** Linear RGB in 0..1. The diffuse colour, and also the ambient colour
+        unless has_material_slots is 1. */
     double   material_color[3];
     /** Opacity in 0..1; 1 is opaque. A zero here means fully transparent,
         not "unset" -- set it explicitly whenever has_material is 1. */
     double   material_alpha;
-    /** Specular exponent in 0..1. 0 is legal and means a matte surface. */
+    /** Specular exponent in 0..1. Unless has_material_slots is 1, 0 is
+        written as 0.3, which with the default grey specular gives a small
+        highlight; set has_material_slots to write exactly the value given,
+        0 included. */
     double   material_shininess;
     /** 1 to give the ambient, specular and emissive slots the colours below.
-        material_color then sets the diffuse slot only. Leave 0 and ambient
-        and specular take material_color and emissive is black, as before.
+        material_color then sets the diffuse slot only, and
+        material_shininess is written as given. Leave 0 and ambient takes
+        material_color, specular a dark grey (0.2) and emissive black.
         These map onto MTL's Ka, Ks and Ke, with Kd as material_color.
 
         There is no alpha per slot: a reader takes transparency from the

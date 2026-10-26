@@ -147,6 +147,23 @@ typedef struct prc_api_vertex_s
     float alpha;
 } prc_api_vertex;
 
+/** @brief What a texture layer does, as prc_api_texture kind.
+
+    Read from the texture definition's mapping attributes. A texture that
+    states none is diffuse. Any other attribute, or more than one at once,
+    reads as OTHER, and mapping_attributes then holds the bits. */
+typedef enum
+{
+    /** Colours the surface. */
+    PRC_API_TEXTURE_KIND_DIFFUSE = 0,
+    /** Says how opaque the surface is; real files use greyscale images. */
+    PRC_API_TEXTURE_KIND_OPACITY = 1,
+    /** An environment image reflected by the surface. */
+    PRC_API_TEXTURE_KIND_SPHERICAL_REFLECTION = 2,
+    /** Anything else: see mapping_attributes. */
+    PRC_API_TEXTURE_KIND_OTHER = 3
+} prc_api_texture_kind;
+
 typedef struct prc_api_texture_s
 {
     uint32_t height;
@@ -155,6 +172,23 @@ typedef struct prc_api_texture_s
     uint8_t has_transform;
     double transform[9];
     unsigned char *data;
+    /** A prc_api_texture_kind value. */
+    uint32_t kind;
+    /** The texture definition's mapping attribute bits as stored: diffuse
+        0x1, bump 0x2, opacity 0x4, spherical reflection 0x8, cubical
+        reflection 0x10, refraction 0x20, specular 0x40, ambient 0x80,
+        emission 0x100. 0 if the file states none. */
+    uint32_t mapping_attributes;
+    /** How strongly the layer applies, as stored; 1 if the file gives none. */
+    double intensity;
+    /** The components the layer applies to: red 0x1, green 0x2, blue 0x4,
+        alpha 0x8. 0xF if the file gives none. */
+    uint8_t components;
+    /** How many layers follow this one. A renderer combines them in order
+        after it; prc_api_get_texture_layer fetches each. */
+    uint32_t num_layers;
+    /** Internal to the library. */
+    const void *reserved;
 } prc_api_texture;
 
 typedef struct prc_api_tess_vertex_buffer_s
@@ -734,6 +768,24 @@ PRC_EXPORT uint8_t prc_api_skip_face(prc_context *ctx, const prc_api_tess *api_t
  * @param face_index Face index.
  */
 PRC_EXPORT void prc_api_get_face_material(prc_context *ctx, const prc_api_tess *api_tess, prc_api_material *material, uint32_t face_index);
+
+/**
+ * @brief Get one of the layers that follow a texture.
+ *
+ * The format chains textures: a face's texture can be followed by further
+ * layers, such as an opacity mask or a reflection, which a renderer combines
+ * in order. texture->num_layers says how many follow. layer_out is filled
+ * the way a face's texture is, and its own num_layers counts the layers
+ * after it. Its image stays valid for as long as the face's texture does.
+ *
+ * @param ctx Active API context.
+ * @param texture A face's texture, or a layer fetched with this function.
+ * @param layer 0 for the first layer after texture.
+ * @param layer_out Output layer.
+ * @return 0 on success, or PRC_API_ERROR_PARAMETER for a NULL pointer or a
+ *         layer that does not exist.
+ */
+PRC_EXPORT int prc_api_get_texture_layer(prc_context *ctx, const prc_api_texture *texture, uint32_t layer, prc_api_texture *layer_out);
 
 /**
  * @brief Get one text primitive from a tessellation.

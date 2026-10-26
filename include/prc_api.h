@@ -1551,7 +1551,11 @@ typedef struct prc_api_write_node_s
  *                         this array is index 1).
  * @param num_tess_entries Number of entries in tess_entries.
  * @return 0 on success, negative PRC_ERROR_* code on failure (see
- *         prc_api_print_error_stack for details).
+ *         prc_api_print_error_stack for details). Input is checked before
+ *         anything is written: a NULL array behind a non-zero count, an
+ *         index past the array it indexes, face_tri_counts that do not add
+ *         up to num_triangles, a NULL child, or a biased_tessellation_index
+ *         outside 1..num_tess_entries is refused with PRC_ERROR_INTERNAL.
  */
 PRC_EXPORT int prc_api_write_prc_file(prc_context *ctx, const char *filename,
     const char *model_name, const prc_api_write_node *root,

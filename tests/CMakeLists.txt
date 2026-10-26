@@ -87,6 +87,7 @@ add_test(NAME test_compressed_curve_release COMMAND test_compressed_curve_releas
 add_executable(test_pdf_file_id tests/unit/test_pdf_file_id.c)
 target_link_libraries(test_pdf_file_id prc_static)
 target_include_directories(test_pdf_file_id PRIVATE tests)
+target_compile_definitions(test_pdf_file_id PRIVATE PRC_TEST_EXAMPLES_DIR="${PROJECT_SOURCE_DIR}/examples")
 add_test(NAME test_pdf_file_id COMMAND test_pdf_file_id)
 
 add_executable(test_tess_index_mapping tests/unit/test_tess_index_mapping.c)

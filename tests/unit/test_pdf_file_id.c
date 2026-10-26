@@ -30,6 +30,13 @@
 #include "prc_context.h"
 #include "prc_data.h"
 #include "prc_pdf.h"
+#include "prc_api.h"
+
+/* Set by tests/CMakeLists.txt; the default is for a build run from the
+   repository root. */
+#ifndef PRC_TEST_EXAMPLES_DIR
+#define PRC_TEST_EXAMPLES_DIR "examples"
+#endif
 
 static int
 read_trailer_id(prc_context *ctx, const char *text, uint8_t *id, uint32_t *id_len)
@@ -146,6 +153,28 @@ test_literal_id_in_xref_stream(prc_context *ctx)
     PRC_ASSERT(memcmp(id, expected, sizeof(expected)) == 0);
 }
 
+/* examples/cube.pdf has one 3D view, named Default. It must be returned:
+   a good view used to be dropped by the same test that drops a view with no
+   camera matrix. */
+static void
+test_example_view_returned(prc_context *ctx)
+{
+    prc_api_data data;
+    char *name = NULL;
+    double *m = NULL;
+    double z = 0.0;
+
+    printf("  sub-case: the 3D view in examples/cube.pdf is returned\n");
+    data = prc_api_open_contents(ctx, PRC_TEST_EXAMPLES_DIR "/cube.pdf");
+    PRC_ASSERT_NOT_NULL(data);
+    PRC_ASSERT_EQ(prc_api_get_number_of_view(ctx, data), 1);
+    PRC_ASSERT_EQ(prc_api_get_view(ctx, data, 0, &name, &m, &z), 0);
+    PRC_ASSERT_NOT_NULL(name);
+    PRC_ASSERT(strcmp(name, "Default") == 0);
+    PRC_ASSERT_NOT_NULL(m);
+    prc_api_release_data(ctx, data, NULL, 0, NULL, 0, NULL, 0, NULL);
+}
+
 int
 main(void)
 {
@@ -161,6 +190,7 @@ main(void)
     test_literal_id_escapes(ctx);
     test_no_id_in_trailer(ctx);
     test_literal_id_in_xref_stream(ctx);
+    test_example_view_returned(ctx);
 
     prc_release_context(ctx);
 

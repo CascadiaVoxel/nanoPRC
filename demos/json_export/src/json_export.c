@@ -23,9 +23,13 @@
  * --------
  * This program loads a PRC file with the nanoPRC public API, walks the
  * resulting product/part model tree, and walks the tessellation table that
- * the library builds for that tree, emitting a JSON document with two top
+ * the library builds for that tree, emitting a JSON document with three top
  * level sections:
  *
+ *   - "views": the PDF's named 3D views, each with its name, its
+ *     camera-to-world matrix as stored (/C2W, twelve values: four columns of
+ *     three) and its distance to the centre of orbit (/CO). Empty for a bare
+ *     PRC file, which has no views.
  *   - "model_tree": the product/part hierarchy (names, transforms, and the
  *     index into "tessellations" that each part and each of its
  *     representation items draws, or null where it has none).
@@ -1150,6 +1154,36 @@ int main(int argc, char *argv[])
     json_writer_kv_uint32(&writer, "num_markups", num_markups);
     json_writer_kv_uint32(&writer, "num_tessellations", table.num_tess);
     json_writer_kv_uint32(&writer, "num_line_tessellations", table.num_line_tess);
+
+    /* The PDF's named views, as the library returns them. */
+    {
+        uint32_t num_views = prc_api_get_number_of_view(ctx, data);
+        uint32_t v;
+        int i;
+
+        json_writer_begin_array_key(&writer, "views");
+        for (v = 0; v < num_views; v++)
+        {
+            char *view_name = NULL;
+            double *c2w = NULL;
+            double center_orbit_z = 0.0;
+
+            if (prc_api_get_view(ctx, data, v, &view_name, &c2w, &center_orbit_z) != 0)
+                continue;
+            json_writer_begin_object(&writer);
+            json_writer_kv_string(&writer, "name", view_name != NULL ? view_name : "");
+            if (c2w != NULL)
+            {
+                json_writer_begin_array_compact_key(&writer, "c2w");
+                for (i = 0; i < 12; i++)
+                    json_writer_double(&writer, c2w[i]);
+                json_writer_end_array(&writer);
+            }
+            json_writer_kv_double(&writer, "center_orbit_z", center_orbit_z);
+            json_writer_end_object(&writer);
+        }
+        json_writer_end_array(&writer);
+    }
 
     json_writer_key(&writer, "model_tree");
     if (write_model_tree(model_tree, &writer) < 0)

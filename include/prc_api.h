@@ -444,9 +444,12 @@ PRC_EXPORT uint32_t prc_api_get_number_of_view(prc_context *ctx, prc_api_data da
  * @param ctx Active API context.
  * @param data Data handle.
  * @param view_index Zero-based view index.
- * @param name Output view name.
- * @param matrix Output 4x4 transform matrix pointer.
- * @param camera_z Output camera distance along z.
+ * @param name Output view name (the 3DView's /XN).
+ * @param matrix Output pointer to 12 doubles: the camera-to-world matrix as
+ *        stored in the 3DView's /C2W, four columns of three (the x, y and z
+ *        axes, then the camera position). Valid until the data is released.
+ * @param camera_z Output distance from the camera to the centre of orbit
+ *        (/CO).
  * @return 0 on success, negative PRC_API_ERROR_* code on failure.
  */
 PRC_EXPORT int prc_api_get_view(prc_context *ctx, prc_api_data data, uint32_t view_index, char **name, double **matrix, double *camera_z);

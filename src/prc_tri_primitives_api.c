@@ -167,15 +167,36 @@ prc_internal_api_set_edge(prc_internal_api_edge_list *edge_list,
     }
 }
 
+/* Decodes num_vertices colours. The file stores color_data->number_colors of
+   them; the caller's num_vertices can be larger (an uncompressed face counts
+   three corners per triangle, while the file stores one colour per vertex
+   reference), so a vertex past the last stored colour takes the last stored
+   colour rather than reading past the array. */
 void
 prc_internal_api_process_vertex_color_data(prc_context *ctx, uint32_t num_vertices,
     prc_color_data *color_data, uint8_t has_alpha, float *decoded_colors)
 {
     uint32_t k;
     uint32_t array_offset;
+    uint32_t stored = color_data->number_colors;
 
     for (k = 0; k < num_vertices; k++)
     {
+        if (stored == 0)
+        {
+            array_offset = k * 4;
+            decoded_colors[array_offset] = 1.0f;
+            decoded_colors[array_offset + 1] = 1.0f;
+            decoded_colors[array_offset + 2] = 1.0f;
+            decoded_colors[array_offset + 3] = 1.0f;
+            continue;
+        }
+        if (k >= stored)
+        {
+            array_offset = k * 4;
+            memcpy(&decoded_colors[array_offset], &decoded_colors[(stored - 1) * 4], 4 * sizeof(float));
+            continue;
+        }
         if (k == 0)
         {
             /* First one is encoded special */

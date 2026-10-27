@@ -6684,6 +6684,7 @@ free_ana:
                                     prc_free(ctx, next_coedge->topo);
                                 }
                             }
+                            prc_free(ctx, loop->topo->topo_loop->coedge);
                             prc_free(ctx, loop->topo->topo_loop);
                         }
                         prc_free(ctx, loop->topo);

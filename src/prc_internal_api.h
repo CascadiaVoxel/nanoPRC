@@ -203,6 +203,10 @@ struct prc_internal_texture_s
     unsigned char *picture_data;
     uint8_t has_texture_transform;
     double texture_transform[9]; /* A 3x3 */
+    uint32_t kind; /* prc_api_texture_kind */
+    uint32_t mapping_attributes; /* As stored in the texture definition */
+    double intensity; /* 1 if the definition gives none */
+    uint8_t components; /* 0xF if the definition gives none */
     prc_internal_texture *next_texture; /* We can have a pipeline of textures */
 };
 

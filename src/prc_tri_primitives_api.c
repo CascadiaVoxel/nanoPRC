@@ -2371,16 +2371,7 @@ prc_api_helper_get_face_style(prc_context *ctx, prc_api_data data_in,
 
     if (face_out->is_texture)
     {
-        style->texture.picture_data = style_header->files[style->texture.picture_index].raw_image;
-        face_out->texture.data = style_header->files[style->texture.picture_index].raw_image;
-        face_out->texture.width = style->texture.picture_width;
-        face_out->texture.height = style->texture.picture_height;
-        face_out->texture.num_channels = style->texture.num_elements_per_pixel;
-        face_out->texture.has_transform = style->texture.has_texture_transform;
-        if (style->texture.has_texture_transform)
-        {
-            memcpy(face_out->texture.transform, style->texture.texture_transform, 9 * sizeof(double));
-        }
+        prc_internal_api_fill_texture(&style->texture, &face_out->texture);
     }
 
     if (face_out->is_material && !face_out->is_texture)
@@ -2446,8 +2437,13 @@ prc_api_helper_get_style_index_from_leaf(prc_context *ctx, prc_data *data,
             }
         }
 #endif
-        /* TODO This inheritance is confusing */
-        if (style->base_with_graphics->graphics_content.biased_index_of_line_style > 0 && *style_unbiased_index == -1)
+        /* A node's own style wins over its ancestors', unless an ancestor sets
+           ParentHeritColor; then the highest such ancestor wins (ISO 14739-1,
+           GraphicsContent behavior_bit_field). The walk runs upwards, so a
+           flagged ancestor replaces whatever was found below it. */
+        if (style->base_with_graphics->graphics_content.biased_index_of_line_style > 0 &&
+            (*style_unbiased_index == -1 ||
+             (style->base_with_graphics->graphics_content.behavior_bit_field1 & PRC_GRAPHICS_ParentHeritColor)))
         {
             *file_index = style->base_with_graphics->base.file_index;
             *style_unbiased_index = style->base_with_graphics->graphics_content.biased_index_of_line_style - 1;
@@ -2612,6 +2608,8 @@ prc_api_get_line_tessellation_vertices(prc_context *ctx, prc_api_data data_in,
     face_out->reserved = NULL;
     face_out->disable_face = 0;
     face_out->texture.data = NULL;
+    face_out->texture.num_layers = 0;
+    face_out->texture.reserved = NULL;
 
     vertex_out->num_vertices = 0;
     vertex_out->capacity = 0;

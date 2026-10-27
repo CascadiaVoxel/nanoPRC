@@ -2371,16 +2371,7 @@ prc_api_helper_get_face_style(prc_context *ctx, prc_api_data data_in,
 
     if (face_out->is_texture)
     {
-        style->texture.picture_data = style_header->files[style->texture.picture_index].raw_image;
-        face_out->texture.data = style_header->files[style->texture.picture_index].raw_image;
-        face_out->texture.width = style->texture.picture_width;
-        face_out->texture.height = style->texture.picture_height;
-        face_out->texture.num_channels = style->texture.num_elements_per_pixel;
-        face_out->texture.has_transform = style->texture.has_texture_transform;
-        if (style->texture.has_texture_transform)
-        {
-            memcpy(face_out->texture.transform, style->texture.texture_transform, 9 * sizeof(double));
-        }
+        prc_internal_api_fill_texture(&style->texture, &face_out->texture);
     }
 
     if (face_out->is_material && !face_out->is_texture)
@@ -2612,6 +2603,8 @@ prc_api_get_line_tessellation_vertices(prc_context *ctx, prc_api_data data_in,
     face_out->reserved = NULL;
     face_out->disable_face = 0;
     face_out->texture.data = NULL;
+    face_out->texture.num_layers = 0;
+    face_out->texture.reserved = NULL;
 
     vertex_out->num_vertices = 0;
     vertex_out->capacity = 0;

@@ -531,9 +531,18 @@ static void write_material(json_writer *w, const prc_api_material *m)
  *  format carries its own dimensions in its header and the PRC fields are
  *  declared unused for those types. A consumer that needs real dimensions for
  *  a compressed picture has to read them out of the image data. */
-static void write_texture(json_writer *w, const prc_api_texture *t)
+static void write_texture(prc_context *ctx, json_writer *w, const prc_api_texture *t,
+                          int with_layers)
 {
+    static const char *kinds[] = { "diffuse", "opacity", "spherical_reflection", "other" };
+    uint32_t k;
+
     json_writer_begin_object(w);
+
+    json_writer_kv_string(w, "kind", t->kind < 4 ? kinds[t->kind] : "other");
+    json_writer_kv_uint32(w, "mapping_attributes", t->mapping_attributes);
+    json_writer_kv_double(w, "intensity", t->intensity);
+    json_writer_kv_uint32(w, "components", t->components);
 
     json_writer_kv_uint32(w, "width", t->width);
     json_writer_kv_uint32(w, "height", t->height);
@@ -549,6 +558,23 @@ static void write_texture(json_writer *w, const prc_api_texture *t)
         for (i = 0; i < 9; i++)
         {
             json_writer_double(w, t->transform[i]);
+        }
+        json_writer_end_array(w);
+    }
+
+    /* The layers that follow the face's texture, in the order a renderer
+       applies them. */
+    if (with_layers && t->num_layers > 0)
+    {
+        json_writer_begin_array_key(w, "layers");
+        for (k = 0; k < t->num_layers; k++)
+        {
+            prc_api_texture layer;
+
+            if (prc_api_get_texture_layer(ctx, t, k, &layer) == 0)
+            {
+                write_texture(ctx, w, &layer, 0);
+            }
         }
         json_writer_end_array(w);
     }
@@ -578,7 +604,7 @@ static int write_face(prc_context *ctx, prc_api_data data, const prc_api_tess *t
     if (face->is_texture)
     {
         json_writer_key(w, "texture");
-        write_texture(w, &face->texture);
+        write_texture(ctx, w, &face->texture, 1);
     }
 
     if (face->is_material)

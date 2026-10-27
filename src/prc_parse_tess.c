@@ -159,6 +159,15 @@ prc_parse_vertexcolors(prc_context *ctx, prc_bit_state *bit_state, prc_vertex_co
 
     if (!data->b_optimized)
     {
+        /* The array is the first colour plus number_colors - 1 more, so a count
+           of 0 describes no array at all; taken as it stands it would wrap to
+           an allocation of 4 billion entries. */
+        if (number_colors == 0)
+        {
+            prc_error(ctx, PRC_ERROR_PARSE, "Vertex colours with no colours in prc_parse_vertexcolors\n");
+            return PRC_ERROR_PARSE;
+        }
+        data->color_data.number_colors = number_colors;
         data->color_data.remaining_vertices = prc_calloc(ctx, (number_colors - 1), sizeof(prc_color_data_remainder));
         if (data->color_data.remaining_vertices == NULL)
         {

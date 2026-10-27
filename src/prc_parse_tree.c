@@ -307,7 +307,7 @@ prc_parse_ri(prc_context *ctx, prc_bit_state *bit_state, prc_ri *data, int depth
     {
     case PRC_TYPE_RI_RepresentationalItem:
         /* Hmm this is getting recursive if we end up here */
-        data->ri_rep_item = (prc_ri*)prc_malloc(ctx, sizeof(prc_ri));
+        data->ri_rep_item = (prc_ri*)prc_calloc(ctx, 1, sizeof(prc_ri));
         if (data->ri_rep_item == NULL)
         {
             prc_error(ctx, PRC_ERROR_MEMORY, "Parsing error in prc_parse_ri\n");
@@ -322,7 +322,7 @@ prc_parse_ri(prc_context *ctx, prc_bit_state *bit_state, prc_ri *data, int depth
 
         break;
     case PRC_TYPE_RI_BrepModel:
-        data->ri_brep_model = (prc_ri_brep_model*)prc_malloc(ctx, sizeof(prc_ri_brep_model));
+        data->ri_brep_model = (prc_ri_brep_model*)prc_calloc(ctx, 1, sizeof(prc_ri_brep_model));
         if (data->ri_brep_model == NULL)
         {
             prc_error(ctx, PRC_ERROR_MEMORY, "Memory error in prc_parse_ri\n");
@@ -338,7 +338,7 @@ prc_parse_ri(prc_context *ctx, prc_bit_state *bit_state, prc_ri *data, int depth
         }
         break;
     case PRC_TYPE_RI_Curve:
-        data->ri_curve = (prc_ri_curve*)prc_malloc(ctx, sizeof(prc_ri_curve));
+        data->ri_curve = (prc_ri_curve*)prc_calloc(ctx, 1, sizeof(prc_ri_curve));
         if (data->ri_curve == NULL)
         {
             prc_error(ctx, PRC_ERROR_MEMORY, "Memory error in prc_parse_ri\n");
@@ -354,7 +354,7 @@ prc_parse_ri(prc_context *ctx, prc_bit_state *bit_state, prc_ri *data, int depth
         }
         break;
     case PRC_TYPE_RI_Direction:
-        data->ri_direction = (prc_ri_direction*)prc_malloc(ctx, sizeof(prc_ri_direction));
+        data->ri_direction = (prc_ri_direction*)prc_calloc(ctx, 1, sizeof(prc_ri_direction));
         if (data->ri_direction == NULL)
         {
             prc_error(ctx, PRC_ERROR_MEMORY, "Memory error in prc_parse_ri\n");
@@ -370,7 +370,7 @@ prc_parse_ri(prc_context *ctx, prc_bit_state *bit_state, prc_ri *data, int depth
         }
         break;
     case PRC_TYPE_RI_Plane:
-        data->ri_plane = (prc_ri_plane*)prc_malloc(ctx, sizeof(prc_ri_plane));
+        data->ri_plane = (prc_ri_plane*)prc_calloc(ctx, 1, sizeof(prc_ri_plane));
         if (data->ri_plane == NULL)
         {
             prc_error(ctx, PRC_ERROR_MEMORY, "Memory error in prc_parse_ri\n");
@@ -386,7 +386,7 @@ prc_parse_ri(prc_context *ctx, prc_bit_state *bit_state, prc_ri *data, int depth
         }
         break;
     case PRC_TYPE_RI_PointSet:
-        data->ri_point_set = (prc_ri_point_set*)prc_malloc(ctx, sizeof(prc_ri_point_set));
+        data->ri_point_set = (prc_ri_point_set*)prc_calloc(ctx, 1, sizeof(prc_ri_point_set));
         if (data->ri_point_set == NULL)
         {
             prc_error(ctx, PRC_ERROR_MEMORY, "Parsing error in prc_parse_ri\n");
@@ -402,7 +402,7 @@ prc_parse_ri(prc_context *ctx, prc_bit_state *bit_state, prc_ri *data, int depth
         }
         break;
     case PRC_TYPE_RI_PolyBrepModel:
-        data->ri_poly_brep_model = (prc_ri_poly_brep_model*)prc_malloc(ctx, sizeof(prc_ri_poly_brep_model));
+        data->ri_poly_brep_model = (prc_ri_poly_brep_model*)prc_calloc(ctx, 1, sizeof(prc_ri_poly_brep_model));
         if (data->ri_poly_brep_model == NULL)
         {
             prc_error(ctx, PRC_ERROR_MEMORY, "Parsing error in prc_parse_ri\n");
@@ -418,7 +418,7 @@ prc_parse_ri(prc_context *ctx, prc_bit_state *bit_state, prc_ri *data, int depth
         }
         break;
     case PRC_TYPE_RI_PolyWire:
-        data->ri_poly_wire = (prc_ri_poly_wire*)prc_malloc(ctx, sizeof(prc_ri_poly_wire));
+        data->ri_poly_wire = (prc_ri_poly_wire*)prc_calloc(ctx, 1, sizeof(prc_ri_poly_wire));
         if (data->ri_poly_wire == NULL)
         {
             prc_error(ctx, PRC_ERROR_MEMORY, "Parsing error in prc_parse_ri\n");
@@ -434,7 +434,11 @@ prc_parse_ri(prc_context *ctx, prc_bit_state *bit_state, prc_ri *data, int depth
         }
         break;
     case PRC_TYPE_RI_Set:
-        data->ri_set = (prc_ri_set*)prc_malloc(ctx, sizeof(prc_ri_set));
+        /* Zeroed, as are the other kinds here: prc_parse_ri_set sets rep_items
+           only when number_of_items > 0, and release walks the struct either
+           way. An RI_Set with no items (Bracket-with-PMI in prc-db has one) left
+           rep_items holding whatever the heap held, which was then freed. */
+        data->ri_set = (prc_ri_set*)prc_calloc(ctx, 1, sizeof(prc_ri_set));
         if (data->ri_set == NULL)
         {
             prc_error(ctx, PRC_ERROR_MEMORY, "Parsing error in prc_parse_ri\n");
@@ -450,7 +454,7 @@ prc_parse_ri(prc_context *ctx, prc_bit_state *bit_state, prc_ri *data, int depth
         }
         break;
     case PRC_TYPE_RI_CoordinateSystem:
-        data->ri_coordinate_system = (prc_ri_coordinate_system*)prc_malloc(ctx, sizeof(prc_ri_coordinate_system));
+        data->ri_coordinate_system = (prc_ri_coordinate_system*)prc_calloc(ctx, 1, sizeof(prc_ri_coordinate_system));
         if (data->ri_coordinate_system == NULL)
         {
             prc_error(ctx, PRC_ERROR_MEMORY, "Parsing error in prc_parse_ri\n");

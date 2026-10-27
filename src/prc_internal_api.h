@@ -31,8 +31,10 @@ typedef struct prc_internal_api_normal_s
     float normal[3];
 } prc_internal_api_normal;
 
-/* Need to see if the number of texture coords is ever greater than 1. Right now we
-   will throw and error if it is */
+/* The texture indices read per vertex. A face can declare more than one set
+   (number_of_textured_coordinate_indexes); real files do, e.g. four in prc-db.
+   Only the first set is kept: the others are stepped over so the index stream
+   stays in step, and never written into the MAX_NUM_TEXTURE_COORDS buffers. */
 #define MAX_NUM_TEXTURE_COORDS 1
 typedef struct prc_internal_api_texture_indices_s
 {

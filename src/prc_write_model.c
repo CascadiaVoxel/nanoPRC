@@ -445,16 +445,22 @@ prc_write_add_texture_layer(prc_context *ctx, prc_write_global_tables *tables,
    failure. The colour, material and style tables all deduplicate, so two items
    asking for the same colour share one entry and the file carries one of each.
 
-   Unless the item sets has_material_slots, ambient, diffuse and specular all
-   take material_color and emissive takes black. Every slot is filled either
-   way, for the reason given in prc_api_write_rep_item's doc comment: a
-   material with an unset emissive index is rejected when a viewer resolves
-   it. */
+   Unless the item sets has_material_slots, ambient and diffuse take
+   material_color, specular takes a dark grey (0.2), emissive takes black, and
+   a shininess of 0 is written as 0.3. Specular used to take material_color
+   too, with shininess 0: on a white or textured item that adds a full white
+   highlight across every lit face, and Adobe Acrobat drew such items white
+   unless they were turned away from the light. Real files rarely do it: in
+   the public prc-db collection 89 of 6,485 materials have shininess 0. Every
+   slot is filled either way, for the reason given in prc_api_write_rep_item's
+   doc comment: a material with an unset emissive index is rejected when a
+   viewer resolves it. */
 uint32_t
 prc_write_add_item_style(prc_context *ctx, prc_write_global_tables *tables,
     const prc_api_write_rep_item *ri)
 {
     static const double black[3] = { 0.0, 0.0, 0.0 };
+    static const double default_specular[3] = { 0.2, 0.2, 0.2 };
     prc_graph_material material;
     prc_graph_style style;
     uint32_t biased_color_index, biased_material_index;
@@ -473,7 +479,8 @@ prc_write_add_item_style(prc_context *ctx, prc_write_global_tables *tables,
     }
     else
     {
-        biased_ambient = biased_specular = biased_color_index;
+        biased_ambient = biased_color_index;
+        biased_specular = prc_write_add_rgb(ctx, tables, default_specular);
         biased_emissive = prc_write_add_rgb(ctx, tables, black);
     }
     if (biased_ambient == 0 || biased_specular == 0 || biased_emissive == 0)
@@ -485,7 +492,8 @@ prc_write_add_item_style(prc_context *ctx, prc_write_global_tables *tables,
     material.biased_diffuse_index = biased_color_index;
     material.biased_specular_index = biased_specular;
     material.biased_emissive_index = biased_emissive;
-    material.shininess = ri->material_shininess;
+    material.shininess = (!ri->has_material_slots && ri->material_shininess == 0.0) ?
+        0.3 : ri->material_shininess;
     material.ambient_alpha = alpha;
     material.diffuse_alpha = alpha;
     material.emissive_alpha = 1.0;

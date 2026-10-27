@@ -818,9 +818,17 @@ public:
             throw std::runtime_error("prc_api_get_view failed");
         }
 
+        // The library returns the 3DView /C2W: 12 doubles, four columns of
+        // three. Lay them out as a column-major 4x4 with (0, 0, 0, 1) as the
+        // bottom row, as the viewer does. Copying 16 read past the matrix.
         std::array<double, 16> matrix_array{};
         if (matrix) {
-            std::copy_n(matrix, matrix_array.size(), matrix_array.begin());
+            for (int c = 0; c < 4; ++c) {
+                for (int r = 0; r < 3; ++r) {
+                    matrix_array[c * 4 + r] = matrix[c * 3 + r];
+                }
+            }
+            matrix_array[15] = 1.0;
         }
 
         return View(name ? std::string(name) : std::string(), matrix_array, camera_z);

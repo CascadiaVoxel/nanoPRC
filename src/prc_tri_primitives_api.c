@@ -6180,39 +6180,16 @@ wire_failure:
              }
         }
 
-        /* At this point, we are going to assume that all these primitives have
-           the same color. That may not be true, and we will need to do
-           some vertex splitting if that ends up being an issue. For now, lets
-           go through the line primitives and get the color and see if there
-           are multiple ones. I suspect that is very rare. Generally a markup
-           will just be a single solid color */
-        for (k = 0; k < tess->decode_number_primitives; k++)
-        {
-            if (tess->decode_primitives[k].primitive_type != MARKUP_TEXT)
-            {
-                uint8_t found_color = 0;
-
-                code = prc_internal_api_get_color(ctx, global_data,
-                    ((int32_t)tess->decode_primitives[k].biased_color_index) - 1,
-                    markup_color);
-                if (code < 0)
-                {
-                    prc_error(ctx, PRC_API_ERROR_PARAMETER, "Failed to get face style in prc_api_get_tessellation_vertices\n");
-                    goto markup_failure;
-                }
-            }
-        }
-
-        /* Lets set the vertex locations and color */
+        /* Set the vertex locations, and black until a line primitive gives its vertices a colour below */
         for (k = 0; k < num_vertices; k++)
         {
             vertex_out->vertices[k].position[0] = tess->decode_vertices[k].x;
             vertex_out->vertices[k].position[1] = tess->decode_vertices[k].y;
             vertex_out->vertices[k].position[2] = tess->decode_vertices[k].z;
 
-            vertex_out->vertices[k].color[0] = markup_color[0];
-            vertex_out->vertices[k].color[1] = markup_color[1];
-            vertex_out->vertices[k].color[2] = markup_color[2];
+            vertex_out->vertices[k].color[0] = 0.0;
+            vertex_out->vertices[k].color[1] = 0.0;
+            vertex_out->vertices[k].color[2] = 0.0;
             vertex_out->vertices[k].color[3] = 1.0;
         }
 
@@ -6283,6 +6260,33 @@ wire_failure:
 
                 memcpy(wire[line_prim_count].vertex_indices, tess->decode_primitives[k].indices,
                     wire[line_prim_count].num_indices * sizeof(uint32_t));
+
+                /* Each markup primitive has vertices of its own, so its colour goes on them. The colour index
+                   counts doubles in the colour array, three per colour, as for text above. */
+                markup_color[0] = 0.0;
+                markup_color[1] = 0.0;
+                markup_color[2] = 0.0;
+                if (tess->decode_primitives[k].biased_color_index != 0)
+                {
+                    code = prc_internal_api_get_color(ctx, global_data,
+                        ((int32_t)tess->decode_primitives[k].biased_color_index - 1) / 3, markup_color);
+                    if (code < 0)
+                    {
+                        prc_error(ctx, PRC_API_ERROR_PARAMETER,
+                            "Failed to get markup line color in prc_api_get_tessellation_vertices\n");
+                        goto markup_failure;
+                    }
+                }
+                for (j = 0; j < wire[line_prim_count].num_indices; j++)
+                {
+                    uint32_t v = wire[line_prim_count].vertex_indices[j];
+                    if (v < num_vertices)
+                    {
+                        vertex_out->vertices[v].color[0] = markup_color[0];
+                        vertex_out->vertices[v].color[1] = markup_color[1];
+                        vertex_out->vertices[v].color[2] = markup_color[2];
+                    }
+                }
 
                 /* Set the type */
                 if (wire[line_prim_count].num_indices == 2)

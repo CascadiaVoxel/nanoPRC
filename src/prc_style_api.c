@@ -91,6 +91,64 @@ prc_api_initialize_texture(prc_context *ctx, prc_api_texture *texture)
     texture->num_channels = 0;
     texture->width = 0;
     texture->has_transform = 0;
+    texture->kind = PRC_API_TEXTURE_KIND_DIFFUSE;
+    texture->mapping_attributes = 0;
+    texture->intensity = 1.0;
+    texture->components = 0xF;
+    texture->num_layers = 0;
+    texture->reserved = NULL;
+}
+
+/* Copies one layer of a texture chain to the public form. num_layers counts
+   the layers after it, and reserved points at the next one so that
+   prc_api_get_texture_layer can walk on. */
+void
+prc_internal_api_fill_texture(const prc_internal_texture *texture, prc_api_texture *texture_out)
+{
+    const prc_internal_texture *next;
+
+    texture_out->data = texture->picture_data;
+    texture_out->width = texture->picture_width;
+    texture_out->height = texture->picture_height;
+    texture_out->num_channels = texture->num_elements_per_pixel;
+    texture_out->has_transform = texture->has_texture_transform;
+    if (texture->has_texture_transform)
+    {
+        memcpy(texture_out->transform, texture->texture_transform, 9 * sizeof(double));
+    }
+    texture_out->kind = texture->kind;
+    texture_out->mapping_attributes = texture->mapping_attributes;
+    texture_out->intensity = texture->intensity;
+    texture_out->components = texture->components;
+    texture_out->num_layers = 0;
+    for (next = texture->next_texture; next != NULL; next = next->next_texture)
+    {
+        texture_out->num_layers++;
+    }
+    texture_out->reserved = texture->next_texture;
+}
+
+int
+prc_api_get_texture_layer(prc_context *ctx, const prc_api_texture *texture, uint32_t layer, prc_api_texture *layer_out)
+{
+    const prc_internal_texture *t;
+    uint32_t k;
+
+    if (texture == NULL || layer_out == NULL || layer >= texture->num_layers)
+    {
+        return PRC_API_ERROR_PARAMETER;
+    }
+    t = (const prc_internal_texture *)texture->reserved;
+    for (k = 0; k < layer && t != NULL; k++)
+    {
+        t = t->next_texture;
+    }
+    if (t == NULL)
+    {
+        return PRC_API_ERROR_PARAMETER;
+    }
+    prc_internal_api_fill_texture(t, layer_out);
+    return 0;
 }
 
 void
@@ -109,6 +167,10 @@ prc_internal_api_initialize_texture(prc_context *ctx, prc_internal_texture *text
     texture->picture_width = 0;
     texture->has_texture_transform = 0;
     memset(texture->texture_transform, 0, sizeof(double) * 9);
+    texture->kind = PRC_API_TEXTURE_KIND_DIFFUSE;
+    texture->mapping_attributes = 0;
+    texture->intensity = 1.0;
+    texture->components = 0xF;
     texture->next_texture = NULL;
 }
 
@@ -426,6 +488,7 @@ prc_internal_set_texture_style(prc_context *ctx, prc_file_struct_internal_global
     prc_internal_texture *current_internal_texture = internal_texture;
     prc_internal_graph_style *current_style = style;
     prc_internal_graph_style dummy_style;
+    uint32_t num_layers = 1;
 
     for (;;)
     {
@@ -448,6 +511,29 @@ prc_internal_set_texture_style(prc_context *ctx, prc_file_struct_internal_global
             current_internal_texture->wrapping_u = texture_def.texture_wrapping_mode_s; /* Repeat in u */
             current_internal_texture->wrapping_v = texture_def.texture_wrapping_mode_t; /* Repeat in v */
             current_internal_texture->has_texture_transform = texture_def.has_texture_transformation;
+            current_internal_texture->mapping_attributes = texture_def.texture_mapping_attributes;
+            switch (texture_def.texture_mapping_attributes)
+            {
+            case 0x0:
+            case 0x1:
+                current_internal_texture->kind = PRC_API_TEXTURE_KIND_DIFFUSE;
+                break;
+            case 0x4:
+                current_internal_texture->kind = PRC_API_TEXTURE_KIND_OPACITY;
+                break;
+            case 0x8:
+                current_internal_texture->kind = PRC_API_TEXTURE_KIND_SPHERICAL_REFLECTION;
+                break;
+            default:
+                current_internal_texture->kind = PRC_API_TEXTURE_KIND_OTHER;
+                break;
+            }
+            current_internal_texture->intensity =
+                texture_def.number_texture_mapping_attributes_intensities > 0 ?
+                texture_def.texture_mapping_attributes_intensities[0] : 1.0;
+            current_internal_texture->components =
+                texture_def.number_of_texture_mapping_attributes_components > 0 ?
+                texture_def.texture_mapping_attributes_components[0] : 0xF;
             if (current_internal_texture->has_texture_transform)
             {
                 code = prc_internal_set_texture_transform(ctx, &texture_def.texture_transformation,
@@ -458,17 +544,17 @@ prc_internal_set_texture_style(prc_context *ctx, prc_file_struct_internal_global
                 }
             }
 
-            /* Get the pointer to the image data. We probably need a image type. e.g. RGB RGBA etc */
+            /* The picture names the file that holds the image; the image and
+               its dimensions both come from that file. */
             if (global_data->pictures != NULL && current_internal_texture->picture_index > -1 &&
                 current_internal_texture->picture_index < global_data->picture_count)
             {
-                current_internal_texture->picture_width = header->files[current_internal_texture->picture_index].x;
-                current_internal_texture->picture_height = header->files[current_internal_texture->picture_index].y;
-                current_internal_texture->num_elements_per_pixel = header->files[current_internal_texture->picture_index].n;
-
                 int32_t file_index = global_data->pictures[current_internal_texture->picture_index].biased_uncompressed_file_index - 1;
-                if (file_index > -1 && file_index < header->file_count && header->files[file_index].raw_image != NULL)
+                if (file_index > -1 && file_index < header->file_count)
                 {
+                    current_internal_texture->picture_width = header->files[file_index].x;
+                    current_internal_texture->picture_height = header->files[file_index].y;
+                    current_internal_texture->num_elements_per_pixel = header->files[file_index].n;
                     current_internal_texture->picture_data = header->files[file_index].raw_image;
                 }
             }
@@ -511,8 +597,15 @@ prc_internal_set_texture_style(prc_context *ctx, prc_file_struct_internal_global
             return 0;
         }
 
-        /* Multiple texture case. We are setup right now to
-           just deal with two of these */
+        /* The next layer must be a material that exists, and a chain longer
+           than the material table must revisit one of them: a loop. */
+        if ((uint32_t)current_internal_texture->next_texture_index >= global_data->material_count ||
+            num_layers >= global_data->material_count)
+        {
+            return PRC_ERROR_PARSE;
+        }
+        num_layers++;
+
         current_internal_texture->next_texture = (prc_internal_texture *)prc_calloc(ctx, 1, sizeof(prc_internal_texture));
         if (current_internal_texture->next_texture == NULL)
         {

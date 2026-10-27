@@ -34,6 +34,7 @@
 #include "prc_context.h"
 #include "prc_api.h"
 #include "prc_data.h"
+#include "prc_internal_api.h"
 
 #define TEST_MATERIALS_FILENAME "test_write_materials_tmp.prc"
 
@@ -1053,6 +1054,390 @@ test_texture_layers(prc_context *ctx)
     remove(TEST_MATERIALS_FILENAME);
 }
 
+/* Four parts: two red items sharing one tessellation, then a green and a
+   blue item. A tessellation used by two items names no style on its faces, so
+   the red faces take their colour from the walk up the product tree, which is
+   what this test is about. */
+static void
+write_herit_file(prc_context *ctx)
+{
+    static const double rgb[3][3] = { { 1.0, 0.0, 0.0 }, { 0.0, 1.0, 0.0 }, { 0.0, 0.0, 1.0 } };
+    static const uint32_t tess_of[4] = { 1, 1, 2, 3 };
+    static const int colour_of[4] = { 0, 0, 1, 2 };
+    prc_api_write_tessellation tess[3];
+    prc_api_write_rep_item items[4];
+    prc_api_write_node leaves[4], root;
+    prc_api_write_node *kids[4];
+    uint8_t *buf = NULL;
+    size_t buf_size = 0;
+    FILE *fid;
+    uint32_t k, c;
+
+    for (k = 0; k < 3; k++)
+        fill_tess(&tess[k]);
+    memset(items, 0, sizeof(items));
+    for (k = 0; k < 4; k++)
+    {
+        items[k].kind = PRC_API_WRITE_RI_SURFACE;
+        items[k].biased_tessellation_index = tess_of[k];
+        items[k].has_material = 1;
+        for (c = 0; c < 3; c++)
+            items[k].material_color[c] = rgb[colour_of[k]][c];
+        items[k].material_alpha = 1.0;
+        memset(&leaves[k], 0, sizeof(leaves[k]));
+        leaves[k].rep_items = &items[k];
+        leaves[k].num_rep_items = 1;
+        leaves[k].bbox_max[0] = leaves[k].bbox_max[1] = 1.0;
+        kids[k] = &leaves[k];
+    }
+    memset(&root, 0, sizeof(root));
+    root.name = "root";
+    root.children = kids;
+    root.num_children = 4;
+    root.bbox_max[0] = root.bbox_max[1] = 1.0;
+
+    PRC_ASSERT_EQ(prc_api_write_prc_buffer(ctx, "parent_herit", &root, tess, 3, &buf, &buf_size), 0);
+    fid = fopen(TEST_MATERIALS_FILENAME, "wb");
+    PRC_ASSERT_NOT_NULL(fid);
+    PRC_ASSERT_EQ(fwrite(buf, 1, buf_size, fid), buf_size);
+    fclose(fid);
+    prc_api_write_prc_buffer_free(ctx, buf);
+}
+
+/* Reads the first red item's face colour after giving its ancestors styles
+   in memory, as a file could give them:
+     which 0: as written (every ancestor has the writer's default style, no flags);
+     which 1: the root styled blue, with ParentHeritColor;
+     which 2: the root blue and the node below it green, both with the flag;
+     which 3: the root styled blue, without the flag.
+   Also returns the green and blue items' colours, to show which is which. */
+static void
+herit_case(prc_context *ctx, int which, float red_out[3], float green_out[3], float blue_out[3])
+{
+    prc_api_data data;
+    prc_api_product *model_tree;
+    prc_api_tess *tesses;
+    prc_api_object_style *chain[16];
+    prc_api_object_style *node;
+    uint32_t n = 0, k, green_style, blue_style;
+    uint32_t num_parts = 0, num_products = 0, num_markups = 0;
+    uint32_t num_tess = 0, num_line_tess = 0, num_extra = 0;
+    uint8_t has_lines = 0;
+    prc_api_material m;
+
+    data = prc_api_open_contents(ctx, TEST_MATERIALS_FILENAME);
+    PRC_ASSERT_NOT_NULL(data);
+    model_tree = NULL;
+    PRC_ASSERT(prc_api_prep_model_tree(ctx, data, &num_parts, &num_products, &num_markups) >= 0);
+    PRC_ASSERT(prc_api_create_model_tree(ctx, data, &model_tree, num_parts, num_products, num_markups) >= 0);
+    PRC_ASSERT(prc_api_get_number_tessellations(ctx, data, model_tree, &num_tess,
+        &num_line_tess, &num_extra, 0) >= 0);
+    PRC_ASSERT_EQ(num_tess, 4);
+    tesses = (prc_api_tess *)calloc(num_tess, sizeof(prc_api_tess));
+    PRC_ASSERT_NOT_NULL(tesses);
+    for (k = 0; k < 4; k++)
+    {
+        tesses[k].num_faces = prc_api_get_number_faces(ctx, data, k);
+        PRC_ASSERT(tesses[k].num_faces >= 1);
+        tesses[k].tess_faces = (prc_api_face *)calloc(tesses[k].num_faces, sizeof(prc_api_face));
+        PRC_ASSERT_NOT_NULL(tesses[k].tess_faces);
+        PRC_ASSERT(prc_api_initialize_tessellation(ctx, data, model_tree, k, &tesses[k], NULL, &has_lines) >= 0);
+        PRC_ASSERT_NOT_NULL(tesses[k].style_leaf);
+    }
+    green_style = ((prc_api_object_style *)tesses[2].style_leaf)->base_with_graphics->graphics_content.biased_index_of_line_style;
+    blue_style = ((prc_api_object_style *)tesses[3].style_leaf)->base_with_graphics->graphics_content.biased_index_of_line_style;
+    PRC_ASSERT(green_style > 0 && blue_style > 0 && green_style != blue_style);
+
+    /* The red item's node and its ancestors, leaf first. The writer gives
+       every node above the item its default style, without flags, so in case
+       0 the ancestors are styled already and the item's own style must win. */
+    for (node = (prc_api_object_style *)tesses[0].style_leaf; node != NULL; node = node->parent)
+    {
+        PRC_ASSERT(n < 16);
+        chain[n++] = node;
+    }
+    PRC_ASSERT(n >= 3);
+    PRC_ASSERT(chain[0]->base_with_graphics->graphics_content.biased_index_of_line_style > 0);
+    for (k = 0; k < n; k++)
+        PRC_ASSERT_EQ(chain[k]->base_with_graphics->graphics_content.behavior_bit_field1 &
+                      PRC_GRAPHICS_ParentHeritColor, 0);
+
+    if (which >= 1)
+    {
+        chain[n - 1]->base_with_graphics->graphics_content.biased_index_of_line_style = blue_style;
+        if (which != 3)
+            chain[n - 1]->base_with_graphics->graphics_content.behavior_bit_field1 |= PRC_GRAPHICS_ParentHeritColor;
+    }
+    if (which == 2)
+    {
+        chain[n - 2]->base_with_graphics->graphics_content.biased_index_of_line_style = green_style;
+        chain[n - 2]->base_with_graphics->graphics_content.behavior_bit_field1 |= PRC_GRAPHICS_ParentHeritColor;
+    }
+
+    for (k = 0; k < 4; k++)
+    {
+        float *out = k == 0 ? red_out : k == 2 ? green_out : k == 3 ? blue_out : NULL;
+
+        if (out == NULL)
+            continue;
+        PRC_ASSERT(prc_api_get_tessellation_vertices(ctx, data, k, 0, &tesses[k].tess_faces[0], &tesses[k]) >= 0);
+        memset(&m, 0, sizeof(m));
+        prc_api_get_face_material(ctx, &tesses[k], &m, 0);
+        memcpy(out, m.diffuse, sizeof(float) * 3);
+    }
+    prc_api_release_data(ctx, data, tesses, 4, NULL, 0, NULL, 0, model_tree);
+}
+
+/* Colour inheritance down the product tree (ISO 14739-1, GraphicsContent
+   behavior_bit_field):
+   - no ancestor flagged: the item's own red;
+   - the root styled blue with ParentHeritColor: blue;
+   - the root blue and the node below it green, both flagged: blue, the
+     highest flagged ancestor;
+   - the root styled blue without the flag: the item's own red.
+   The last case is what the rule before nanoPRC #143 got wrong (it took the
+   topmost style); the second and third are what #143 alone gets wrong (it
+   kept the lowest style found). */
+static void
+test_parent_herit_colour(prc_context *ctx)
+{
+    static const float red[3] = { 1.0f, 0.0f, 0.0f };
+    static const float green[3] = { 0.0f, 1.0f, 0.0f };
+    static const float blue[3] = { 0.0f, 0.0f, 1.0f };
+    const float *expect[4];
+    float r[3], g[3], b[3];
+    int k, c;
+
+    printf("  sub-case: an ancestor with ParentHeritColor overrides the item's colour\n");
+    expect[0] = red;
+    expect[1] = blue;
+    expect[2] = blue;
+    expect[3] = red;
+    write_herit_file(ctx);
+    for (k = 0; k < 4; k++)
+    {
+        herit_case(ctx, k, r, g, b);
+        for (c = 0; c < 3; c++)
+        {
+            PRC_ASSERT_NEAR(g[c], green[c], 0.01);
+            PRC_ASSERT_NEAR(b[c], blue[c], 0.01);
+            PRC_ASSERT_NEAR(r[c], expect[k][c], 0.01);
+        }
+    }
+    remove(TEST_MATERIALS_FILENAME);
+}
+
+/* Opens the file written by write_textured_items and reads the first face of
+   tessellation tess_index. Returns the get_tessellation_vertices code. */
+static int
+read_first_face(prc_context *ctx, prc_api_data data, prc_api_product *model_tree,
+    prc_api_tess *tesses, uint32_t tess_index)
+{
+    uint8_t has_lines = 0;
+
+    tesses[tess_index].num_faces = prc_api_get_number_faces(ctx, data, tess_index);
+    PRC_ASSERT(tesses[tess_index].num_faces >= 1);
+    tesses[tess_index].tess_faces = (prc_api_face *)calloc(tesses[tess_index].num_faces, sizeof(prc_api_face));
+    PRC_ASSERT_NOT_NULL(tesses[tess_index].tess_faces);
+    PRC_ASSERT(prc_api_initialize_tessellation(ctx, data, model_tree, tess_index,
+        &tesses[tess_index], NULL, &has_lines) >= 0);
+    return prc_api_get_tessellation_vertices(ctx, data, tess_index, 0,
+        &tesses[tess_index].tess_faces[0], &tesses[tess_index]);
+}
+
+static void
+open_written_items(prc_context *ctx, prc_api_data *data, prc_api_product **model_tree,
+    prc_api_tess **tesses, uint32_t want_tess)
+{
+    uint32_t num_parts = 0, num_products = 0, num_markups = 0;
+    uint32_t num_tess = 0, num_line_tess = 0, num_extra = 0;
+
+    *data = prc_api_open_contents(ctx, TEST_MATERIALS_FILENAME);
+    PRC_ASSERT_NOT_NULL(*data);
+    *model_tree = NULL;
+    PRC_ASSERT(prc_api_prep_model_tree(ctx, *data, &num_parts, &num_products, &num_markups) >= 0);
+    PRC_ASSERT(prc_api_create_model_tree(ctx, *data, model_tree, num_parts, num_products, num_markups) >= 0);
+    PRC_ASSERT(prc_api_get_number_tessellations(ctx, *data, *model_tree, &num_tess,
+        &num_line_tess, &num_extra, 0) >= 0);
+    PRC_ASSERT_EQ(num_tess, want_tess);
+    *tesses = (prc_api_tess *)calloc(num_tess, sizeof(prc_api_tess));
+    PRC_ASSERT_NOT_NULL(*tesses);
+}
+
+/* The same three items as test_texture_layers, read back through the public
+   API: each face's texture gives its kind, intensity and components, says
+   how many layers follow, and prc_api_get_texture_layer returns them in
+   order. Each image is told apart by its first byte, so a layer returned out
+   of order, or the main texture returned again, fails.
+
+   Then the written chain is damaged in memory, as a hostile file could: one
+   application names itself as the next, and another names a material past
+   the end of the table. Each face must be refused, not followed for ever or
+   read out of bounds. */
+static void
+test_texture_layers_read(prc_context *ctx)
+{
+    static const uint8_t png_x[77] = {
+        0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D,
+        0x49, 0x48, 0x44, 0x52, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0x02,
+        0x08, 0x02, 0x00, 0x00, 0x00, 0xFD, 0xD4, 0x9A, 0x73, 0x00, 0x00, 0x00,
+        0x14, 0x49, 0x44, 0x41, 0x54, 0x78, 0xDA, 0x63, 0x10, 0x64, 0x60, 0x60,
+        0xF8, 0xCF, 0x00, 0x22, 0xFE, 0xFF, 0x67, 0x00, 0x00, 0x12, 0xD9, 0x04,
+        0x0E, 0x95, 0x16, 0xD8, 0x58, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4E,
+        0x44, 0xAE, 0x42, 0x60, 0x82
+    };
+    static const uint8_t png_m[71] = {
+        0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D,
+        0x49, 0x48, 0x44, 0x52, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0x02,
+        0x08, 0x00, 0x00, 0x00, 0x00, 0x57, 0xDD, 0x52, 0xF8, 0x00, 0x00, 0x00,
+        0x0E, 0x49, 0x44, 0x41, 0x54, 0x78, 0xDA, 0x63, 0x50, 0x6A, 0x60, 0xF8,
+        0xCF, 0x00, 0x00, 0x04, 0xAE, 0x01, 0xA2, 0x13, 0xE9, 0x58, 0x16, 0x00,
+        0x00, 0x00, 0x00, 0x49, 0x45, 0x4E, 0x44, 0xAE, 0x42, 0x60, 0x82
+    };
+    static const uint8_t png_e[76] = {
+        0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D,
+        0x49, 0x48, 0x44, 0x52, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0x02,
+        0x08, 0x02, 0x00, 0x00, 0x00, 0xFD, 0xD4, 0x9A, 0x73, 0x00, 0x00, 0x00,
+        0x13, 0x49, 0x44, 0x41, 0x54, 0x78, 0xDA, 0x63, 0x30, 0x4E, 0x3B, 0x03,
+        0x44, 0x0C, 0x69, 0x2E, 0x4A, 0x40, 0x04, 0x00, 0x22, 0x41, 0x04, 0x63,
+        0x8E, 0x0E, 0x74, 0x5A, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4E, 0x44,
+        0xAE, 0x42, 0x60, 0x82
+    };
+    prc_api_write_texture_layer layers[2];
+    prc_api_write_rep_item items[3];
+    prc_api_data data;
+    prc_api_product *model_tree;
+    prc_api_tess *tesses;
+    const prc_api_texture *t;
+    prc_api_texture layer, after;
+    prc_file_struct_internal_global_data *gd;
+    uint32_t k, m, damaged;
+
+    printf("  sub-case: texture layers read back with their kinds\n");
+
+    memset(layers, 0, sizeof(layers));
+    layers[0].kind = PRC_API_WRITE_TEXTURE_KIND_OPACITY;
+    layers[0].image = png_m;
+    layers[0].image_size = sizeof(png_m);
+    layers[0].format = PRC_API_WRITE_TEXTURE_PNG;
+    layers[1].kind = PRC_API_WRITE_TEXTURE_KIND_SPHERICAL_REFLECTION;
+    layers[1].image = png_e;
+    layers[1].image_size = sizeof(png_e);
+    layers[1].format = PRC_API_WRITE_TEXTURE_PNG;
+    layers[1].intensity = 0.25;
+
+    memset(items, 0, sizeof(items));
+    for (k = 0; k < 3; k++)
+    {
+        items[k].has_material = 1;
+        items[k].material_color[0] = items[k].material_color[1] = items[k].material_color[2] = 1.0;
+        items[k].material_alpha = 1.0;
+        items[k].has_texture = 1;
+        items[k].texture_format = PRC_API_WRITE_TEXTURE_PNG;
+    }
+    items[0].texture_image = png_x;
+    items[0].texture_image_size = sizeof(png_x);
+    items[0].texture_layers = layers;
+    items[0].num_texture_layers = 2;
+    items[1].texture_image = png_e;
+    items[1].texture_image_size = sizeof(png_e);
+    items[1].texture_kind = PRC_API_WRITE_TEXTURE_KIND_SPHERICAL_REFLECTION;
+    items[1].texture_intensity = 0.5;
+    items[2].texture_image = png_x;
+    items[2].texture_image_size = sizeof(png_x);
+
+    PRC_ASSERT_EQ(write_textured_items(ctx, "texture_layers_read", items, 3), 0);
+    open_written_items(ctx, &data, &model_tree, &tesses, 3);
+    for (k = 0; k < 3; k++)
+    {
+        PRC_ASSERT(read_first_face(ctx, data, model_tree, tesses, k) >= 0);
+        PRC_ASSERT(tesses[k].tess_faces[0].is_texture);
+    }
+
+    /* A diffuse image, then an opacity mask, then a reflection at 0.25. */
+    t = &tesses[0].tess_faces[0].texture;
+    PRC_ASSERT_EQ(t->kind, (uint32_t)PRC_API_TEXTURE_KIND_DIFFUSE);
+    PRC_ASSERT_EQ(t->mapping_attributes, 0x1u);
+    PRC_ASSERT_NEAR(t->intensity, 1.0, 1e-12);
+    PRC_ASSERT_EQ(t->components, 0x7);
+    PRC_ASSERT_NOT_NULL(t->data);
+    PRC_ASSERT_EQ(t->data[0], 0x11);
+    PRC_ASSERT_EQ(t->num_layers, 2);
+
+    PRC_ASSERT_EQ(prc_api_get_texture_layer(ctx, t, 0, &layer), 0);
+    PRC_ASSERT_EQ(layer.kind, (uint32_t)PRC_API_TEXTURE_KIND_OPACITY);
+    PRC_ASSERT_EQ(layer.mapping_attributes, 0x4u);
+    PRC_ASSERT_NEAR(layer.intensity, 1.0, 1e-12);
+    PRC_ASSERT_EQ(layer.components, 0x8);
+    PRC_ASSERT_NOT_NULL(layer.data);
+    PRC_ASSERT_EQ(layer.data[0], 0x22);
+    PRC_ASSERT_EQ(layer.width, 2);
+    PRC_ASSERT_EQ(layer.height, 2);
+    PRC_ASSERT_EQ(layer.num_channels, 1);
+    PRC_ASSERT_EQ(layer.num_layers, 1);
+
+    /* The second layer, reached both from the face and from the first layer. */
+    PRC_ASSERT_EQ(prc_api_get_texture_layer(ctx, t, 1, &layer), 0);
+    PRC_ASSERT_EQ(prc_api_get_texture_layer(ctx, &layer, 0, &after), PRC_API_ERROR_PARAMETER);
+    PRC_ASSERT_EQ(layer.kind, (uint32_t)PRC_API_TEXTURE_KIND_SPHERICAL_REFLECTION);
+    PRC_ASSERT_EQ(layer.mapping_attributes, 0x8u);
+    PRC_ASSERT_NEAR(layer.intensity, 0.25, 1e-12);
+    PRC_ASSERT_EQ(layer.components, 0x7);
+    PRC_ASSERT_EQ(layer.data[0], 0x33);
+    PRC_ASSERT_EQ(layer.num_layers, 0);
+    PRC_ASSERT_EQ(prc_api_get_texture_layer(ctx, t, 0, &layer), 0);
+    PRC_ASSERT_EQ(prc_api_get_texture_layer(ctx, &layer, 0, &after), 0);
+    PRC_ASSERT_EQ(after.data[0], 0x33);
+
+    PRC_ASSERT_EQ(prc_api_get_texture_layer(ctx, t, 2, &layer), PRC_API_ERROR_PARAMETER);
+    PRC_ASSERT_EQ(prc_api_get_texture_layer(ctx, NULL, 0, &layer), PRC_API_ERROR_PARAMETER);
+    PRC_ASSERT_EQ(prc_api_get_texture_layer(ctx, t, 0, NULL), PRC_API_ERROR_PARAMETER);
+
+    /* A reflection on its own. */
+    t = &tesses[1].tess_faces[0].texture;
+    PRC_ASSERT_EQ(t->kind, (uint32_t)PRC_API_TEXTURE_KIND_SPHERICAL_REFLECTION);
+    PRC_ASSERT_NEAR(t->intensity, 0.5, 1e-12);
+    PRC_ASSERT_EQ(t->components, 0x7);
+    PRC_ASSERT_EQ(t->data[0], 0x33);
+    PRC_ASSERT_EQ(t->num_layers, 0);
+    PRC_ASSERT_EQ(prc_api_get_texture_layer(ctx, t, 0, &layer), PRC_API_ERROR_PARAMETER);
+
+    /* A plain diffuse image states nothing, and reads with the defaults. */
+    t = &tesses[2].tess_faces[0].texture;
+    PRC_ASSERT_EQ(t->kind, (uint32_t)PRC_API_TEXTURE_KIND_DIFFUSE);
+    PRC_ASSERT_EQ(t->mapping_attributes, 0u);
+    PRC_ASSERT_NEAR(t->intensity, 1.0, 1e-12);
+    PRC_ASSERT_EQ(t->components, 0xF);
+    PRC_ASSERT_EQ(t->data[0], 0x11);
+    PRC_ASSERT_EQ(t->num_layers, 0);
+
+    prc_api_release_data(ctx, data, tesses, 3, NULL, 0, NULL, 0, model_tree);
+
+    printf("  sub-case: a looping or out-of-range texture chain is refused\n");
+    for (damaged = 0; damaged < 2; damaged++)
+    {
+        open_written_items(ctx, &data, &model_tree, &tesses, 3);
+        gd = &((prc_data *)data)->file_struct[0].globals->global_data;
+        /* The last application in the table ends item 0's chain. */
+        for (m = gd->material_count; m > 0; m--)
+        {
+            if (gd->materials[m - 1].tag == PRC_TYPE_GRAPH_TextureApplication &&
+                gd->materials[m - 1].biased_next_texture_index == 0)
+                break;
+        }
+        PRC_ASSERT(m > 0);
+        gd->materials[m - 1].biased_next_texture_index = damaged == 0 ? m : gd->material_count + 1;
+        k = 0;
+        if (read_first_face(ctx, data, model_tree, tesses, 0) < 0) k++;
+        if (read_first_face(ctx, data, model_tree, tesses, 1) < 0) k++;
+        if (read_first_face(ctx, data, model_tree, tesses, 2) < 0) k++;
+        /* Only the damaged chain is refused. */
+        PRC_ASSERT_EQ(k, 1);
+        prc_api_release_data(ctx, data, tesses, 3, NULL, 0, NULL, 0, model_tree);
+    }
+    remove(TEST_MATERIALS_FILENAME);
+}
+
 int
 main(void)
 {
@@ -1070,6 +1455,8 @@ main(void)
     test_face_names_its_style(ctx);
     test_shared_tessellation_names_no_style(ctx);
     test_texture_layers(ctx);
+    test_parent_herit_colour(ctx);
+    test_texture_layers_read(ctx);
 
     prc_release_context(ctx);
 

@@ -202,6 +202,7 @@ void prc_api_initialize_face(prc_context *ctx, prc_api_face *face_out);
  * @param texture Texture container to initialize.
  */
 void prc_api_initialize_texture(prc_context *ctx, prc_api_texture *texture);
+void prc_internal_api_fill_texture(const prc_internal_texture *texture, prc_api_texture *texture_out);
 
 /**
  * @brief Initialize an internal style structure to defaults.

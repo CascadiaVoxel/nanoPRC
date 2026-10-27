@@ -2074,6 +2074,7 @@ struct prc_color_data_s
 {
     prc_rgb_color first_vertex;
     prc_color_data_remainder *remaining_vertices;
+    uint32_t number_colors; /* first_vertex plus the remaining_vertices entries */
 };
 
 /* Table 143 VertexColors */

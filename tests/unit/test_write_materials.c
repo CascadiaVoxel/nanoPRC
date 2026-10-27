@@ -34,6 +34,7 @@
 #include "prc_context.h"
 #include "prc_api.h"
 #include "prc_data.h"
+#include "prc_internal_api.h"
 
 #define TEST_MATERIALS_FILENAME "test_write_materials_tmp.prc"
 
@@ -1038,6 +1039,179 @@ test_texture_layers(prc_context *ctx)
     remove(TEST_MATERIALS_FILENAME);
 }
 
+/* Four parts: two red items sharing one tessellation, then a green and a
+   blue item. A tessellation used by two items names no style on its faces, so
+   the red faces take their colour from the walk up the product tree, which is
+   what this test is about. */
+static void
+write_herit_file(prc_context *ctx)
+{
+    static const double rgb[3][3] = { { 1.0, 0.0, 0.0 }, { 0.0, 1.0, 0.0 }, { 0.0, 0.0, 1.0 } };
+    static const uint32_t tess_of[4] = { 1, 1, 2, 3 };
+    static const int colour_of[4] = { 0, 0, 1, 2 };
+    prc_api_write_tessellation tess[3];
+    prc_api_write_rep_item items[4];
+    prc_api_write_node leaves[4], root;
+    prc_api_write_node *kids[4];
+    uint8_t *buf = NULL;
+    size_t buf_size = 0;
+    FILE *fid;
+    uint32_t k, c;
+
+    for (k = 0; k < 3; k++)
+        fill_tess(&tess[k]);
+    memset(items, 0, sizeof(items));
+    for (k = 0; k < 4; k++)
+    {
+        items[k].kind = PRC_API_WRITE_RI_SURFACE;
+        items[k].biased_tessellation_index = tess_of[k];
+        items[k].has_material = 1;
+        for (c = 0; c < 3; c++)
+            items[k].material_color[c] = rgb[colour_of[k]][c];
+        items[k].material_alpha = 1.0;
+        memset(&leaves[k], 0, sizeof(leaves[k]));
+        leaves[k].rep_items = &items[k];
+        leaves[k].num_rep_items = 1;
+        leaves[k].bbox_max[0] = leaves[k].bbox_max[1] = 1.0;
+        kids[k] = &leaves[k];
+    }
+    memset(&root, 0, sizeof(root));
+    root.name = "root";
+    root.children = kids;
+    root.num_children = 4;
+    root.bbox_max[0] = root.bbox_max[1] = 1.0;
+
+    PRC_ASSERT_EQ(prc_api_write_prc_buffer(ctx, "parent_herit", &root, tess, 3, &buf, &buf_size), 0);
+    fid = fopen(TEST_MATERIALS_FILENAME, "wb");
+    PRC_ASSERT_NOT_NULL(fid);
+    PRC_ASSERT_EQ(fwrite(buf, 1, buf_size, fid), buf_size);
+    fclose(fid);
+    prc_api_write_prc_buffer_free(ctx, buf);
+}
+
+/* Reads the first red item's face colour after giving its ancestors styles
+   in memory, as a file could give them:
+     which 0: as written (every ancestor has the writer's default style, no flags);
+     which 1: the root styled blue, with ParentHeritColor;
+     which 2: the root blue and the node below it green, both with the flag;
+     which 3: the root styled blue, without the flag.
+   Also returns the green and blue items' colours, to show which is which. */
+static void
+herit_case(prc_context *ctx, int which, float red_out[3], float green_out[3], float blue_out[3])
+{
+    prc_api_data data;
+    prc_api_product *model_tree;
+    prc_api_tess *tesses;
+    prc_api_object_style *chain[16];
+    prc_api_object_style *node;
+    uint32_t n = 0, k, green_style, blue_style;
+    uint32_t num_parts = 0, num_products = 0, num_markups = 0;
+    uint32_t num_tess = 0, num_line_tess = 0, num_extra = 0;
+    uint8_t has_lines = 0;
+    prc_api_material m;
+
+    data = prc_api_open_contents(ctx, TEST_MATERIALS_FILENAME);
+    PRC_ASSERT_NOT_NULL(data);
+    model_tree = NULL;
+    PRC_ASSERT(prc_api_prep_model_tree(ctx, data, &num_parts, &num_products, &num_markups) >= 0);
+    PRC_ASSERT(prc_api_create_model_tree(ctx, data, &model_tree, num_parts, num_products, num_markups) >= 0);
+    PRC_ASSERT(prc_api_get_number_tessellations(ctx, data, model_tree, &num_tess,
+        &num_line_tess, &num_extra, 0) >= 0);
+    PRC_ASSERT_EQ(num_tess, 4);
+    tesses = (prc_api_tess *)calloc(num_tess, sizeof(prc_api_tess));
+    PRC_ASSERT_NOT_NULL(tesses);
+    for (k = 0; k < 4; k++)
+    {
+        tesses[k].num_faces = prc_api_get_number_faces(ctx, data, k);
+        PRC_ASSERT(tesses[k].num_faces >= 1);
+        tesses[k].tess_faces = (prc_api_face *)calloc(tesses[k].num_faces, sizeof(prc_api_face));
+        PRC_ASSERT_NOT_NULL(tesses[k].tess_faces);
+        PRC_ASSERT(prc_api_initialize_tessellation(ctx, data, model_tree, k, &tesses[k], NULL, &has_lines) >= 0);
+        PRC_ASSERT_NOT_NULL(tesses[k].style_leaf);
+    }
+    green_style = ((prc_api_object_style *)tesses[2].style_leaf)->base_with_graphics->graphics_content.biased_index_of_line_style;
+    blue_style = ((prc_api_object_style *)tesses[3].style_leaf)->base_with_graphics->graphics_content.biased_index_of_line_style;
+    PRC_ASSERT(green_style > 0 && blue_style > 0 && green_style != blue_style);
+
+    /* The red item's node and its ancestors, leaf first. The writer gives
+       every node above the item its default style, without flags, so in case
+       0 the ancestors are styled already and the item's own style must win. */
+    for (node = (prc_api_object_style *)tesses[0].style_leaf; node != NULL; node = node->parent)
+    {
+        PRC_ASSERT(n < 16);
+        chain[n++] = node;
+    }
+    PRC_ASSERT(n >= 3);
+    PRC_ASSERT(chain[0]->base_with_graphics->graphics_content.biased_index_of_line_style > 0);
+    for (k = 0; k < n; k++)
+        PRC_ASSERT_EQ(chain[k]->base_with_graphics->graphics_content.behavior_bit_field1 &
+                      PRC_GRAPHICS_ParentHeritColor, 0);
+
+    if (which >= 1)
+    {
+        chain[n - 1]->base_with_graphics->graphics_content.biased_index_of_line_style = blue_style;
+        if (which != 3)
+            chain[n - 1]->base_with_graphics->graphics_content.behavior_bit_field1 |= PRC_GRAPHICS_ParentHeritColor;
+    }
+    if (which == 2)
+    {
+        chain[n - 2]->base_with_graphics->graphics_content.biased_index_of_line_style = green_style;
+        chain[n - 2]->base_with_graphics->graphics_content.behavior_bit_field1 |= PRC_GRAPHICS_ParentHeritColor;
+    }
+
+    for (k = 0; k < 4; k++)
+    {
+        float *out = k == 0 ? red_out : k == 2 ? green_out : k == 3 ? blue_out : NULL;
+
+        if (out == NULL)
+            continue;
+        PRC_ASSERT(prc_api_get_tessellation_vertices(ctx, data, k, 0, &tesses[k].tess_faces[0], &tesses[k]) >= 0);
+        memset(&m, 0, sizeof(m));
+        prc_api_get_face_material(ctx, &tesses[k], &m, 0);
+        memcpy(out, m.diffuse, sizeof(float) * 3);
+    }
+    prc_api_release_data(ctx, data, tesses, 4, NULL, 0, NULL, 0, model_tree);
+}
+
+/* Colour inheritance down the product tree (ISO 14739-1, GraphicsContent
+   behavior_bit_field):
+   - no ancestor flagged: the item's own red;
+   - the root styled blue with ParentHeritColor: blue;
+   - the root blue and the node below it green, both flagged: blue, the
+     highest flagged ancestor;
+   - the root styled blue without the flag: the item's own red.
+   The last case is what the rule before nanoPRC #143 got wrong (it took the
+   topmost style); the second and third are what #143 alone gets wrong (it
+   kept the lowest style found). */
+static void
+test_parent_herit_colour(prc_context *ctx)
+{
+    static const float red[3] = { 1.0f, 0.0f, 0.0f };
+    static const float green[3] = { 0.0f, 1.0f, 0.0f };
+    static const float blue[3] = { 0.0f, 0.0f, 1.0f };
+    const float *expect[4];
+    float r[3], g[3], b[3];
+    int k, c;
+
+    printf("  sub-case: an ancestor with ParentHeritColor overrides the item's colour\n");
+    expect[0] = red;
+    expect[1] = blue;
+    expect[2] = blue;
+    expect[3] = red;
+    write_herit_file(ctx);
+    for (k = 0; k < 4; k++)
+    {
+        herit_case(ctx, k, r, g, b);
+        for (c = 0; c < 3; c++)
+        {
+            PRC_ASSERT_NEAR(g[c], green[c], 0.01);
+            PRC_ASSERT_NEAR(b[c], blue[c], 0.01);
+            PRC_ASSERT_NEAR(r[c], expect[k][c], 0.01);
+        }
+    }
+    remove(TEST_MATERIALS_FILENAME);
+}
+
 /* Opens the file written by write_textured_items and reads the first face of
    tessellation tess_index. Returns the get_tessellation_vertices code. */
 static int
@@ -1266,6 +1440,7 @@ main(void)
     test_face_names_its_style(ctx);
     test_shared_tessellation_names_no_style(ctx);
     test_texture_layers(ctx);
+    test_parent_herit_colour(ctx);
     test_texture_layers_read(ctx);
 
     prc_release_context(ctx);

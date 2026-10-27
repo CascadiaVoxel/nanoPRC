@@ -2437,8 +2437,13 @@ prc_api_helper_get_style_index_from_leaf(prc_context *ctx, prc_data *data,
             }
         }
 #endif
-        /* TODO This inheritance is confusing */
-        if (style->base_with_graphics->graphics_content.biased_index_of_line_style > 0 && *style_unbiased_index == -1)
+        /* A node's own style wins over its ancestors', unless an ancestor sets
+           ParentHeritColor; then the highest such ancestor wins (ISO 14739-1,
+           GraphicsContent behavior_bit_field). The walk runs upwards, so a
+           flagged ancestor replaces whatever was found below it. */
+        if (style->base_with_graphics->graphics_content.biased_index_of_line_style > 0 &&
+            (*style_unbiased_index == -1 ||
+             (style->base_with_graphics->graphics_content.behavior_bit_field1 & PRC_GRAPHICS_ParentHeritColor)))
         {
             *file_index = style->base_with_graphics->base.file_index;
             *style_unbiased_index = style->base_with_graphics->graphics_content.biased_index_of_line_style - 1;

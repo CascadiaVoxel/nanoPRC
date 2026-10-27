@@ -2533,7 +2533,9 @@ prc_decode_compressed_tess(prc_context *ctx, prc_tess_3d_compressed *data, uint8
     int code = 0;
     int status_code = 0;
     prc_treated_details treated_details;
-    prc_triangle_stack stack;
+    /* Initialised here, not where traversal starts: the error paths before that jump to cleanup, which empties
+       the stack. */
+    prc_triangle_stack stack = { 0 };
     prc_vec3 new_point;
     prc_vec3 *vertices_out = NULL;
     int32_t *hop_depth = NULL; /* see PRC_DIAG_DUMP_HOP_DEPTH's own comment below */
@@ -2700,6 +2702,14 @@ prc_decode_compressed_tess(prc_context *ctx, prc_tess_3d_compressed *data, uint8
     /* Allocate the indices for the triangles.  Number of triangles is the size of
        the triangle_face_array */
     num_triangles = data->triangle_face_array_size;
+    /* Traversal reads one edge status per triangle before the last; the file states both lengths. */
+    if (num_triangles > 1 &&
+        (data->edge_status_array == NULL || data->edge_status_array_size < (uint32_t)num_triangles - 1))
+    {
+        code = PRC_ERROR_PARSE;
+        prc_error(ctx, code, "edge_status_array shorter than the triangles in prc_decode_compressed_tess\n");
+        goto cleanup;
+    }
     triangle_indices = (uint32_t *)prc_calloc(ctx, sizeof(uint32_t), num_triangles * 3);
     if (triangle_indices == NULL)
     {

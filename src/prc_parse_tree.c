@@ -523,6 +523,7 @@ prc_parse_mkp_leader(prc_context *ctx, prc_bit_state *bit_state, prc_mkp_leader 
     if (code < 0)
     {
         prc_error(ctx, code, "Failed in prc_parse_base_with_graphics\n");
+        return code;
     }
 
     data->is_first_linked_item = prc_bitread_bit(ctx, bit_state);
@@ -892,8 +893,8 @@ prc_parse_mkp_annotation_set_notag(prc_context *ctx, prc_bit_state *bit_state,
                 break;
 
             default:
-                prc_error(ctx, code, "Parsing error in prc_parse_markup_data\n");
-                return code;
+                prc_error(ctx, PRC_ERROR_PARSE, "Unknown annotation entity in prc_parse_mkp_annotation_set_notag\n");
+                return PRC_ERROR_PARSE;
             }
         }
     }
@@ -1104,8 +1105,8 @@ prc_parse_markup_data(prc_context *ctx, prc_bit_state *bit_state, prc_markup_dat
                 break;
 
             default:
-                prc_error(ctx, code, "Parsing error in prc_parse_markup_data\n");
-                return 0; /* Swallow it */
+                prc_error(ctx, PRC_ERROR_PARSE, "Unknown annotation entity in prc_parse_markup_data\n");
+                return PRC_ERROR_PARSE;
             }
         }
     }

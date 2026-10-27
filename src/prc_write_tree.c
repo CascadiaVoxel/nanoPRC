@@ -234,39 +234,114 @@ prc_write_style_map_add(prc_context *ctx, prc_write_style_map *map,
     return 0;
 }
 
+/* The nodes of a tree in the order a recursive pre-order walk visits them
+   (a node, then each child's subtree in turn), gathered with a heap stack so
+   that a deep tree cannot overflow the C stack. The two walks below used to
+   recurse; a chain 20,000 nodes deep overflowed the stack. Keeping the same
+   order keeps the style table, and so the output, unchanged. */
+static int
+prc_write_tree_preorder(prc_context *ctx, const prc_write_tree_node *root,
+    const prc_write_tree_node ***out, uint32_t *out_count)
+{
+    const prc_write_tree_node **stack = NULL, **order = NULL;
+    uint32_t top = 0, stack_cap = 64, count = 0, order_cap = 64;
+
+    *out = NULL;
+    *out_count = 0;
+    if (root == NULL)
+        return 0;
+    stack = (const prc_write_tree_node **)prc_malloc(ctx, stack_cap * sizeof(*stack));
+    order = (const prc_write_tree_node **)prc_malloc(ctx, order_cap * sizeof(*order));
+    if (stack == NULL || order == NULL)
+        goto fail;
+    stack[top++] = root;
+    while (top > 0)
+    {
+        const prc_write_tree_node *node = stack[--top];
+        uint32_t k;
+
+        if (count == order_cap)
+        {
+            const prc_write_tree_node **grown;
+            if (order_cap > 0x7FFFFFFFu / 2)
+                goto fail;
+            grown = (const prc_write_tree_node **)prc_realloc(ctx, order, (size_t)order_cap * 2 * sizeof(*order));
+            if (grown == NULL)
+                goto fail;
+            order = grown;
+            order_cap *= 2;
+        }
+        order[count++] = node;
+        /* Children pushed last to first, so the first is visited first. */
+        for (k = node->num_children; k > 0; k--)
+        {
+            if (node->children[k - 1] == NULL)
+                continue;
+            if (top == stack_cap)
+            {
+                const prc_write_tree_node **grown;
+                if (stack_cap > 0x7FFFFFFFu / 2)
+                    goto fail;
+                grown = (const prc_write_tree_node **)prc_realloc(ctx, stack, (size_t)stack_cap * 2 * sizeof(*stack));
+                if (grown == NULL)
+                    goto fail;
+                stack = grown;
+                stack_cap *= 2;
+            }
+            stack[top++] = node->children[k - 1];
+        }
+    }
+    prc_free(ctx, stack);
+    *out = order;
+    *out_count = count;
+    return 0;
+
+fail:
+    prc_free(ctx, stack);
+    prc_free(ctx, order);
+    prc_error(ctx, PRC_ERROR_MEMORY, "prc_write_tree_preorder: out of memory\n");
+    return PRC_ERROR_MEMORY;
+}
+
 static int
 prc_write_collect_node_styles(prc_context *ctx, prc_write_global_tables *tables,
-    const prc_write_tree_node *node, prc_write_style_map *map)
+    const prc_write_tree_node *root, prc_write_style_map *map)
 {
-    uint32_t k;
+    const prc_write_tree_node **order;
+    uint32_t count, n, k;
+    int code = 0;
 
-    if (node == NULL)
-        return 0;
-
-    for (k = 0; k < node->num_rep_items; k++)
+    if (prc_write_tree_preorder(ctx, root, &order, &count) != 0)
+        return PRC_ERROR_MEMORY;
+    for (n = 0; n < count && code == 0; n++)
     {
-        const prc_write_rep_item *ri = &node->rep_items[k];
-        uint32_t style;
+        const prc_write_tree_node *node = order[n];
 
-        if (!ri->has_material)
-            continue;
-
-        style = prc_write_add_item_style(ctx, tables, ri);
-        if (style == 0)
+        for (k = 0; k < node->num_rep_items; k++)
         {
-            prc_error(ctx, PRC_ERROR_INTERNAL,
-                "prc_write_collect_item_styles: could not register an item's material\n");
-            return PRC_ERROR_INTERNAL;
+            const prc_write_rep_item *ri = &node->rep_items[k];
+            uint32_t style;
+
+            if (!ri->has_material)
+                continue;
+
+            style = prc_write_add_item_style(ctx, tables, ri);
+            if (style == 0)
+            {
+                prc_error(ctx, PRC_ERROR_INTERNAL,
+                    "prc_write_collect_item_styles: could not register an item's material\n");
+                code = PRC_ERROR_INTERNAL;
+                break;
+            }
+            if (prc_write_style_map_add(ctx, map, ri, style) != 0)
+            {
+                code = PRC_ERROR_MEMORY;
+                break;
+            }
         }
-        if (prc_write_style_map_add(ctx, map, ri, style) != 0)
-            return PRC_ERROR_MEMORY;
     }
-
-    for (k = 0; k < node->num_children; k++)
-        if (prc_write_collect_node_styles(ctx, tables, node->children[k], map) != 0)
-            return PRC_ERROR_INTERNAL;
-
-    return 0;
+    prc_free(ctx, order);
+    return code;
 }
 
 int
@@ -287,28 +362,32 @@ prc_write_collect_item_styles(prc_context *ctx, prc_write_global_tables *tables,
    styled ones: a mesh shared by a styled item and an unstyled one still cannot
    carry a per-face style, because the face record would then be wrong for the
    unstyled item. */
-static void
-prc_write_count_tess_refs(const prc_write_tree_node *node, const prc_write_style_map *map,
+static int
+prc_write_count_tess_refs(prc_context *ctx, const prc_write_tree_node *root, const prc_write_style_map *map,
     uint32_t *refs, uint32_t *styles, uint32_t num_entries)
 {
-    uint32_t k;
+    const prc_write_tree_node **order;
+    uint32_t count, n, k;
 
-    if (node == NULL)
-        return;
-
-    for (k = 0; k < node->num_rep_items; k++)
+    if (prc_write_tree_preorder(ctx, root, &order, &count) != 0)
+        return PRC_ERROR_MEMORY;
+    for (n = 0; n < count; n++)
     {
-        const prc_write_rep_item *ri = &node->rep_items[k];
-        uint32_t bt = ri->biased_tessellation_index;
+        const prc_write_tree_node *node = order[n];
 
-        if (bt == 0 || bt > num_entries)
-            continue;
-        refs[bt - 1]++;
-        styles[bt - 1] = prc_write_style_for_item(map, ri, 0);
+        for (k = 0; k < node->num_rep_items; k++)
+        {
+            const prc_write_rep_item *ri = &node->rep_items[k];
+            uint32_t bt = ri->biased_tessellation_index;
+
+            if (bt == 0 || bt > num_entries)
+                continue;
+            refs[bt - 1]++;
+            styles[bt - 1] = prc_write_style_for_item(map, ri, 0);
+        }
     }
-
-    for (k = 0; k < node->num_children; k++)
-        prc_write_count_tess_refs(node->children[k], map, refs, styles, num_entries);
+    prc_free(ctx, order);
+    return 0;
 }
 
 int
@@ -334,7 +413,11 @@ prc_write_resolve_face_styles(prc_context *ctx, const prc_write_tree_node *root,
         return PRC_ERROR_MEMORY;
     }
 
-    prc_write_count_tess_refs(root, map, refs, out_styles, num_entries);
+    if (prc_write_count_tess_refs(ctx, root, map, refs, out_styles, num_entries) != 0)
+    {
+        prc_free(ctx, refs);
+        return PRC_ERROR_MEMORY;
+    }
 
     /* Keep a style only where exactly one item references the tessellation.
        Anything shared falls back to 0, which is the behaviour every file

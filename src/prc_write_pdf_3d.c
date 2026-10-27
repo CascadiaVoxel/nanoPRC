@@ -340,7 +340,8 @@ prc_write_pdf_3d_annotation(prc_context *ctx, const char *pdf_path,
     int code;
     int ret = PRC_ERROR_INTERNAL;
 
-    if (ctx == NULL || pdf_path == NULL || (prc_data == NULL && prc_size > 0))
+    if (ctx == NULL || pdf_path == NULL || (prc_data == NULL && prc_size > 0) ||
+        (options != NULL && options->num_views > 0 && options->views == NULL))
     {
         prc_error(ctx, PRC_ERROR_INTERNAL, "prc_write_pdf_3d_annotation: invalid arguments\n");
         return PRC_ERROR_INTERNAL;

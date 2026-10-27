@@ -350,8 +350,25 @@ prc_write_tess_3d_ex(prc_context *ctx, prc_bit_write_state *s,
         tri_cursor = 0;
         for (f = 0; f < num_faces; f++)
         {
-            const uint32_t *t = &tri_indices[(size_t)tri_cursor * 3];
+            const uint32_t *t = NULL;
             prc_vec3 v0, v1, v2, e1, e2, n;
+
+            /* The face's first triangle, or for a face of fans or strips only,
+               its first group's first three vertices. Taking a triangle the
+               face does not have read past tri_indices. */
+            if (face_tri_counts[f] > 0)
+                t = &tri_indices[(size_t)tri_cursor * 3];
+            else if (p->face_groups != NULL && p->face_groups[f].num_fans > 0)
+                t = p->face_groups[f].fans[0].vertex_indices;
+            else if (p->face_groups != NULL && p->face_groups[f].num_strips > 0)
+                t = p->face_groups[f].strips[0].vertex_indices;
+            if (t == NULL)
+            {
+                face_normals[(size_t)f * 3 + 0] = 0.0;
+                face_normals[(size_t)f * 3 + 1] = 0.0;
+                face_normals[(size_t)f * 3 + 2] = 0.0;
+                continue;
+            }
 
             v0.x = positions[(size_t)t[0] * 3 + 0]; v0.y = positions[(size_t)t[0] * 3 + 1]; v0.z = positions[(size_t)t[0] * 3 + 2];
             v1.x = positions[(size_t)t[1] * 3 + 0]; v1.y = positions[(size_t)t[1] * 3 + 1]; v1.z = positions[(size_t)t[1] * 3 + 2];

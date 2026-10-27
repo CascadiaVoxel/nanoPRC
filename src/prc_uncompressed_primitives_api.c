@@ -107,7 +107,7 @@ prc_internal_api_get_normal_texture_position_index(uint32_t *index, int32_t *nor
 
             /* Not sure about the texture indices though. For now, don't divide by three as
                they are not x,y,z locations */
-            for (uint32_t k = 0; k < number_of_texture_indices; k++)
+            for (uint32_t k = 0; k < number_of_texture_indices && k < MAX_NUM_TEXTURE_COORDS; k++)
             {
                 texture_indices[k] = index[k];
             }
@@ -120,7 +120,7 @@ prc_internal_api_get_normal_texture_position_index(uint32_t *index, int32_t *nor
 
             /* Not sure about the texture indices though. For now, don't divide by three as
                they are not x,y,z locations */
-            for (uint32_t k = 0; k < number_of_texture_indices; k++)
+            for (uint32_t k = 0; k < number_of_texture_indices && k < MAX_NUM_TEXTURE_COORDS; k++)
             {
                 texture_indices[k] = index[k + 1];
             }
@@ -136,7 +136,7 @@ prc_internal_api_get_normal_texture_position_index(uint32_t *index, int32_t *nor
 
         /* Not sure about the texture indices though. For now, don't divide by three as
            they are not x,y,z locations */
-        for (uint32_t k = 0; k < number_of_texture_indices; k++)
+        for (uint32_t k = 0; k < number_of_texture_indices && k < MAX_NUM_TEXTURE_COORDS; k++)
         {
             texture_indices[k] = index[k + 1];
         }

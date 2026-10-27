@@ -61,6 +61,9 @@
 #include "prc_data.h"
 #include "prc_bit.h"
 #include "prc_parse_tess.h"
+#include "prc_api.h"
+#include "prc_internal_api.h"
+#include "prc_internal_proto_api.h"
 
 #define NUM_POSITIONS 16
 
@@ -259,6 +262,44 @@ run_fixture(prc_context *ctx, int second_group, const char *label)
     printf("\n");
 }
 
+/* A face can ask for more vertex colours than the file stores (three corners
+   per triangle against one colour per vertex reference). The decoder must stop
+   at the stored count and give the extra vertices the last stored colour,
+   never reading past the array: three stored colours, five asked for. A
+   sentinel entry after the array must stay unread. */
+static void
+test_colours_past_stored_count(void)
+{
+    prc_context *ctx = prc_new_context(NULL);
+    prc_color_data cd;
+    prc_color_data_remainder rem[3];
+    float out[5 * 4];
+    uint32_t k;
+
+    printf("  sub-case: more vertices than stored colours\n");
+    PRC_ASSERT_NOT_NULL(ctx);
+    memset(&cd, 0, sizeof(cd));
+    memset(rem, 0, sizeof(rem));
+    cd.first_vertex.red = 255.0;
+    rem[0].color.green = 255.0;
+    rem[1].color.blue = 255.0;
+    rem[2].color.red = rem[2].color.green = rem[2].color.blue = 51.0;   /* sentinel, not stored */
+    cd.remaining_vertices = rem;
+    cd.number_colors = 3;
+    prc_internal_api_process_vertex_color_data(ctx, 5, &cd, 0, out);
+    PRC_ASSERT_NEAR(out[0], 1.0, 1e-6);           /* first: red */
+    PRC_ASSERT_NEAR(out[4 + 1], 1.0, 1e-6);       /* second: green */
+    PRC_ASSERT_NEAR(out[8 + 2], 1.0, 1e-6);       /* third: blue */
+    for (k = 3; k < 5; k++)
+    {
+        PRC_ASSERT_NEAR(out[k * 4 + 0], 0.0, 1e-6);
+        PRC_ASSERT_NEAR(out[k * 4 + 1], 0.0, 1e-6);
+        PRC_ASSERT_NEAR(out[k * 4 + 2], 1.0, 1e-6);   /* the last stored colour, not the sentinel */
+        PRC_ASSERT_NEAR(out[k * 4 + 3], 1.0, 1e-6);
+    }
+    prc_release_context(ctx);
+}
+
 int
 main(void)
 {
@@ -272,6 +313,7 @@ main(void)
     run_fixture(ctx, GROUP_NONE,  "control: face of plain triangles only");
     run_fixture(ctx, GROUP_FAN,   "mixed: same face plus a triangle fan");
     run_fixture(ctx, GROUP_STRIP, "mixed: same face plus a triangle strip");
+    test_colours_past_stored_count();
 
     prc_release_context(ctx);
 

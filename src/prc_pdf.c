@@ -857,7 +857,10 @@ pdf_parse_view_prc(prc_context *ctx, prc_pdf_decrypt_params *decrypt_params,
         prc_error(ctx, PRC_ERROR_PARSE, "Did not find XN in PDF file\n");
         return code;
     }
-    return 0;
+    /* 1, not 0: a view with no C2W returns 0 above, and the caller skips any
+       view that returns 0 or less. Returning 0 here as well made it drop every
+       good view too. */
+    return 1;
 }
 
 /* Parse the values %d %d R that are contained with the brackets [ to  ]

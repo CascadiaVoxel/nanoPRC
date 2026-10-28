@@ -4348,7 +4348,7 @@ prc_parse_brep_data(prc_context *ctx, prc_bit_state *bit_state,
     data->number_of_connex = prc_bitread_uint32(ctx, bit_state);
     if (data->number_of_connex > 0)
     {
-        data->connex = (prc_ptr_topology *)prc_malloc(ctx, data->number_of_connex * sizeof(prc_ptr_topology));
+        data->connex = (prc_ptr_topology *)prc_calloc(ctx, data->number_of_connex, sizeof(prc_ptr_topology));
         if (data->connex == NULL)
         {
             prc_error(ctx, PRC_ERROR_MEMORY, "Allocation error in prc_parse_brep_data\n");
@@ -7191,7 +7191,7 @@ prc_parse_geometry_summary(prc_context *ctx, prc_bit_state *bit_state, prc_geome
     data->number_of_bodies = prc_bitread_uint32(ctx, bit_state);
     if (data->number_of_bodies > 0)
     {
-        data->bodies = (prc_body_information *)prc_malloc(ctx, data->number_of_bodies * sizeof(prc_body_information));
+        data->bodies = (prc_body_information *)prc_calloc(ctx, data->number_of_bodies, sizeof(prc_body_information));
         if (data->bodies == NULL)
         {
             prc_error(ctx, PRC_ERROR_MEMORY, "Allocation error in prc_parse_geometry_summary\n");
@@ -7258,7 +7258,7 @@ prc_parse_graphics_information(prc_context *ctx, prc_bit_state *bit_state, prc_g
 
     if (data->number_of_element > 0)
     {
-        data->element_information = (prc_element_information *)prc_malloc(ctx, data->number_of_element * sizeof(prc_element_information));
+        data->element_information = (prc_element_information *)prc_calloc(ctx, data->number_of_element, sizeof(prc_element_information));
         if (data->element_information == NULL)
         {
             prc_error(ctx, PRC_ERROR_MEMORY, "Allocation error in prc_parse_graphics_information\n");

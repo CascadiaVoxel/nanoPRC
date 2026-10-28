@@ -664,6 +664,15 @@ prc_huffman_decode_core(prc_context *ctx, prc_bit_state *state, uint8_t num_bits
     }
     bits_last_integer = prc_bitread_uint32(ctx, state);
 
+    /* The bits used in the last word: at most 32. A larger value made max_bits below claim bits past the end of
+       huffman_array, and the reader trusts max_bits. */
+    if (bits_last_integer > 32)
+    {
+        prc_error(ctx, PRC_ERROR_PARSE, "huffman_array last-word bit count is invalid\n");
+        prc_free(ctx, huffman_array);
+        return NULL;
+    }
+
     /* Total bits actually available in huffman_array. Everything read from
        huff_state below is bounded against this so a crafted num_leaves/num_values
        cannot walk the reader past the end of huffman_array. */

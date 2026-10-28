@@ -759,8 +759,11 @@ prc_internal_uncompressed_create_vertices(prc_context *ctx,
        and normal) and the single list of indices to those vertices. */
     for (k = 0; k < indice_count; k++)
     {
+        /* Corner k's own texture index, so corners at one position with
+           different UVs get vertices of their own. */
         code = prc_internal_api_get_vertex_index(ctx, &vertex_index,
-            uncompressed_data->face_texture_indices, num_text_coord,
+            uncompressed_data->face_texture_indices != NULL ?
+                &uncompressed_data->face_texture_indices[k] : NULL, num_text_coord,
             uncompressed_data, k);
         if (code < 0)
             return code;

@@ -136,6 +136,7 @@ int32_t *prc_bitread_short_array(prc_context *ctx, prc_bit_state *state, uint32_
 uint32_t prc_bitread_number_of_bits_then_unsigned_int(prc_context* ctx, prc_bit_state* state);
 int prc_bitread_compressed_entity_type(prc_context *ctx, prc_bit_state *state, uint8_t *is_curve, uint32_t *entity_type);
 double prc_bitread_double_with_variable_bit_number(prc_context *ctx, prc_bit_state *state, unsigned int number_of_bits, double tolerance);
+int prc_bitread_count_fits(const prc_bit_state *state, uint64_t count);
 
 /* ---- Write path (prc_write_bit.c). Additive only: none of the prc_bit_state /
    prc_bitread_* declarations above are touched. Each prc_bitwrite_X function

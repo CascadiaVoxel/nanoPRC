@@ -201,7 +201,7 @@ prc_parse_tess_markup(prc_context *ctx, prc_bit_state *bit_state, prc_tess_marku
     if (data->number_of_text_strings > 0)
     {
         data->text_strings = (prc_string *)prc_calloc(ctx, data->number_of_text_strings, sizeof(prc_string));
-        if (data->code_numbers == NULL)
+        if (data->text_strings == NULL)
         {
             prc_error(ctx, PRC_ERROR_MEMORY, "Allocation error in prc_parse_tess_markup\n");
             return PRC_ERROR_MEMORY;

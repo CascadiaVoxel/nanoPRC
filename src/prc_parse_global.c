@@ -16,6 +16,8 @@
 
 #include <string.h>
 #include <stdlib.h>
+#include <limits.h>
+#include "zlib.h"
 #include "prc_parse_global.h"
 #include "prc_parse_common.h"
 #include "debug.h"
@@ -704,6 +706,78 @@ prc_parse_graph_textures(prc_context *ctx, prc_bit_state *bit_state, prc_graph_t
     return prc_consume_schema_extension(ctx, bit_state, schema_code);
 }
 
+/* Reverses the order of an image's rows in place. */
+static void
+prc_parse_reverse_rows(uint8_t *pixels, size_t rows, size_t row_bytes)
+{
+    size_t top, bottom, k;
+
+    if (rows < 2)
+        return;
+    for (top = 0, bottom = rows - 1; top < bottom; top++, bottom--)
+    {
+        uint8_t *a = pixels + top * row_bytes;
+        uint8_t *b = pixels + bottom * row_bytes;
+
+        for (k = 0; k < row_bytes; k++)
+        {
+            uint8_t t = a[k];
+            a[k] = b[k];
+            b[k] = t;
+        }
+    }
+}
+
+/* The pixels of a raw-format picture: width * height * components bytes,
+   rows as stored. The specification calls them flate-formatted, and real
+   files do both: in the public prc-db collection the RGB pictures are
+   deflated and the RGBA ones are stored as they are. So a block that
+   inflates to exactly image_size bytes is taken as deflated, and a block of
+   exactly image_size bytes that does not is taken as it stands. Anything
+   else is refused. Deflate expands at most 1032 times, so an image larger
+   than that multiple of its block is refused before anything is allocated.
+   Returns a new buffer of image_size bytes, or NULL. */
+uint8_t *
+prc_parse_raw_picture_pixels(prc_context *ctx, const uint8_t *block, size_t block_size, size_t image_size)
+{
+    uint8_t *pixels;
+    z_stream z;
+
+    if (block == NULL || block_size == 0 || image_size == 0 ||
+        image_size / 1032 > block_size || block_size > UINT_MAX || image_size > UINT_MAX)
+    {
+        return NULL;
+    }
+    pixels = (uint8_t *)prc_malloc(ctx, image_size);
+    if (pixels == NULL)
+    {
+        return NULL;
+    }
+
+    memset(&z, 0, sizeof(z));
+    z.next_in = (Bytef *)block;
+    z.avail_in = (uInt)block_size;
+    z.next_out = (Bytef *)pixels;
+    z.avail_out = (uInt)image_size;
+    if (inflateInit(&z) == Z_OK)
+    {
+        int err = inflate(&z, Z_FINISH);
+
+        inflateEnd(&z);
+        if (err == Z_STREAM_END && z.total_out == image_size)
+        {
+            return pixels;
+        }
+    }
+    if (block_size == image_size)
+    {
+        memcpy(pixels, block, image_size);
+        return pixels;
+    }
+    prc_free(ctx, pixels);
+    return NULL;
+}
+
 /* Table 93 parsing */
 static int
 prc_parse_graph_picture(prc_context *ctx, prc_bit_state *bit_state, prc_graph_picture *data, prc_file_structure_header *header)
@@ -783,6 +857,36 @@ prc_parse_graph_picture(prc_context *ctx, prc_bit_state *bit_state, prc_graph_pi
         {
             prc_error(ctx, PRC_ERROR_MEMORY, "Failed in prc_parse_uncomp_file\n");
             return PRC_ERROR_MEMORY;
+        }
+    }
+    /* The raw formats carry their size in the picture. A block that cannot be
+       read as pixels leaves the picture without an image, as before. */
+    else if ((data->format == KEPRCPicture_BITMAP_RGB_BYTE || data->format == KEPRCPicture_BITMAP_RGBA_BYTE ||
+              data->format == KEPRCPicture_BITMAP_GREY_BYTE || data->format == KEPRCPicture_BITMAP_GREYA_BYTE) &&
+             k < header->file_count && header->files[k].raw_image == NULL &&
+             data->pixel_width > 0 && data->pixel_height > 0 &&
+             data->pixel_width <= INT_MAX && data->pixel_height <= INT_MAX &&
+             (size_t)data->pixel_width <= SIZE_MAX / 4 / (size_t)data->pixel_height)
+    {
+        int n = data->format == KEPRCPicture_BITMAP_RGB_BYTE ? 3 :
+                data->format == KEPRCPicture_BITMAP_RGBA_BYTE ? 4 :
+                data->format == KEPRCPicture_BITMAP_GREY_BYTE ? 1 : 2;
+        size_t image_size = (size_t)data->pixel_width * (size_t)data->pixel_height * (size_t)n;
+
+        header->files[k].raw_image = prc_parse_raw_picture_pixels(ctx, header->files[k].block,
+            header->files[k].block_size, image_size);
+        if (header->files[k].raw_image != NULL)
+        {
+            /* The file stores raw rows bottom first, the opposite of PNG and
+               JPEG: Adobe Acrobat draws the first stored row of a raw picture
+               where it draws the last row of a PNG. Reversed here so that every
+               format reaches the caller top row first, as a decoded PNG does. */
+            prc_parse_reverse_rows(header->files[k].raw_image, (size_t)data->pixel_height,
+                (size_t)data->pixel_width * (size_t)n);
+            header->files[k].x = (int)data->pixel_width;
+            header->files[k].y = (int)data->pixel_height;
+            header->files[k].n = n;
+            data->num_elements_per_pixel = (prc_unsigned_int)n;
         }
     }
     if (code < 0)

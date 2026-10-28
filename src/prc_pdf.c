@@ -512,15 +512,24 @@ pdf_parse_text_prc(prc_context *ctx, uint32_t length, uint8_t *ptr_in,
     if (has_special_char || null_at_end || null_at_start)
     {
         /* We need to copy the string and replace the special ( ) character
-            and or get us to simple character string */
+            and or get us to simple character string. The copy steps through
+            the bytes exactly as the count above did -- one byte skipped per
+            UTF-16 character whatever its value -- and never writes more than
+            the len_name bytes that were counted. Skipping the other byte only
+            when it was 0x00, as this loop used to, wrote two bytes for every
+            character outside Latin-1 and ran past the allocation. */
         char *ptr_temp2 = name;
-        while (str_start < ptr_temp)
+        char *name_end = name + len_name;
+        while (str_start < ptr_temp && ptr_temp2 < name_end)
         {
-            if (null_at_start && *str_start == 0x00)
+            if (null_at_start)
             {
                 str_start++;
+                if (str_start >= ptr_temp)
+                    break;
             }
-            if (*str_start == 0x5c && (*(str_start + 1) == ')' || *(str_start + 1) == '(') )
+            if (*str_start == 0x5c && str_start + 1 < ptr_temp &&
+                (*(str_start + 1) == ')' || *(str_start + 1) == '(') )
             {
                 *ptr_temp2 = *(str_start + 1);
                 str_start++;
@@ -531,7 +540,7 @@ pdf_parse_text_prc(prc_context *ctx, uint32_t length, uint8_t *ptr_in,
             }
             str_start++;
             ptr_temp2++;
-            if (null_at_end && *str_start == 0x00)
+            if (null_at_end)
             {
                 str_start++;
             }

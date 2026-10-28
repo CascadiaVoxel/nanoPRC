@@ -22,4 +22,5 @@
 
 int prc_parse_global_data(prc_context *ctx, prc_bit_state *bit_state, prc_file_struct_internal_global_data *data, prc_file_structure_header *header);
 int prc_parse_serialize_help(prc_context *ctx, prc_bit_state *bit_state, prc_markup_serialization_helper *data);
+uint8_t *prc_parse_raw_picture_pixels(prc_context *ctx, const uint8_t *block, size_t block_size, size_t image_size);
 #endif

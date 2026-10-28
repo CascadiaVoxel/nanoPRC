@@ -146,6 +146,14 @@ prc_pop_mode_stack(prc_context *ctx, prc_markup_mode_stack **stack)
     return 0;
 }
 
+/* Every count and index below comes from the file. Before a code or a double is read, check that the
+   array holds it; a file that declares more than it stores is refused rather than read past its end.
+   These two need k, num_codes, doubles_count, num_coords, code and the fail label in scope. */
+#define MKP_NEED_CODES(n) \
+    do { if ((uint64_t)k + (uint64_t)(n) > (uint64_t)num_codes) { code = PRC_ERROR_FILE; goto fail; } } while (0)
+#define MKP_NEED_DOUBLES(n) \
+    do { if ((uint64_t)doubles_count + (uint64_t)(n) > (uint64_t)num_coords) { code = PRC_ERROR_FILE; goto fail; } } while (0)
+
 int
 prc_decode_markup_tess(prc_context *ctx, prc_tess_markup *data)
 {
@@ -154,10 +162,11 @@ prc_decode_markup_tess(prc_context *ctx, prc_tess_markup *data)
     uint32_t num_doubles;
     uint32_t doubles_count = 0;  /* For debug */
     uint32_t num_codes = data->number_of_codes;
+    uint32_t num_coords = data->tessellation_coordinates.number_of_coordinates;
     uint32_t num_inner_codes;
     prc_markup_entity_t extra_data_type;
     prc_markup_type_t markup_type = PRC_MARKUPTYPE_IS_UNKNOWN;
-    prc_markup_state *markup_state;
+    prc_markup_state *markup_state = NULL;
     prc_markup_mode_stack *mode_stack = NULL;
     int code;
     uint32_t num_entites_in_block = 0;
@@ -194,7 +203,9 @@ prc_decode_markup_tess(prc_context *ctx, prc_tess_markup *data)
     if (code < 0)
         return code;
 
-    prc_initialize_markup_state(ctx, &markup_state);
+    code = prc_initialize_markup_state(ctx, &markup_state);
+    if (code < 0)
+        goto fail;
 
     /* In the code array, the first code contains the entity type AND the number of
        specific inner codes. The second code is the number of doubles (coordinates)
@@ -203,6 +214,7 @@ prc_decode_markup_tess(prc_context *ctx, prc_tess_markup *data)
     /* Lets step through the code array */
     while (k < num_codes)
     {
+        MKP_NEED_CODES(2);
         code_value = data->code_numbers[k];
         num_inner_codes = code_value & PRC_MARKUP_IntegerMask;
 
@@ -214,20 +226,21 @@ prc_decode_markup_tess(prc_context *ctx, prc_tess_markup *data)
             {
                 code = prc_restore_matrix(ctx, &markup_state);
                 if (code < 0)
-                    return code;
+                    goto fail;
             }
             else
             {
                 /* Set the state stack with the new matrix */
+                MKP_NEED_DOUBLES(16);
                 code = prc_set_matrix(ctx, &markup_state,
                     &data->tessellation_coordinates.coordinates[doubles_count]);
                 if (code < 0)
-                    return code;
+                    goto fail;
                 doubles_count += 16; /* We consumed 16 doubles for the matrix */
                 num_entites_in_block = num_inner_codes; /* Only needed if we wanted to skip */
             }
             if (code < 0)
-                return code;
+                goto fail;
         }
         else if (code_value & PRC_MARKUP_IsExtraData)
         {
@@ -247,7 +260,7 @@ prc_decode_markup_tess(prc_context *ctx, prc_tess_markup *data)
             case PRC_PICTURE_ENTITY:
                 num_doubles = data->code_numbers[k + 1];
                 if (num_doubles != 0)
-                    return PRC_ERROR_FILE;
+                    { code = PRC_ERROR_FILE; goto fail; }
                 //return PRC_ERROR_NOT_IMPLEMENTED;
                 break;
 
@@ -275,7 +288,7 @@ prc_decode_markup_tess(prc_context *ctx, prc_tess_markup *data)
                     num_entites_in_block = num_inner_codes;
                 }
                 if (code < 0)
-                    return code;
+                    goto fail;
                // return PRC_ERROR_NOT_IMPLEMENTED;
                 break;
 
@@ -300,6 +313,7 @@ prc_decode_markup_tess(prc_context *ctx, prc_tess_markup *data)
                        providing the origin of the 2-D coordinate system in which
                        to draw */
                        /* This is *very* unclear in the specification */
+                    MKP_NEED_DOUBLES(3);
                     frame_draw_origin.x =
                         data->tessellation_coordinates.coordinates[doubles_count];
                     frame_draw_origin.y =
@@ -309,7 +323,7 @@ prc_decode_markup_tess(prc_context *ctx, prc_tess_markup *data)
                     doubles_count += 3;
                 }
                 if (code < 0)
-                    return code;
+                    goto fail;
                 break;
 
             case PRC_FIXED_SIZE_MODEL:
@@ -323,7 +337,7 @@ prc_decode_markup_tess(prc_context *ctx, prc_tess_markup *data)
                     num_entites_in_block = num_inner_codes;
                 }
                 if (code < 0)
-                    return code;
+                    goto fail;
                 //return PRC_ERROR_NOT_IMPLEMENTED;
                 break;
 
@@ -331,12 +345,13 @@ prc_decode_markup_tess(prc_context *ctx, prc_tess_markup *data)
                 num_doubles = data->code_numbers[k + 1]; /* Must be 3 */
                 doubles_count += num_doubles;
                 if (num_doubles != 3)
-                    return PRC_ERROR_FILE;
+                    { code = PRC_ERROR_FILE; goto fail; }
                 if (num_inner_codes != 1)
-                    return PRC_ERROR_FILE;
+                    { code = PRC_ERROR_FILE; goto fail; }
                 /* Inner code is pattern identifier index into the picture array
                    stored in FileStructureInternalGlobalData */
                 /* TODO actually draw this. For now, just consume the data */
+                MKP_NEED_CODES(3);
                 biased_pattern_index = data->code_numbers[k + 2] + 1;
                 k = k + 1;
                 break;
@@ -345,19 +360,20 @@ prc_decode_markup_tess(prc_context *ctx, prc_tess_markup *data)
                 num_doubles = data->code_numbers[k + 1]; /* Must be 3 */
                 doubles_count += num_doubles;
                 if (num_doubles != 3)
-                    return PRC_ERROR_FILE;
+                    { code = PRC_ERROR_FILE; goto fail; }
                 //return PRC_ERROR_NOT_IMPLEMENTED;
                 break;
 
             case PRC_COLOR_ENTITY:
                 num_doubles = data->code_numbers[k + 1]; /* Must be 0 */
                 if (num_doubles != 0)
-                    return PRC_ERROR_FILE;
+                    { code = PRC_ERROR_FILE; goto fail; }
                 if (num_inner_codes != 1)
-                    return PRC_ERROR_FILE;
+                    { code = PRC_ERROR_FILE; goto fail; }
                 /* The inner code is an index into the color array in the
                    global data. I assume it is a multiple of 3 like the other
                    indices into that array */
+                MKP_NEED_CODES(3);
                 biased_color_index = data->code_numbers[k + 2] + 1; /* This stays in effect until reset */
                 k = k + 1;
                 break;
@@ -366,16 +382,17 @@ prc_decode_markup_tess(prc_context *ctx, prc_tess_markup *data)
                 num_doubles = data->code_numbers[k + 1]; /* Must be 10 */
                 doubles_count += num_doubles;
                 if (num_doubles != 10)
-                    return PRC_ERROR_FILE;
+                    { code = PRC_ERROR_FILE; goto fail; }
                 //return PRC_ERROR_NOT_IMPLEMENTED;
                 break;
 
             case PRC_FONT_ENTITY:
                 num_doubles = data->code_numbers[k + 1]; /* Must be 0 */
                 if (num_doubles != 0)
-                    return PRC_ERROR_FILE;
+                    { code = PRC_ERROR_FILE; goto fail; }
                 if (num_inner_codes != 1)
-                    return PRC_ERROR_FILE;
+                    { code = PRC_ERROR_FILE; goto fail; }
+                MKP_NEED_CODES(3);
                 /* Files store this index 1-based already, so it is kept as read. This stays in effect until reset */
                 biased_font_index = data->code_numbers[k + 2];
                 k = k + 1;
@@ -383,13 +400,15 @@ prc_decode_markup_tess(prc_context *ctx, prc_tess_markup *data)
 
             case PRC_TEXT_ENTITY:
                 num_doubles = data->code_numbers[k + 1]; /* Must be 2 */
+                MKP_NEED_DOUBLES(2);
                 text_width = data->tessellation_coordinates.coordinates[doubles_count];
                 text_height = data->tessellation_coordinates.coordinates[doubles_count + 1];
                 doubles_count += 2;
                 if (num_doubles != 2)
-                    return PRC_ERROR_FILE;
+                    { code = PRC_ERROR_FILE; goto fail; }
                 if (num_inner_codes != 1)
-                    return PRC_ERROR_FILE;
+                    { code = PRC_ERROR_FILE; goto fail; }
+                MKP_NEED_CODES(3);
                 biased_string_index = data->code_numbers[k + 2] + 1; /* This stays in effect until reset */
                 k = k + 1;
                 break;
@@ -409,12 +428,12 @@ prc_decode_markup_tess(prc_context *ctx, prc_tess_markup *data)
                 num_doubles = data->code_numbers[k + 1]; /* Must be 1 or 0 */
                 doubles_count += num_doubles;
                 if (num_doubles != 1 && num_doubles != 0)
-                    return PRC_ERROR_FILE;
+                    { code = PRC_ERROR_FILE; goto fail; }
                 //return PRC_ERROR_NOT_IMPLEMENTED;
                 break;
 
             default:
-                return PRC_ERROR_FILE;
+                { code = PRC_ERROR_FILE; goto fail; }
             }
         }
         else
@@ -438,6 +457,9 @@ prc_decode_markup_tess(prc_context *ctx, prc_tess_markup *data)
                     extra_data_type == PRC_TRIANGLES_ENTITY)
                 {
                     /* Add a primitive */
+                    MKP_NEED_DOUBLES((uint64_t)(num_doubles / 3) * 3);
+                    if ((uint64_t)num_vertices + num_doubles / 3 > (uint64_t)max_num_vertices)
+                    { code = PRC_ERROR_FILE; goto fail; }
                     data->decode_primitives[num_primitives].biased_color_index = biased_color_index;
                     data->decode_primitives[num_primitives].biased_font_index = biased_font_index;
                     data->decode_primitives[num_primitives].text = NULL;
@@ -450,7 +472,7 @@ prc_decode_markup_tess(prc_context *ctx, prc_tess_markup *data)
                         sizeof(uint32_t), data->decode_primitives[num_primitives].number_indices);
 
                     if (data->decode_primitives[num_primitives].indices == NULL)
-                        return PRC_ERROR_MEMORY;
+                        { code = PRC_ERROR_MEMORY; goto fail; }
 
                     for (j = 0; j < data->decode_primitives[num_primitives].number_indices; j++)
                     {
@@ -494,10 +516,14 @@ prc_decode_markup_tess(prc_context *ctx, prc_tess_markup *data)
             else if (extra_data_type == PRC_TEXT_ENTITY)
             {
                 /* Add a primitive */
-                uint32_t string_length = strlen((const char*) data->text_strings[biased_string_index - 1].string);
+                uint32_t string_length;
+                if (biased_string_index == 0 || biased_string_index > data->number_of_text_strings ||
+                    data->text_strings == NULL || data->text_strings[biased_string_index - 1].string == NULL)
+                { code = PRC_ERROR_FILE; goto fail; }
+                string_length = (uint32_t)strlen((const char*) data->text_strings[biased_string_index - 1].string);
                 data->decode_primitives[num_primitives].text = (char *)prc_calloc(ctx, string_length + 1, 1);
                 if (data->decode_primitives[num_primitives].text == NULL)
-                    return PRC_ERROR_MEMORY;
+                    { code = PRC_ERROR_MEMORY; goto fail; }
                 strcpy(data->decode_primitives[num_primitives].text,
                       (const char*) data->text_strings[biased_string_index - 1].string);
 
@@ -521,7 +547,7 @@ prc_decode_markup_tess(prc_context *ctx, prc_tess_markup *data)
 
     /* Verify that the stack only has one item, which is the root */
     if (mode_stack->next != NULL)
-        return PRC_ERROR_FILE;
+    { code = PRC_ERROR_FILE; goto fail; }
 
     /* The turbine part fails this test */
     /* Verify that the number of doubles in the block matches the number of doubles */
@@ -530,10 +556,31 @@ prc_decode_markup_tess(prc_context *ctx, prc_tess_markup *data)
 
     /* Verify that the state has only 1 item */
     if (markup_state->next != NULL)
-        return PRC_ERROR_FILE;
+    { code = PRC_ERROR_FILE; goto fail; }
 
     prc_free(ctx, markup_state);
     prc_free(ctx, mode_stack);
 
     return 0;
+
+fail:
+    /* Keep what was decoded so teardown frees it, and free both stacks whole. */
+    data->decode_number_primitives = num_primitives;
+    data->decode_num_vertices = num_vertices;
+    while (markup_state != NULL)
+    {
+        prc_markup_state *next = markup_state->next;
+        prc_free(ctx, markup_state);
+        markup_state = next;
+    }
+    while (mode_stack != NULL)
+    {
+        prc_markup_mode_stack *next = mode_stack->next;
+        prc_free(ctx, mode_stack);
+        mode_stack = next;
+    }
+    return code < 0 ? code : PRC_ERROR_FILE;
 }
+
+#undef MKP_NEED_CODES
+#undef MKP_NEED_DOUBLES

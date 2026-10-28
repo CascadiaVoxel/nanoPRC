@@ -1138,6 +1138,23 @@ prc_api_get_exact_geom_information(prc_context *ctx, prc_ri *ri,
     }
 }
 
+/* biased_index_part and biased_index_prototype are read from the file and
+   index the tree of the file structure named by file_index. A value past the
+   end of that tree's parts or products is refused rather than followed. */
+static int
+prc_api_helper_tree_index_ok(const prc_data *data, uint32_t file_index,
+    uint32_t biased_index, uint8_t is_part)
+{
+    const prc_asm_file_structure_tree *tree;
+
+    if (biased_index == 0 || file_index >= data->file_structure_count)
+        return 0;
+    tree = data->file_struct[file_index].tree;
+    if (tree == NULL)
+        return 0;
+    return biased_index <= (is_part ? tree->parts_count : tree->product_count);
+}
+
 PRC_EXPORT uint32_t
 prc_api_model_item_number_of_markups(prc_context *ctx, prc_api_product *api_product)
 {
@@ -1926,6 +1943,12 @@ prc_api_helper_count_items(prc_context *ctx, prc_api_data data, uint32_t num_fil
         }
         else if (product_refs->biased_index_part != 0)
         {
+            if (!prc_api_helper_tree_index_ok(data_in, file_index, product_refs->biased_index_part, 1))
+            {
+                prc_error(ctx, PRC_ERROR_PARSE, "Part index past the end of the tree\n");
+                result = PRC_ERROR_PARSE;
+                goto cleanup;
+            }
             part = &data_in->file_struct[file_index].tree->parts[product_refs->biased_index_part - 1];
 
             /* Include this part */
@@ -1957,6 +1980,12 @@ prc_api_helper_count_items(prc_context *ctx, prc_api_data data, uint32_t num_fil
             above -- see its comment. */
         if (!(wants_cross_file_ref && biased_file_index == 0) && product_refs->biased_index_prototype != 0)
         {
+            if (!prc_api_helper_tree_index_ok(data_in, file_index, product_refs->biased_index_prototype, 0))
+            {
+                prc_error(ctx, PRC_ERROR_PARSE, "Prototype index past the end of the tree\n");
+                result = PRC_ERROR_PARSE;
+                goto cleanup;
+            }
             prototype_product =
                 &data_in->file_struct[file_index].tree->products[product_refs->biased_index_prototype - 1];
             prc_api_helper_set_inheritance_data(ctx, &work_product->style_inheritance,
@@ -3070,6 +3099,12 @@ prc_api_helper_add_product(prc_context *ctx, prc_api_data data, uint32_t num_fil
             {
                 /* IMPORTANT: pass product_style as the parent for the prototype
                    chain so it builds as a single-child lineage under this node. */
+                if (!prc_api_helper_tree_index_ok(data_in, file_index, product_refs->biased_index_prototype, 0))
+                {
+                    prc_error(ctx, PRC_ERROR_PARSE, "Prototype index past the end of the tree\n");
+                    result = PRC_ERROR_PARSE;
+                    goto cleanup;
+                }
                 prototype_product =
                     &data_in->file_struct[file_index].tree->products[product_refs->biased_index_prototype - 1];
                 prc_api_helper_update_parent_style(ctx, prototype_product, file_index,
@@ -3104,6 +3139,12 @@ prc_api_helper_add_product(prc_context *ctx, prc_api_data data, uint32_t num_fil
                child product occurrences) */
             if (product_refs->biased_index_part != 0)
             {
+                if (!prc_api_helper_tree_index_ok(data_in, file_index, product_refs->biased_index_part, 1))
+                {
+                    prc_error(ctx, PRC_ERROR_PARSE, "Part index past the end of the tree\n");
+                    result = PRC_ERROR_PARSE;
+                    goto cleanup;
+                }
                 part = &data_in->file_struct[file_index].tree->parts[product_refs->biased_index_part - 1];
                 work_product_tree->part = &reserve->parts[reserve->part_index];
 

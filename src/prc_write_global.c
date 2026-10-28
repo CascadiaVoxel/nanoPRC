@@ -17,6 +17,7 @@
 #include <string.h>
 #include "prc_write_global.h"
 #include "prc_data.h"
+#include "prc_write_file_structure.h"
 
 int
 prc_write_global_tables_init(prc_context *ctx, prc_write_global_tables *tables)
@@ -803,6 +804,58 @@ prc_write_picture_add(prc_context *ctx, prc_write_global_tables *tables, const p
             return 0;
         }
 
+        /* The caller gives raw pixels top row first, as a PNG holds them. The
+           file stores raw rows bottom first: Adobe Acrobat draws the first
+           stored row of a raw picture where it draws the last row of a PNG.
+           So the rows are reversed into a copy, which is what is matched and
+           stored below. */
+        const uint8_t *blob = picture->data;
+        uint8_t *reversed = NULL;
+
+        if (picture->format == PRC_WRITE_PIX_RGB || picture->format == PRC_WRITE_PIX_RGBA)
+        {
+            size_t row_bytes = blob_size / height;
+            uint32_t r;
+
+            reversed = (uint8_t *)prc_malloc(ctx, blob_size);
+            if (reversed == NULL)
+            {
+                prc_error(ctx, PRC_ERROR_MEMORY, "prc_write_picture_add: out of memory\n");
+                return 0;
+            }
+            for (r = 0; r < height; r++)
+                memcpy(reversed + (size_t)r * row_bytes,
+                       picture->data + (size_t)(height - 1 - r) * row_bytes, row_bytes);
+            blob = reversed;
+        }
+
+        /* The format table describes every raw format as "flate-formatted pixel
+           data", so the pixels are stored as a zlib stream. Real files do both:
+           some store the pixels as they are, and the reader accepts either. */
+        if (reversed != NULL)
+        {
+            uint8_t *wrapped = NULL;
+            size_t wrapped_size = 0;
+
+            if (prc_write_deflate(ctx, reversed, blob_size, &wrapped, &wrapped_size) != 0)
+            {
+                prc_free(ctx, reversed);
+                return 0;
+            }
+            if (wrapped_size > 0xFFFFFFFFu)
+            {
+                prc_error(ctx, PRC_ERROR_INTERNAL,
+                    "prc_write_picture_add: compressed image too large to address\n");
+                prc_free(ctx, wrapped);
+                prc_free(ctx, reversed);
+                return 0;
+            }
+            prc_free(ctx, reversed);
+            reversed = wrapped;
+            blob = wrapped;
+            blob_size = wrapped_size;
+        }
+
         /* An image already in the table is not stored again. Every textured
            item used to bring its own copy, so a model whose parts all share
            one texture carried the same image once per part. Matching is by
@@ -811,13 +864,17 @@ prc_write_picture_add(prc_context *ctx, prc_write_global_tables *tables, const p
            it. */
         {
             uint32_t existing = prc_write_picture_find(tables, entry.format,
-                width, height, picture->data, blob_size);
+                width, height, blob, blob_size);
             if (existing != 0)
+            {
+                prc_free(ctx, reversed);
                 return existing;
+            }
         }
 
         entry.biased_uncompressed_file_index =
-            prc_write_embedded_file_add(ctx, tables, picture->data, (uint32_t)blob_size);
+            prc_write_embedded_file_add(ctx, tables, blob, (uint32_t)blob_size);
+        prc_free(ctx, reversed);
         if (entry.biased_uncompressed_file_index == 0)
             return 0;
     }

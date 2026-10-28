@@ -73,7 +73,7 @@ prc_release_prc_ref_base(prc_context *ctx, prc_content_prc_ref_base *base)
     prc_release_string(ctx, &base->name.name);
     prc_attribute_data attribute_data = base->attribute_data;
 
-    for (k = 0; k < attribute_data.attribute_count; k++)
+    for (k = 0; attribute_data.attributes != NULL && k < attribute_data.attribute_count; k++)
     {
         prc_release_attribute_title(ctx, &attribute_data.attributes[k].attribute_title);
         if (attribute_data.attributes[k].attributes != NULL)
@@ -108,7 +108,7 @@ prc_release_content_base(prc_context *ctx, prc_content_prc_base *base)
     prc_release_string(ctx, &base->name.name);
     prc_attribute_data attribute_data = base->attribute_data;
 
-    for (k = 0; k < attribute_data.attribute_count; k++)
+    for (k = 0; attribute_data.attributes != NULL && k < attribute_data.attribute_count; k++)
     {
         prc_release_attribute_title(ctx, &attribute_data.attributes[k].attribute_title);
         if (attribute_data.attributes[k].attributes != NULL)
@@ -144,7 +144,7 @@ prc_release_context_graphics(prc_context *ctx, prc_context_graphics *context_gra
     if (context_graphics == NULL)
         return;
 
-    for (k = 0; k < context_graphics->number_of_treat_type; k++)
+    for (k = 0; context_graphics->treat_types != NULL && k < context_graphics->number_of_treat_type; k++)
     {
         prc_release_treat_types(ctx, &context_graphics->treat_types[k]);
     }
@@ -189,7 +189,7 @@ prc_release_uncomp_file(prc_context *ctx, prc_uncomp_file *uncomp_file)
     if (uncomp_file == NULL)
         return;
 
-    for (k = 0; k < uncomp_file->file_count; k++)
+    for (k = 0; uncomp_file->files != NULL && k < uncomp_file->file_count; k++)
     {
         prc_release_uncomp_block(ctx, &uncomp_file->files[k]);
         if (uncomp_file->files[k].raw_image != NULL)
@@ -254,7 +254,7 @@ prc_release_file_struct_header(prc_context *ctx, prc_file_structure_header *head
     if (header == NULL)
         return;
 
-    for (k = 0; k < header->file_count; k++)
+    for (k = 0; header->files != NULL && k < header->file_count; k++)
     {
         prc_release_uncomp_block(ctx, &header->files[k]);
     }
@@ -596,6 +596,9 @@ prc_release_representation_item(prc_context *ctx, prc_ri *data)
         }
 
         curr = item.ri;
+        /* An item whose parse stopped before it was allocated is NULL. */
+        if (curr == NULL)
+            continue;
         prc_release_base_with_graphics(ctx, &curr->item_content.base);
 
         switch (curr->representation_type)
@@ -621,7 +624,7 @@ prc_release_representation_item(prc_context *ctx, prc_ri *data)
             prc_free(ctx, curr->ri_plane);
             break;
         case PRC_TYPE_RI_PointSet:
-            if (curr->ri_point_set->points != NULL)
+            if (curr->ri_point_set != NULL && curr->ri_point_set->points != NULL)
             {
                 prc_free(ctx, curr->ri_point_set->points);
             }
@@ -634,7 +637,7 @@ prc_release_representation_item(prc_context *ctx, prc_ri *data)
             prc_free(ctx, curr->ri_poly_wire);
             break;
         case PRC_TYPE_RI_Set:
-            if (curr->ri_set->rep_items != NULL)
+            if (curr->ri_set != NULL && curr->ri_set->rep_items != NULL)
             {
                 /* Push the cleanup marker first so it ends up at the bottom
                    of this batch and is popped only after all the elements
@@ -822,7 +825,7 @@ prc_release_annotation_entities(prc_context *ctx, prc_annotation_entity *data)
                     prc_free(ctx, worklist);
                     return;
                 }
-                for (k = 0; k < curr->set.number_of_annotations; k++)
+                for (k = 0; curr->set.annotations != NULL && k < curr->set.number_of_annotations; k++)
                 {
                     if (prc_release_annotation_push(ctx, &worklist, &worklist_size, &worklist_capacity,
                             0, &curr->set.annotations[k], NULL) < 0)
@@ -1046,7 +1049,7 @@ prc_release_part(prc_context *ctx, prc_asm_parts_definition *data)
 
     prc_release_base_with_graphics(ctx, &data->base);
 
-    for (k = 0; k < data->num_rep_items; k++)
+    for (k = 0; data->rep_items != NULL && k < data->num_rep_items; k++)
     {
         prc_release_representation_item(ctx, &data->rep_items[k]);
     }
@@ -1554,7 +1557,7 @@ prc_release_content_compressed_ana_face(prc_context *ctx, prc_content_compressed
 
     if (data->is_trimmed)
     {
-        for (k = 0; k < data->trim_loop_count; k++)
+        for (k = 0; data->trim_loop != NULL && k < data->trim_loop_count; k++)
         {
             prc_release_trim_loop_curves(ctx, &data->trim_loop[k]);
         }
@@ -1670,7 +1673,7 @@ prc_release_compressed_connex(prc_context *ctx, prc_compressed_connex *data)
     uint32_t k;
     uint32_t num_shells = data->number_of_shells;
 
-    for (k = 0; k < num_shells; k++)
+    for (k = 0; data->shells != NULL && k < num_shells; k++)
     {
         prc_release_compressed_shell(ctx, &data->shells[k]);
     }
@@ -1686,7 +1689,7 @@ prc_release_multiple_connex(prc_context *ctx, prc_multi_compressed_connex *data)
     uint32_t num_connex = data->number_of_connex;
     uint32_t k;
 
-    for (k = 0; k < num_connex; k++)
+    for (k = 0; data->connex != NULL && k < num_connex; k++)
     {
         prc_release_compressed_connex(ctx, &data->connex[k]);
     }
@@ -2842,7 +2845,7 @@ prc_release_file_struct_extra_geometry(prc_context *ctx, prc_asm_file_structure_
         extra_geometry->user_data.user_data = NULL;
     }
 
-    for (k = 0; k < extra_geometry->extra_geom_count; k++)
+    for (k = 0; extra_geometry->extra_geom != NULL && k < extra_geometry->extra_geom_count; k++)
     {
         prc_release_extra_geometry(ctx, &extra_geometry->extra_geom[k]);
     }
@@ -2859,7 +2862,7 @@ prc_release_file_struct_schema(prc_context *ctx)
     if (schema == NULL)
         return;
 
-    for (k = 0; k < schema->schema_count; k++)
+    for (k = 0; schema->entity_schema != NULL && k < schema->schema_count; k++)
     {
         prc_release_entity_schema(ctx, &schema->entity_schema[k]);
     }
@@ -2995,7 +2998,7 @@ prc_release_data(prc_context *ctx, prc_data *data)
 
     prc_release_header(ctx, data->header);
 
-    for (k = 0; k < data->file_structure_count; k++)
+    for (k = 0; data->file_struct != NULL && k < data->file_structure_count; k++)
     {
         prc_release_file_struct(ctx, &data->file_struct[k]);
     }

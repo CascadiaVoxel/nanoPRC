@@ -628,11 +628,20 @@ static int write_face(prc_context *ctx, prc_api_data data, const prc_api_tess *t
         write_vertex_buffer(w, &face->face_vertices);
     }
 
-    json_writer_key(w, "primitives");
-    code = write_face_primitives(ctx, data, tess, face_index, w);
-    if (code < 0)
+    /* A compressed tessellation's faces do not partition its triangles:
+       prc_api_get_graphics_primitive returns the whole mesh for every
+       face_index, which only selects the face's style. Its primitives are
+       written once at tessellation level (see write_tessellation below);
+       writing them here as well repeated the whole mesh once per face, and
+       made the JSON of some files tens of gigabytes. */
+    if (tess->type != PRC_API_TESS_3D_Compressed)
     {
-        return code;
+        json_writer_key(w, "primitives");
+        code = write_face_primitives(ctx, data, tess, face_index, w);
+        if (code < 0)
+        {
+            return code;
+        }
     }
 
     json_writer_end_object(w);
@@ -692,6 +701,17 @@ static int write_tessellation(prc_context *ctx, prc_api_data data,
     {
         json_writer_key(w, "vertices");
         write_vertex_buffer(w, &tess->tess_vertices);
+    }
+
+    /* The compressed mesh's primitives, once; the same for every face. */
+    if (tess->type == PRC_API_TESS_3D_Compressed && tess->num_faces > 0)
+    {
+        json_writer_key(w, "primitives");
+        code = write_face_primitives(ctx, data, tess, 0, w);
+        if (code < 0)
+        {
+            return code;
+        }
     }
 
     if (tess->type == PRC_API_TESS_UNKNOWN)

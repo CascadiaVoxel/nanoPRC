@@ -6235,7 +6235,7 @@ wire_failure:
                 else
                 {
                     uint32_t color_index = (tess->decode_primitives[k].biased_color_index - 1)/3;
-                    if (color_index > global_data->color_count)
+                    if (color_index >= global_data->color_count)
                     {
                         prc_error(ctx, PRC_API_ERROR_PARSER,
                             "Markup text color index out of range in prc_api_get_tessellation_vertices\n");
@@ -6493,10 +6493,11 @@ prc_api_get_text_primitive(prc_context *ctx, prc_api_data data,
     const prc_api_tess *tess, uint32_t text_index,
     prc_api_text_primitive *text_primitive)
 {
-    if (tess->type != PRC_API_TESS_MarkUp)
+    if (tess == NULL || text_primitive == NULL || tess->type != PRC_API_TESS_MarkUp)
         return PRC_API_ERROR_PARAMETER;
 
-    if (text_index > tess->num_text_primitives - 1)
+    /* Not count - 1: with no text primitives that wrapped, every index passed and the copy read from NULL. */
+    if (tess->text_primitives == NULL || text_index >= tess->num_text_primitives)
         return PRC_API_ERROR_PARAMETER;
 
     memcpy(text_primitive, &tess->text_primitives[text_index],

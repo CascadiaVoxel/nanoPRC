@@ -296,7 +296,13 @@ prc_decode_markup_tess(prc_context *ctx, prc_tess_markup *data)
                 /* If current mode on stack is PRC_FRAME_DRAW_MODE then pop else push */
                 num_doubles = data->code_numbers[k + 1]; /* Number of doubles in the block */
                 if (mode_stack->mode == PRC_FRAME_DRAW_MODE)
+                {
                     code = prc_pop_mode_stack(ctx, &mode_stack);
+                    /* The origin belongs to the block that has just ended */
+                    frame_draw_origin.x = 0.0;
+                    frame_draw_origin.y = 0.0;
+                    frame_draw_origin.z = 0.0;
+                }
                 else
                 {
                     code = prc_push_mode_stack(ctx, &mode_stack, PRC_FRAME_DRAW_MODE);
@@ -387,7 +393,8 @@ prc_decode_markup_tess(prc_context *ctx, prc_tess_markup *data)
                 if (num_inner_codes != 1)
                     { code = PRC_ERROR_FILE; goto fail; }
                 MKP_NEED_CODES(3);
-                biased_font_index = data->code_numbers[k + 2] + 1; /* This stays in effect until reset */
+                /* Files store this index 1-based already, so it is kept as read. This stays in effect until reset */
+                biased_font_index = data->code_numbers[k + 2];
                 k = k + 1;
                 break;
 

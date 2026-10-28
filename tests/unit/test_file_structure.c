@@ -450,9 +450,17 @@ test_texture_chain_roundtrip(prc_context *ctx)
     PRC_ASSERT(file_idx != 0);
     PRC_ASSERT_NOT_NULL(pd->file_struct[0].header);
     PRC_ASSERT(file_idx - 1 < pd->file_struct[0].header->file_count);
-    PRC_ASSERT_EQ(pd->file_struct[0].header->files[file_idx - 1].block_size, sizeof(pixels));
-    for (k = 0; k < sizeof(pixels); k++)
-        PRC_ASSERT_EQ(pd->file_struct[0].header->files[file_idx - 1].block[k], pixels[k]);
+    /* Raw pixels are stored as a zlib stream, bottom row first: 2 rows of 6 bytes. */
+    {
+        const prc_uncomp_block *blk = &pd->file_struct[0].header->files[file_idx - 1];
+        uint8_t px[sizeof(pixels) + 8];
+        uLongf len = sizeof(px);
+        PRC_ASSERT_EQ(blk->block[0], 0x78);
+        PRC_ASSERT_EQ(uncompress(px, &len, blk->block, blk->block_size), Z_OK);
+        PRC_ASSERT_EQ((uint32_t)len, (uint32_t)sizeof(pixels));
+        for (k = 0; k < sizeof(pixels); k++)
+            PRC_ASSERT_EQ(px[k], pixels[(1 - k / 6) * 6 + k % 6]);
+    }
 
     prc_api_release_data(ctx, (prc_api_data)pd, NULL, 0, NULL, 0, NULL, 0, NULL);
     prc_write_global_tables_free(ctx, &tables);

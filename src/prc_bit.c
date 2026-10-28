@@ -293,6 +293,18 @@ prc_bitread_double_with_variable_bit_number(prc_context *ctx, prc_bit_state *sta
     return tolerance * (is_negative ? -1.0 : 1.0) * (double)mantissa;
 }
 
+/* A count read from the stream, of things each stored in at least one more bit
+   of it, cannot exceed the bits left. Checked before such a count sizes an
+   allocation, so a single corrupted count cannot ask for gigabytes before
+   anything has been read. */
+int
+prc_bitread_count_fits(const prc_bit_state *state, uint64_t count)
+{
+    if (state->bit_count <= 0)
+        return count == 0;
+    return count <= (uint64_t)state->bit_count && count <= UINT32_MAX;
+}
+
 double
 prc_bitread_double(prc_context *ctx, prc_bit_state *state)
 {
@@ -651,6 +663,15 @@ prc_huffman_decode_core(prc_context *ctx, prc_bit_state *state, uint8_t num_bits
         huffman_array[k] = prc_bitread_uncompressed_uint32(ctx, state);
     }
     bits_last_integer = prc_bitread_uint32(ctx, state);
+
+    /* The bits used in the last word: at most 32. A larger value made max_bits below claim bits past the end of
+       huffman_array, and the reader trusts max_bits. */
+    if (bits_last_integer > 32)
+    {
+        prc_error(ctx, PRC_ERROR_PARSE, "huffman_array last-word bit count is invalid\n");
+        prc_free(ctx, huffman_array);
+        return NULL;
+    }
 
     /* Total bits actually available in huffman_array. Everything read from
        huff_state below is bounded against this so a crafted num_leaves/num_values

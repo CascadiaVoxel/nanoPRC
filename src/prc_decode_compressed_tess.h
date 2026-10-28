@@ -67,8 +67,10 @@ struct prc_normal_state_s
     uint32_t normals_vertex_count; /* Counter for the above */
     uint8_t *normal_bin_data;
     uint32_t normal_bin_data_index;
+    uint32_t normal_bin_data_size; /* entries in normal_bin_data */
     double *decoded_angles;
     uint32_t angle_index;
+    uint32_t decoded_angles_count; /* entries in decoded_angles */
     uint8_t *normal_is_reversed;
     decoded_normal_info *multiple_normals;
 };

@@ -471,11 +471,41 @@ prc_compute_first_triangle(prc_context *ctx, const prc_tess_3d_compressed *data,
     *point_array_index += 3;
 }
 
+/* Copies one corner's RGBA from the colours as stored to the colours as
+   published. */
+static void
+prc_copy_corner_color(const float *colors_in, float *colors_out, int from, int to)
+{
+    memcpy(&colors_out[(size_t)to * 4], &colors_in[(size_t)from * 4], 4 * sizeof(float));
+}
+
+/* The point colours (Table 175, point_color_array) are stored one per corner
+   in the order the traversal produces the corners, treated_index[0..2]. The
+   triangle is stored below with its last two corners swapped when the normal
+   is not reversed, so its colours are swapped with them, as its UVs are.
+   colors_in and colors_out are NULL when the tessellation has no colours. */
 static void
 prc_store_triangle_indices(prc_context *ctx, treated_triangle *treated_tri,
     uint32_t *triangle_indices, uint32_t *vertex_normal_indices, uint32_t *uv_indices,
-    int *triangle_indice_count)
+    const float *colors_in, float *colors_out, int *triangle_indice_count)
 {
+    if (colors_in != NULL && colors_out != NULL)
+    {
+        int base = *triangle_indice_count;
+
+        prc_copy_corner_color(colors_in, colors_out, base, base);
+        if (treated_tri->normal_was_reversed)
+        {
+            prc_copy_corner_color(colors_in, colors_out, base + 1, base + 1);
+            prc_copy_corner_color(colors_in, colors_out, base + 2, base + 2);
+        }
+        else
+        {
+            prc_copy_corner_color(colors_in, colors_out, base + 2, base + 1);
+            prc_copy_corner_color(colors_in, colors_out, base + 1, base + 2);
+        }
+    }
+
     if (treated_tri->normal_was_reversed)
     {
         triangle_indices[*triangle_indice_count] = treated_tri->treated_index[0];
@@ -2636,6 +2666,8 @@ prc_decode_compressed_tess(prc_context *ctx, prc_tess_3d_compressed *data, uint8
     uint32_t style_index = 0;
     prc_compressed_texture_state texture_state;
     uint32_t *uv_indices = NULL;
+    const float *colors_in = NULL;
+    float *point_colors = NULL;
 
     memset(&texture_state, 0, sizeof(texture_state));
 
@@ -2805,6 +2837,22 @@ prc_decode_compressed_tess(prc_context *ctx, prc_tess_3d_compressed *data, uint8
         {
             code = PRC_ERROR_MEMORY;
             prc_error(ctx, code, "Failed to allocate uv_indices in prc_decode_compressed_tess\n");
+            goto cleanup;
+        }
+    }
+
+    /* Point colours, one per corner. Kept only when there is exactly one for
+       every corner, the count every independently written file with colours
+       has (prc-db, October 2026: 25 tessellations in 7 files). */
+    if (data->decoded_point_color_array != NULL &&
+        data->decoded_point_color_array_size == (uint32_t)num_triangles * 12)
+    {
+        colors_in = data->decoded_point_color_array;
+        point_colors = (float *)prc_calloc(ctx, (size_t)num_triangles * 12, sizeof(float));
+        if (point_colors == NULL)
+        {
+            code = PRC_ERROR_MEMORY;
+            prc_error(ctx, code, "Failed to allocate point_colors in prc_decode_compressed_tess\n");
             goto cleanup;
         }
     }
@@ -3005,7 +3053,8 @@ prc_decode_compressed_tess(prc_context *ctx, prc_tess_3d_compressed *data, uint8
 
     /* Store the triangle vertex indices and the normal indices (should be 0, 1, 2) */
     prc_store_triangle_indices(ctx, &treated_tri, triangle_indices,
-                                    vertex_normal_indices, uv_indices, &triangle_indice_count);
+                                    vertex_normal_indices, uv_indices, colors_in, point_colors,
+                                    &triangle_indice_count);
 
 	if (has_faces)
 	{
@@ -3327,7 +3376,8 @@ prc_decode_compressed_tess(prc_context *ctx, prc_tess_3d_compressed *data, uint8
 
         /* Store the triangle vertex indices and the normal indices */
         prc_store_triangle_indices(ctx, &treated_tri, triangle_indices,
-                                        vertex_normal_indices, uv_indices, &triangle_indice_count);
+                                        vertex_normal_indices, uv_indices, colors_in, point_colors,
+                                        &triangle_indice_count);
 
         if (has_faces)
         {
@@ -3373,19 +3423,13 @@ prc_decode_compressed_tess(prc_context *ctx, prc_tess_3d_compressed *data, uint8
     data->num_normals_prc_compressed_3d = number_of_normals;
     data->num_vertices_prc_compressed_3d = num_points;
 
-    /* This is the vertex colors if specified */
-    if (data->decoded_point_color_array != NULL)
+    /* The point colours, in the corner order of triangle_indices */
+    if (point_colors != NULL)
     {
-        data->point_colors_prc_compressed_3d = (float *)prc_calloc(ctx, sizeof(float),
-            data->decoded_point_color_array_size);
-        if (data->point_colors_prc_compressed_3d == NULL)
-        {
-            code = PRC_ERROR_MEMORY;
-            prc_error(ctx, code, "Failed to allocate point_colors_prc_compressed_3d in prc_decode_compressed_tess\n");
-            goto cleanup;
-        }
-        memcpy(data->point_colors_prc_compressed_3d, data->decoded_point_color_array,
-            data->decoded_point_color_array_size * sizeof(float));
+        if (data->point_colors_prc_compressed_3d != NULL)
+            prc_free(ctx, data->point_colors_prc_compressed_3d);
+        data->point_colors_prc_compressed_3d = point_colors;
+        point_colors = NULL;
     }
 
     data->vertices_prc_compressed_3d = (double *)prc_calloc(ctx, sizeof(double), num_points * 3);
@@ -3615,6 +3659,8 @@ cleanup:
     prc_free(ctx, vertices_out);
     if (uv_indices != NULL)
         prc_free(ctx, uv_indices);
+    if (point_colors != NULL)
+        prc_free(ctx, point_colors);
     prc_compressed_texture_state_free(ctx, &texture_state);
     if (hop_depth != NULL)
         prc_free(ctx, hop_depth);
@@ -4048,16 +4094,12 @@ prc_compressed_tess_edge_attributes_compatible(prc_tess_3d_compressed *data,
 {
     uint32_t tri1 = edge->tri_one_indices_offset / 3;
     uint32_t tri2 = edge->tri_two_indices_offset / 3;
-    float *vertex_colors = data->point_colors_prc_compressed_3d;
+    /* One colour per corner, in the corner order of the triangle indices. */
+    const float *corner_colors = data->point_colors_prc_compressed_3d;
     uint32_t tri1_face, tri2_face;
     uint8_t tri1_has_texture = true;
     uint8_t tri2_has_texture = true;
     uint8_t i;
-
-    if (vertex_colors == NULL)
-    {
-        vertex_colors = data->decoded_point_color_array;
-    }
 
     /* Style must match between the two triangles. */
     if (data->triangle_styles != NULL)
@@ -4105,24 +4147,33 @@ prc_compressed_tess_edge_attributes_compatible(prc_tess_3d_compressed *data,
             return false;
         }
 
-        if (vertex_colors != NULL)
+        if (corner_colors != NULL)
         {
-            /* Color seams are checked with tolerance so tiny decode differences
-               do not prevent smoothing across an otherwise smooth edge. */
-            if (!prc_compressed_tess_float_equal(vertex_colors[v1 * 4],
-                                                 vertex_colors[v2 * 4],
-                                                 PRC_COMPRESSED_TESS_COLOR_EPSILON) ||
-                !prc_compressed_tess_float_equal(vertex_colors[v1 * 4 + 1],
-                                                 vertex_colors[v2 * 4 + 1],
-                                                 PRC_COMPRESSED_TESS_COLOR_EPSILON) ||
-                !prc_compressed_tess_float_equal(vertex_colors[v1 * 4 + 2],
-                                                 vertex_colors[v2 * 4 + 2],
-                                                 PRC_COMPRESSED_TESS_COLOR_EPSILON) ||
-                !prc_compressed_tess_float_equal(vertex_colors[v1 * 4 + 3],
-                                                 vertex_colors[v2 * 4 + 3],
-                                                 PRC_COMPRESSED_TESS_COLOR_EPSILON))
+            /* The colours of each triangle's own corner at this vertex. Color
+               seams are checked with tolerance so tiny decode differences do
+               not prevent smoothing across an otherwise smooth edge. */
+            const float *c1 = NULL;
+            const float *c2 = NULL;
+            uint32_t c;
+
+            for (c = 0; c < 3; c++)
+            {
+                if (data->triangle_indices_prc_compressed_3d[tri1 * 3 + c] == v1)
+                    c1 = &corner_colors[(size_t)(tri1 * 3 + c) * 4];
+                if (data->triangle_indices_prc_compressed_3d[tri2 * 3 + c] == v2)
+                    c2 = &corner_colors[(size_t)(tri2 * 3 + c) * 4];
+            }
+            if (c1 == NULL || c2 == NULL)
             {
                 return false;
+            }
+            for (c = 0; c < 4; c++)
+            {
+                if (!prc_compressed_tess_float_equal(c1[c], c2[c],
+                                                     PRC_COMPRESSED_TESS_COLOR_EPSILON))
+                {
+                    return false;
+                }
             }
         }
 

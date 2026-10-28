@@ -94,13 +94,13 @@ prc_api_helper_set_vertex_color(prc_context *ctx,
 {
     position_normal_pair->color_set = PRC_INTERNAL_API_COLOR_SET;
     vertex_out->vertices[vertex_out_pos].color[0] =
-        tess->decoded_point_color_array[vertex_in_pos * 4];
+        tess->point_colors_prc_compressed_3d[vertex_in_pos * 4];
     vertex_out->vertices[vertex_out_pos].color[1] =
-        tess->decoded_point_color_array[vertex_in_pos * 4 + 1];
+        tess->point_colors_prc_compressed_3d[vertex_in_pos * 4 + 1];
     vertex_out->vertices[vertex_out_pos].color[2] =
-        tess->decoded_point_color_array[vertex_in_pos * 4 + 2];
+        tess->point_colors_prc_compressed_3d[vertex_in_pos * 4 + 2];
     vertex_out->vertices[vertex_out_pos].color[3] =
-        tess->decoded_point_color_array[vertex_in_pos * 4 + 3];
+        tess->point_colors_prc_compressed_3d[vertex_in_pos * 4 + 3];
 }
 
 uint8_t
@@ -109,13 +109,13 @@ prc_api_helper_color_mismatch(prc_context *ctx,
     prc_tess_3d_compressed *tess, uint32_t vertex_in_pos)
 {
     if (vertex_out->vertices[vertex_out_pos].color[0] !=
-        tess->decoded_point_color_array[vertex_in_pos * 4] ||
+        tess->point_colors_prc_compressed_3d[vertex_in_pos * 4] ||
         vertex_out->vertices[vertex_out_pos].color[1] !=
-        tess->decoded_point_color_array[vertex_in_pos * 4 + 1] ||
+        tess->point_colors_prc_compressed_3d[vertex_in_pos * 4 + 1] ||
         vertex_out->vertices[vertex_out_pos].color[2] !=
-        tess->decoded_point_color_array[vertex_in_pos * 4 + 2] ||
+        tess->point_colors_prc_compressed_3d[vertex_in_pos * 4 + 2] ||
         vertex_out->vertices[vertex_out_pos].color[3] !=
-        tess->decoded_point_color_array[vertex_in_pos * 4 + 3])
+        tess->point_colors_prc_compressed_3d[vertex_in_pos * 4 + 3])
     {
         return 1;
     }

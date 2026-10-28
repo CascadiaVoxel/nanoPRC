@@ -267,6 +267,11 @@ prc_parse_content_base_tess_data(prc_context *ctx, prc_bit_state *bit_state, prc
 
     if (data->number_of_coordinates > 0)
     {
+        if (!prc_bitread_count_fits(bit_state, (uint64_t)(data->number_of_coordinates)))
+        {
+            prc_error(ctx, PRC_ERROR_PARSE, "Count larger than the rest of the section in prc_parse_content_base_tess_data\n");
+            return PRC_ERROR_PARSE;
+        }
         data->coordinates = (double *)prc_calloc(ctx, data->number_of_coordinates, sizeof(double));
         if (data->coordinates == NULL)
         {
@@ -568,6 +573,11 @@ prc_parse_attribute_data(prc_context *ctx, prc_bit_state *bit_state, prc_attribu
 
     if (data->attribute_count > 0)
     {
+        if (!prc_bitread_count_fits(bit_state, (uint64_t)(data->attribute_count)))
+        {
+            prc_error(ctx, PRC_ERROR_PARSE, "Count larger than the rest of the section in prc_parse_attribute_data\n");
+            return PRC_ERROR_PARSE;
+        }
         data->attributes = (prc_misc_attribute *)prc_calloc(ctx, data->attribute_count, sizeof(prc_misc_attribute));
         if (data->attributes == NULL)
         {
@@ -595,6 +605,11 @@ prc_parse_attribute_data(prc_context *ctx, prc_bit_state *bit_state, prc_attribu
             data->attributes[k].number_attributes = prc_bitread_uint32(ctx, bit_state);
             if (data->attributes[k].number_attributes > 0)
             {
+                if (!prc_bitread_count_fits(bit_state, (uint64_t)(data->attributes[k].number_attributes)))
+                {
+                    prc_error(ctx, PRC_ERROR_PARSE, "Count larger than the rest of the section in prc_parse_attribute_data\n");
+                    return PRC_ERROR_PARSE;
+                }
                 data->attributes[k].attributes =
                     (prc_attribute_key_value *)prc_calloc(ctx, data->attributes[k].number_attributes,
                         sizeof(prc_attribute_key_value));
@@ -809,6 +824,11 @@ prc_parse_math_fct_1d_polynom(prc_context *ctx, prc_bit_state *bit_state,
     data->number_of_coefficients = prc_bitread_uint32(ctx, bit_state);
     if (data->number_of_coefficients > 0)
     {
+        if (!prc_bitread_count_fits(bit_state, (uint64_t)(data->number_of_coefficients)))
+        {
+            prc_error(ctx, PRC_ERROR_PARSE, "Count larger than the rest of the section in prc_parse_math_fct_1d_polynom\n");
+            return PRC_ERROR_PARSE;
+        }
         data->coefficients = (double *)prc_calloc(ctx, data->number_of_coefficients, sizeof(double));
         if (data->coefficients == NULL)
         {
@@ -938,6 +958,11 @@ prc_parse_math_fct_1d_combination(prc_context *ctx, prc_bit_state *bit_state,
     data->number_of_coefficients = prc_bitread_uint32(ctx, bit_state);
     if (data->number_of_coefficients > 0)
     {
+        if (!prc_bitread_count_fits(bit_state, (uint64_t)(data->number_of_coefficients)))
+        {
+            prc_error(ctx, PRC_ERROR_PARSE, "Count larger than the rest of the section in prc_parse_math_fct_1d_combination\n");
+            return PRC_ERROR_PARSE;
+        }
         data->coefficients = (prc_combination_functions *)prc_calloc(ctx, data->number_of_coefficients, sizeof(prc_combination_functions));
         if (data->coefficients == NULL)
         {

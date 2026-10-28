@@ -340,6 +340,11 @@ prc_parse_model_file(prc_context *ctx, prc_filestructure *file_struct,
 
     if (data->number_of_root_product_occurrences > 0)
     {
+        if (!prc_bitread_count_fits(&bit_state, (uint64_t)(data->number_of_root_product_occurrences)))
+        {
+            prc_error(ctx, PRC_ERROR_PARSE, "Count larger than the rest of the section in prc_parse_model_file\n");
+            return PRC_ERROR_PARSE;
+        }
         data->product_occurences = (prc_product_occurrence_reference *)prc_calloc(ctx,
             data->number_of_root_product_occurrences, sizeof(prc_product_occurrence_reference));
         if (data->product_occurences == NULL)
@@ -470,6 +475,11 @@ prc_parse_file_extra_geometry(prc_context *ctx, prc_filestructure *file_struct)
     data->extra_geom_count = prc_bitread_uint32(ctx, &bit_state);
     if (data->extra_geom_count > 0)
     {
+        if (!prc_bitread_count_fits(&bit_state, (uint64_t)(data->extra_geom_count)))
+        {
+            prc_error(ctx, PRC_ERROR_PARSE, "Count larger than the rest of the section in prc_parse_file_extra_geometry\n");
+            return PRC_ERROR_PARSE;
+        }
         data->extra_geom = (prc_extra_geometry *)prc_calloc(ctx, data->extra_geom_count, sizeof(prc_extra_geometry));
         if (data->extra_geom == NULL)
         {
@@ -575,6 +585,11 @@ prc_parse_file_tree(prc_context *ctx, prc_filestructure *file_struct)
     DEBUG_LOG2("Number of parts = %d\n", data->parts_count);
     if (data->parts_count > 0)
     {
+        if (!prc_bitread_count_fits(&bit_state, (uint64_t)(data->parts_count)))
+        {
+            prc_error(ctx, PRC_ERROR_PARSE, "Count larger than the rest of the section in prc_parse_file_tree\n");
+            return PRC_ERROR_PARSE;
+        }
         data->parts = (prc_asm_parts_definition *)prc_calloc(ctx, data->parts_count, sizeof(prc_asm_parts_definition));
         if (data->parts == NULL)
         {
@@ -663,6 +678,11 @@ prc_parse_file_tree(prc_context *ctx, prc_filestructure *file_struct)
     DEBUG_LOG2("Number of products = %d\n", data->product_count);
     if (data->product_count > 0)
     {
+        if (!prc_bitread_count_fits(&bit_state, (uint64_t)(data->product_count)))
+        {
+            prc_error(ctx, PRC_ERROR_PARSE, "Count larger than the rest of the section in prc_parse_file_tree\n");
+            return PRC_ERROR_PARSE;
+        }
         data->products = (prc_asm_product_occurrence *)prc_calloc(ctx, data->product_count, sizeof(prc_asm_product_occurrence));
         if (data->products == NULL)
         {

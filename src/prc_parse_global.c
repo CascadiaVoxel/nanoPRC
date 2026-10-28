@@ -184,6 +184,11 @@ prc_parse_tess_markup(prc_context *ctx, prc_bit_state *bit_state, prc_tess_marku
     data->number_of_codes = prc_bitread_uint32(ctx, bit_state);
     if (data->number_of_codes > 0)
     {
+        if (!prc_bitread_count_fits(bit_state, (uint64_t)(data->number_of_codes)))
+        {
+            prc_error(ctx, PRC_ERROR_PARSE, "Count larger than the rest of the section in prc_parse_tess_markup\n");
+            return PRC_ERROR_PARSE;
+        }
         data->code_numbers = (uint32_t *)prc_calloc(ctx, data->number_of_codes, sizeof(uint32_t));
         if (data->code_numbers == NULL)
         {
@@ -200,6 +205,11 @@ prc_parse_tess_markup(prc_context *ctx, prc_bit_state *bit_state, prc_tess_marku
     data->number_of_text_strings = prc_bitread_uint32(ctx, bit_state);
     if (data->number_of_text_strings > 0)
     {
+        if (!prc_bitread_count_fits(bit_state, (uint64_t)(data->number_of_text_strings)))
+        {
+            prc_error(ctx, PRC_ERROR_PARSE, "Count larger than the rest of the section in prc_parse_tess_markup\n");
+            return PRC_ERROR_PARSE;
+        }
         data->text_strings = (prc_string *)prc_calloc(ctx, data->number_of_text_strings, sizeof(prc_string));
         if (data->text_strings == NULL)
         {
@@ -283,6 +293,11 @@ prc_parse_fills(prc_context *ctx, prc_bit_state *bit_state, prc_graph_fill_patte
         pat_data->number_of_hatching_lines = prc_bitread_uint32(ctx, bit_state);
         if (pat_data->number_of_hatching_lines > 0)
         {
+            if (!prc_bitread_count_fits(bit_state, (uint64_t)(pat_data->number_of_hatching_lines)))
+            {
+                prc_error(ctx, PRC_ERROR_PARSE, "Count larger than the rest of the section in prc_parse_fills\n");
+                return PRC_ERROR_PARSE;
+            }
             pat_data->hatch = (prc_hatch *)prc_calloc(ctx, pat_data->number_of_hatching_lines, sizeof(prc_hatch));
             if (pat_data->hatch == NULL)
             {
@@ -448,6 +463,11 @@ prc_parse_line_patterns(prc_context *ctx, prc_bit_state *bit_state, prc_graph_li
     data->number_of_elements = prc_bitread_uint32(ctx, bit_state);
     if (data->number_of_elements > 0)
     {
+        if (!prc_bitread_count_fits(bit_state, (uint64_t)(data->number_of_elements)))
+        {
+            prc_error(ctx, PRC_ERROR_PARSE, "Count larger than the rest of the section in prc_parse_line_patterns\n");
+            return PRC_ERROR_PARSE;
+        }
         data->lengths = (double *)prc_calloc(ctx, data->number_of_elements, sizeof(double));
         if (data->lengths == NULL)
         {
@@ -621,6 +641,11 @@ prc_parse_graph_textures(prc_context *ctx, prc_bit_state *bit_state, prc_graph_t
     data->number_texture_mapping_attributes_intensities = prc_bitread_uint32(ctx, bit_state);
     if (data->number_texture_mapping_attributes_intensities > 0)
     {
+        if (!prc_bitread_count_fits(bit_state, (uint64_t)(data->number_texture_mapping_attributes_intensities)))
+        {
+            prc_error(ctx, PRC_ERROR_PARSE, "Count larger than the rest of the section in prc_parse_graph_textures\n");
+            return PRC_ERROR_PARSE;
+        }
         data->texture_mapping_attributes_intensities =
             (double *)prc_calloc(ctx, data->number_texture_mapping_attributes_intensities, sizeof(double));
         if (data->texture_mapping_attributes_intensities == NULL)
@@ -638,6 +663,11 @@ prc_parse_graph_textures(prc_context *ctx, prc_bit_state *bit_state, prc_graph_t
     data->number_of_texture_mapping_attributes_components = prc_bitread_uint32(ctx, bit_state);
     if (data->number_of_texture_mapping_attributes_components > 0)
     {
+        if (!prc_bitread_count_fits(bit_state, (uint64_t)(data->number_of_texture_mapping_attributes_components)))
+        {
+            prc_error(ctx, PRC_ERROR_PARSE, "Count larger than the rest of the section in prc_parse_graph_textures\n");
+            return PRC_ERROR_PARSE;
+        }
         data->texture_mapping_attributes_components =
             (uint8_t *)prc_calloc(ctx, data->number_of_texture_mapping_attributes_components, sizeof(uint8_t));
         if (data->texture_mapping_attributes_components == NULL)
@@ -923,6 +953,11 @@ prc_parse_font_keys_same_font(prc_context *ctx, prc_bit_state *bit_state, prc_fo
 
     if (data->key_count > 0)
     {
+        if (!prc_bitread_count_fits(bit_state, (uint64_t)(data->key_count)))
+        {
+            prc_error(ctx, PRC_ERROR_PARSE, "Count larger than the rest of the section in prc_parse_font_keys_same_font\n");
+            return PRC_ERROR_PARSE;
+        }
         data->font_key_list = (prc_font_key *)prc_calloc(ctx, data->key_count, sizeof(prc_font_key));
         if (data->font_key_list == NULL)
         {
@@ -953,6 +988,11 @@ prc_parse_serialize_help(prc_context *ctx, prc_bit_state *bit_state, prc_markup_
     data->font_keys_count = prc_bitread_uint32(ctx, bit_state);
     if (data->font_keys_count > 0)
     {
+        if (!prc_bitread_count_fits(bit_state, (uint64_t)(data->font_keys_count)))
+        {
+            prc_error(ctx, PRC_ERROR_PARSE, "Count larger than the rest of the section in prc_parse_serialize_help\n");
+            return PRC_ERROR_PARSE;
+        }
         data->font_keys_of_font = (prc_font_keys_same_font *)prc_calloc(ctx, data->font_keys_count, sizeof(prc_font_keys_same_font));
         if (data->font_keys_of_font == NULL)
         {
@@ -995,6 +1035,11 @@ int prc_parse_global_data(prc_context *ctx, prc_bit_state *bit_state, prc_file_s
     data->color_count = prc_bitread_uint32(ctx, bit_state);
     if (data->color_count > 0)
     {
+        if (!prc_bitread_count_fits(bit_state, (uint64_t)(data->color_count)))
+        {
+            prc_error(ctx, PRC_ERROR_PARSE, "Count larger than the rest of the section in prc_parse_global_data\n");
+            return PRC_ERROR_PARSE;
+        }
         data->colors = (prc_rgb_color *)prc_calloc(ctx, data->color_count, sizeof(prc_rgb_color));
         if (data->colors == NULL)
         {
@@ -1011,6 +1056,11 @@ int prc_parse_global_data(prc_context *ctx, prc_bit_state *bit_state, prc_file_s
     data->picture_count = prc_bitread_uint32(ctx, bit_state);
     if (data->picture_count > 0)
     {
+        if (!prc_bitread_count_fits(bit_state, (uint64_t)(data->picture_count)))
+        {
+            prc_error(ctx, PRC_ERROR_PARSE, "Count larger than the rest of the section in prc_parse_global_data\n");
+            return PRC_ERROR_PARSE;
+        }
         data->pictures = (prc_graph_picture *)prc_calloc(ctx, data->picture_count, sizeof(prc_graph_picture));
         if (data->pictures == NULL)
         {
@@ -1032,6 +1082,11 @@ int prc_parse_global_data(prc_context *ctx, prc_bit_state *bit_state, prc_file_s
     data->texture_count = prc_bitread_uint32(ctx, bit_state);
     if (data->texture_count > 0)
     {
+        if (!prc_bitread_count_fits(bit_state, (uint64_t)(data->texture_count)))
+        {
+            prc_error(ctx, PRC_ERROR_PARSE, "Count larger than the rest of the section in prc_parse_global_data\n");
+            return PRC_ERROR_PARSE;
+        }
         data->textures = (prc_graph_texture_definition *)prc_calloc(ctx, data->texture_count, sizeof(prc_graph_texture_definition));
         if (data->textures == NULL)
         {
@@ -1053,6 +1108,11 @@ int prc_parse_global_data(prc_context *ctx, prc_bit_state *bit_state, prc_file_s
     data->material_count = prc_bitread_uint32(ctx, bit_state);
     if (data->material_count > 0)
     {
+        if (!prc_bitread_count_fits(bit_state, (uint64_t)(data->material_count)))
+        {
+            prc_error(ctx, PRC_ERROR_PARSE, "Count larger than the rest of the section in prc_parse_global_data\n");
+            return PRC_ERROR_PARSE;
+        }
         data->materials = (prc_graph_material *)prc_calloc(ctx, data->material_count, sizeof(prc_graph_material));
         if (data->materials == NULL)
         {
@@ -1074,6 +1134,11 @@ int prc_parse_global_data(prc_context *ctx, prc_bit_state *bit_state, prc_file_s
     data->line_pattern_count = prc_bitread_uint32(ctx, bit_state);
     if (data->line_pattern_count > 0)
     {
+        if (!prc_bitread_count_fits(bit_state, (uint64_t)(data->line_pattern_count)))
+        {
+            prc_error(ctx, PRC_ERROR_PARSE, "Count larger than the rest of the section in prc_parse_global_data\n");
+            return PRC_ERROR_PARSE;
+        }
         data->line_patterns = (prc_graph_line_pattern *)prc_calloc(ctx, data->line_pattern_count, sizeof(prc_graph_line_pattern));
         if (data->line_patterns == NULL)
         {
@@ -1095,6 +1160,11 @@ int prc_parse_global_data(prc_context *ctx, prc_bit_state *bit_state, prc_file_s
     data->style_count = prc_bitread_uint32(ctx, bit_state);
     if (data->style_count > 0)
     {
+        if (!prc_bitread_count_fits(bit_state, (uint64_t)(data->style_count)))
+        {
+            prc_error(ctx, PRC_ERROR_PARSE, "Count larger than the rest of the section in prc_parse_global_data\n");
+            return PRC_ERROR_PARSE;
+        }
         data->styles = (prc_graph_style *)prc_calloc(ctx, data->style_count, sizeof(prc_graph_style));
         if (data->styles == NULL)
         {
@@ -1116,6 +1186,11 @@ int prc_parse_global_data(prc_context *ctx, prc_bit_state *bit_state, prc_file_s
     data->fill_count = prc_bitread_uint32(ctx, bit_state);
     if (data->fill_count > 0)
     {
+        if (!prc_bitread_count_fits(bit_state, (uint64_t)(data->fill_count)))
+        {
+            prc_error(ctx, PRC_ERROR_PARSE, "Count larger than the rest of the section in prc_parse_global_data\n");
+            return PRC_ERROR_PARSE;
+        }
         data->fills = (prc_graph_fill_pattern *)prc_calloc(ctx, data->fill_count, sizeof(prc_graph_fill_pattern));
         if (data->fills == NULL)
         {
@@ -1150,6 +1225,11 @@ int prc_parse_global_data(prc_context *ctx, prc_bit_state *bit_state, prc_file_s
     data->ref_coord_count = prc_bitread_uint32(ctx, bit_state);
     if (data->ref_coord_count > 0)
     {
+        if (!prc_bitread_count_fits(bit_state, (uint64_t)(data->ref_coord_count)))
+        {
+            prc_error(ctx, PRC_ERROR_PARSE, "Count larger than the rest of the section in prc_parse_global_data\n");
+            return PRC_ERROR_PARSE;
+        }
         data->ref_coords = (prc_ri_coordinate_system *)prc_calloc(ctx, data->ref_coord_count, sizeof(prc_ri_coordinate_system));
         if (data->ref_coords == NULL)
         {

@@ -33,7 +33,9 @@
 #include "prc_test.h"
 #include "prc_context.h"
 #include "prc_api.h"
+#include "zlib.h"
 #include "prc_data.h"
+#include "prc_parse_global.h"
 #include "prc_internal_api.h"
 
 #define TEST_MATERIALS_FILENAME "test_write_materials_tmp.prc"
@@ -185,9 +187,16 @@ test_shared_pictures(prc_context *ctx)
             PRC_ASSERT(p->biased_uncompressed_file_index >= 1 &&
                        p->biased_uncompressed_file_index <= data->file_struct[0].header->file_count);
             blk = &data->file_struct[0].header->files[p->biased_uncompressed_file_index - 1];
-            PRC_ASSERT_EQ(blk->block_size, sizeof(image_x));
-            for (b = 0; b < sizeof(image_x); b++)
-                PRC_ASSERT_EQ(blk->block[b], images[found][b]);
+            {
+                /* stored as a zlib stream, bottom row first: 2 rows of 6 bytes */
+                uint8_t px[sizeof(image_x) + 8];
+                uLongf len = sizeof(px);
+                PRC_ASSERT_EQ(blk->block[0], 0x78);
+                PRC_ASSERT_EQ(uncompress(px, &len, blk->block, blk->block_size), Z_OK);
+                PRC_ASSERT_EQ((uint32_t)len, (uint32_t)sizeof(image_x));
+                for (b = 0; b < sizeof(image_x); b++)
+                    PRC_ASSERT_EQ(px[b], images[found][(1 - b / 6) * 6 + b % 6]);
+            }
             found++;
         }
     }
@@ -884,7 +893,14 @@ follow_layers(const prc_data *data, const prc_ri *ri, layer_seen *out, uint32_t 
         out[n].intensity = out[n].num_intensities ? def->texture_mapping_attributes_intensities[0] : -1.0;
         out[n].num_components = def->number_of_texture_mapping_attributes_components;
         out[n].components = out[n].num_components ? def->texture_mapping_attributes_components[0] : 0xFFu;
-        out[n].first_byte = blk->block[0];
+        /* the image's top row, stored second of the two raw rows, inside the
+           zlib stream the raw pixels are stored as */
+        {
+            uint8_t px[64];
+            uLongf len = sizeof(px);
+            PRC_ASSERT_EQ(uncompress(px, &len, blk->block, blk->block_size), Z_OK);
+            out[n].first_byte = px[len / 2];
+        }
         out[n].wrap_s = (uint32_t)def->texture_wrapping_mode_s;
         out[n].material = app->biased_material_generic_index;
         n++;
@@ -1438,6 +1454,118 @@ test_texture_layers_read(prc_context *ctx)
     remove(TEST_MATERIALS_FILENAME);
 }
 
+/* Raw-pixel pictures read back. The writer stores RGB and RGBA pixels with
+   their rows reversed, bottom row first, as the file holds them; the stored
+   block is checked for that. Each must come back byte for byte, top row
+   first, with its size and channel count. The specification calls these pixels flate-formatted, and some real
+   files deflate them, so the helper is also given a deflated block, the same
+   pixels stored as they are, and three blocks it must refuse. */
+static void
+test_raw_pictures_read(prc_context *ctx)
+{
+    static const uint8_t rgb[2 * 2 * 3] = {
+        0x41, 0x00, 0x00,   0x00, 0xC0, 0x00,
+        0x00, 0x00, 0xC0,   0xC0, 0xC0, 0x00
+    };
+    static const uint8_t rgba[2 * 2 * 4] = {
+        0x51, 0x10, 0x20, 0xFF,   0x30, 0x40, 0x50, 0x80,
+        0x60, 0x70, 0x80, 0x40,   0x90, 0xA0, 0xB0, 0x00
+    };
+    /* rgb deflated by zlib */
+    static const uint8_t rgb_deflated[18] = {
+        0x78, 0xDA, 0x73, 0x64, 0x60, 0x60, 0x38, 0x00, 0xC2, 0x07, 0x0E, 0x30,
+        0x00, 0x00, 0x0F, 0xD8, 0x03, 0x42
+    };
+    /* rgb plus one more byte, deflated: inflates to 13 bytes, not 12 */
+    static const uint8_t rgb13_deflated[19] = {
+        0x78, 0xDA, 0x73, 0x64, 0x60, 0x60, 0x38, 0x00, 0xC2, 0x07, 0x0E, 0x30,
+        0xB0, 0x03, 0x00, 0x13, 0x21, 0x03, 0x49
+    };
+    prc_api_write_rep_item items[2];
+    prc_api_data data;
+    prc_api_product *model_tree;
+    prc_api_tess *tesses;
+    const prc_api_texture *t;
+    uint8_t *px;
+    uint32_t k;
+
+    printf("  sub-case: raw RGB and RGBA pictures read back\n");
+    memset(items, 0, sizeof(items));
+    for (k = 0; k < 2; k++)
+    {
+        items[k].has_material = 1;
+        items[k].material_color[0] = items[k].material_color[1] = items[k].material_color[2] = 1.0;
+        items[k].material_alpha = 1.0;
+        items[k].has_texture = 1;
+        items[k].texture_width = items[k].texture_height = 2;
+    }
+    items[0].texture_format = PRC_API_WRITE_TEXTURE_RGB;
+    items[0].texture_image = rgb;
+    items[0].texture_image_size = sizeof(rgb);
+    items[1].texture_format = PRC_API_WRITE_TEXTURE_RGBA;
+    items[1].texture_image = rgba;
+    items[1].texture_image_size = sizeof(rgba);
+
+    PRC_ASSERT_EQ(write_textured_items(ctx, "raw_pictures_read", items, 2), 0);
+    open_written_items(ctx, &data, &model_tree, &tesses, 2);
+    {
+        /* The stored RGB block: its first row is the image's bottom row. */
+        const prc_file_struct_internal_global_data *gd = &((prc_data *)data)->file_struct[0].globals->global_data;
+        const prc_file_structure_header *hd = ((prc_data *)data)->file_struct[0].header;
+        uint32_t p, found = 0;
+
+        for (p = 0; p < gd->picture_count; p++)
+        {
+            const prc_uncomp_block *blk;
+
+            if (gd->pictures[p].format != KEPRCPicture_BITMAP_RGB_BYTE)
+                continue;
+            PRC_ASSERT(gd->pictures[p].biased_uncompressed_file_index >= 1 &&
+                       gd->pictures[p].biased_uncompressed_file_index <= hd->file_count);
+            blk = &hd->files[gd->pictures[p].biased_uncompressed_file_index - 1];
+            {
+                uint8_t px[sizeof(rgb) + 8];
+                uLongf len = sizeof(px);
+                PRC_ASSERT_EQ(uncompress(px, &len, blk->block, blk->block_size), Z_OK);
+                PRC_ASSERT_EQ((uint32_t)len, (uint32_t)sizeof(rgb));
+                PRC_ASSERT(memcmp(px, rgb + 6, 6) == 0);
+                PRC_ASSERT(memcmp(px + 6, rgb, 6) == 0);
+            }
+            found++;
+        }
+        PRC_ASSERT_EQ(found, 1);
+    }
+    for (k = 0; k < 2; k++)
+    {
+        PRC_ASSERT(read_first_face(ctx, data, model_tree, tesses, k) >= 0);
+        t = &tesses[k].tess_faces[0].texture;
+        PRC_ASSERT(tesses[k].tess_faces[0].is_texture);
+        PRC_ASSERT_NOT_NULL(t->data);
+        PRC_ASSERT_EQ(t->width, 2);
+        PRC_ASSERT_EQ(t->height, 2);
+        PRC_ASSERT_EQ(t->num_channels, k == 0 ? 3 : 4);
+        PRC_ASSERT(memcmp(t->data, k == 0 ? rgb : rgba, k == 0 ? sizeof(rgb) : sizeof(rgba)) == 0);
+    }
+    prc_api_release_data(ctx, data, tesses, 2, NULL, 0, NULL, 0, model_tree);
+    remove(TEST_MATERIALS_FILENAME);
+
+    printf("  sub-case: raw pixels deflated, stored, or refused\n");
+    px = prc_parse_raw_picture_pixels(ctx, rgb_deflated, sizeof(rgb_deflated), sizeof(rgb));
+    PRC_ASSERT_NOT_NULL(px);
+    PRC_ASSERT(memcmp(px, rgb, sizeof(rgb)) == 0);
+    prc_free(ctx, px);
+    px = prc_parse_raw_picture_pixels(ctx, rgb, sizeof(rgb), sizeof(rgb));
+    PRC_ASSERT_NOT_NULL(px);
+    PRC_ASSERT(memcmp(px, rgb, sizeof(rgb)) == 0);
+    prc_free(ctx, px);
+    /* one byte short, not deflated */
+    PRC_ASSERT(prc_parse_raw_picture_pixels(ctx, rgb, sizeof(rgb) - 1, sizeof(rgb)) == NULL);
+    /* deflated to the wrong size, and not the image size as it stands */
+    PRC_ASSERT(prc_parse_raw_picture_pixels(ctx, rgb13_deflated, sizeof(rgb13_deflated), sizeof(rgb)) == NULL);
+    /* an image far larger than any deflated block could hold */
+    PRC_ASSERT(prc_parse_raw_picture_pixels(ctx, rgb_deflated, sizeof(rgb_deflated), (size_t)1 << 30) == NULL);
+}
+
 int
 main(void)
 {
@@ -1457,6 +1585,7 @@ main(void)
     test_texture_layers(ctx);
     test_parent_herit_colour(ctx);
     test_texture_layers_read(ctx);
+    test_raw_pictures_read(ctx);
 
     prc_release_context(ctx);
 

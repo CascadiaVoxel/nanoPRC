@@ -486,6 +486,11 @@ prc_parse_hcg_bspline_hermite_curve(prc_context *ctx, prc_bit_state *bit_state,
 
     if (number_points > 0)
     {
+        if (!prc_bitread_count_fits(bit_state, (uint64_t)(number_points)))
+        {
+            prc_error(ctx, PRC_ERROR_PARSE, "Count larger than the rest of the section in prc_parse_hcg_bspline_hermite_curve\n");
+            return PRC_ERROR_PARSE;
+        }
         data->points = (prc_vec3*) prc_calloc(ctx, number_points,
             sizeof(prc_vec3));
         if (data->points == NULL)
@@ -522,6 +527,11 @@ prc_parse_hcg_bspline_hermite_curve(prc_context *ctx, prc_bit_state *bit_state,
     number_points = data->number_points;
     if (number_points > 0)
     {
+        if (!prc_bitread_count_fits(bit_state, (uint64_t)(number_points)))
+        {
+            prc_error(ctx, PRC_ERROR_PARSE, "Count larger than the rest of the section in prc_parse_hcg_bspline_hermite_curve\n");
+            return PRC_ERROR_PARSE;
+        }
         data->tangents = (prc_vec3*)prc_calloc(ctx, number_points,
             sizeof(prc_vec3));
         if (data->tangents == NULL)
@@ -607,6 +617,11 @@ prc_parse_hcg_composite_curve(prc_context *ctx, prc_bit_state *bit_state,
             return PRC_ERROR_PARSE;
         }
 
+        if (!prc_bitread_count_fits(bit_state, (uint64_t)(data->number_of_curves)))
+        {
+            prc_error(ctx, PRC_ERROR_PARSE, "Count larger than the rest of the section in prc_parse_hcg_composite_curve\n");
+            return PRC_ERROR_PARSE;
+        }
         data->curves = (prc_ref_or_compressed_curve *)prc_calloc(ctx, data->number_of_curves,
             sizeof(prc_ref_or_compressed_curve));
         if (data->curves == NULL)
@@ -1660,6 +1675,11 @@ prc_parse_compressed_weights(prc_context *ctx, prc_bit_state *bit_state,
     if (data->number_bit_weight == 0)
         return 0;
 
+    if (!prc_bitread_count_fits(bit_state, (uint64_t)(num_points)))
+    {
+        prc_error(ctx, PRC_ERROR_PARSE, "Count larger than the rest of the section in prc_parse_compressed_weights\n");
+        return PRC_ERROR_PARSE;
+    }
     data->compressed_weights = (double *)prc_calloc(ctx, num_points, sizeof(double));
     if (!data->compressed_weights)
     {
@@ -1715,6 +1735,11 @@ prc_parse_compressed_knots(prc_context *ctx, prc_bit_state *bit_state,
 
     data->number_bit_parameter = prc_bitread_uint_variable_bit(ctx, bit_state, 6);
 
+    if (!prc_bitread_count_fits(bit_state, (uint64_t)(num_knots)))
+    {
+        prc_error(ctx, PRC_ERROR_PARSE, "Count larger than the rest of the section in prc_parse_compressed_knots\n");
+        return PRC_ERROR_PARSE;
+    }
     data->compressed_knots = (prc_compressed_knot *)prc_calloc(ctx, num_knots, sizeof(prc_compressed_knot));
     if (!data->compressed_knots)
     {
@@ -1857,6 +1882,11 @@ prc_parse_compressed_control_points(prc_context *ctx, prc_bit_state *bit_state,
     data->p00 = prc_parse_3d_vector(ctx, bit_state);
 
     /* First get the compressed control v points [0][j] */
+    if (!prc_bitread_count_fits(bit_state, (uint64_t)(num_control_points_v - 1)))
+    {
+        prc_error(ctx, PRC_ERROR_PARSE, "Count larger than the rest of the section in prc_parse_compressed_control_points\n");
+        return PRC_ERROR_PARSE;
+    }
     data->ccpt_in_v = (prc_vec3 *)prc_calloc(ctx, num_control_points_v - 1, sizeof(prc_vec3));
     if (!data->ccpt_in_v)
     {
@@ -1874,6 +1904,11 @@ prc_parse_compressed_control_points(prc_context *ctx, prc_bit_state *bit_state,
     }
 
     /* Now get the compressed control u points [i][0] */
+    if (!prc_bitread_count_fits(bit_state, (uint64_t)(num_control_points_u - 1)))
+    {
+        prc_error(ctx, PRC_ERROR_PARSE, "Count larger than the rest of the section in prc_parse_compressed_control_points\n");
+        return PRC_ERROR_PARSE;
+    }
     data->ccpt_in_u = (prc_vec3 *)prc_calloc(ctx, num_control_points_u - 1, sizeof(prc_vec3));
     if (!data->ccpt_in_u)
     {
@@ -1945,6 +1980,11 @@ prc_parse_compressed_nurbs(prc_context *ctx, prc_bit_state *bit_state,
     data->number_stored_knots_in_u = prc_bitread_uint_variable_bit(ctx, bit_state, 16);
     if (data->number_stored_knots_in_u > 0)
     {
+        if (!prc_bitread_count_fits(bit_state, (uint64_t)(data->number_stored_knots_in_u)))
+        {
+            prc_error(ctx, PRC_ERROR_PARSE, "Count larger than the rest of the section in prc_parse_compressed_nurbs\n");
+            return PRC_ERROR_PARSE;
+        }
         data->mult_u = (prc_compressed_multiplicities *)prc_calloc(ctx, data->number_stored_knots_in_u,
             sizeof(prc_compressed_multiplicities));
         if (!data->mult_u)
@@ -1968,6 +2008,11 @@ prc_parse_compressed_nurbs(prc_context *ctx, prc_bit_state *bit_state,
     data->number_stored_knots_in_v = prc_bitread_uint_variable_bit(ctx, bit_state, 16);
     if (data->number_stored_knots_in_v > 0)
     {
+        if (!prc_bitread_count_fits(bit_state, (uint64_t)(data->number_stored_knots_in_v)))
+        {
+            prc_error(ctx, PRC_ERROR_PARSE, "Count larger than the rest of the section in prc_parse_compressed_nurbs\n");
+            return PRC_ERROR_PARSE;
+        }
         data->mult_v = (prc_compressed_multiplicities *)prc_calloc(ctx, data->number_stored_knots_in_v,
             sizeof(prc_compressed_multiplicities));
         if (!data->mult_v)
@@ -2610,6 +2655,11 @@ prc_parse_compressed_shell(prc_context *ctx, prc_bit_state *bit_state,
 
     if (data->number_of_faces > 0)
     {
+        if (!prc_bitread_count_fits(bit_state, (uint64_t)(data->number_of_faces)))
+        {
+            prc_error(ctx, PRC_ERROR_PARSE, "Count larger than the rest of the section in prc_parse_compressed_shell\n");
+            return PRC_ERROR_PARSE;
+        }
         data->faces = (prc_compressed_face *)prc_calloc(ctx, data->number_of_faces, sizeof(prc_compressed_face));
         if (data->faces == NULL)
         {
@@ -2627,6 +2677,11 @@ prc_parse_compressed_shell(prc_context *ctx, prc_bit_state *bit_state,
             }
         }
 
+        if (!prc_bitread_count_fits(bit_state, (uint64_t)(data->number_of_faces)))
+        {
+            prc_error(ctx, PRC_ERROR_PARSE, "Count larger than the rest of the section in prc_parse_compressed_shell\n");
+            return PRC_ERROR_PARSE;
+        }
         data->is_iso_face = (uint8_t *)prc_calloc(ctx, data->number_of_faces, sizeof(uint8_t));
         if (data->is_iso_face == NULL)
         {
@@ -2784,6 +2839,11 @@ prc_parse_crv_blend02_boundary(prc_context *ctx, prc_bit_state *bit_state,
 
     if (data->number_of_crossing_points > 0)
     {
+        if (!prc_bitread_count_fits(bit_state, (uint64_t)(data->number_of_crossing_points)))
+        {
+            prc_error(ctx, PRC_ERROR_PARSE, "Count larger than the rest of the section in prc_parse_crv_blend02_boundary\n");
+            return PRC_ERROR_PARSE;
+        }
         data->crossing_points = (prc_vec3 *)prc_calloc(ctx, data->number_of_crossing_points,
             sizeof(prc_vec3));
         if (!data->crossing_points)
@@ -2890,6 +2950,11 @@ prc_parse_crv_nurbs(prc_context *ctx, prc_bit_state *bit_state,
     np = data->highest_index_of_control_points + 1;
     nu = data->highest_index_of_knots + 1;
 
+    if (!prc_bitread_count_fits(bit_state, (uint64_t)(np)))
+    {
+        prc_error(ctx, PRC_ERROR_PARSE, "Count larger than the rest of the section in prc_parse_crv_nurbs\n");
+        return PRC_ERROR_PARSE;
+    }
     data->p = (prc_control_points_nurbs_crv *)prc_calloc(ctx, np, sizeof(prc_control_points_nurbs_crv));
     if (!data->p)
     {
@@ -2907,6 +2972,11 @@ prc_parse_crv_nurbs(prc_context *ctx, prc_bit_state *bit_state,
         }
     }
 
+    if (!prc_bitread_count_fits(bit_state, (uint64_t)(nu)))
+    {
+        prc_error(ctx, PRC_ERROR_PARSE, "Count larger than the rest of the section in prc_parse_crv_nurbs\n");
+        return PRC_ERROR_PARSE;
+    }
     data->u = (double *)prc_calloc(ctx, nu, sizeof(double));
     if (!data->u)
     {
@@ -3022,6 +3092,11 @@ prc_parse_crv_composite(prc_context *ctx, prc_bit_state *bit_state,
     data->number_of_subcurves = prc_bitread_uint32(ctx, bit_state);
     if (data->number_of_subcurves > 0)
     {
+        if (!prc_bitread_count_fits(bit_state, (uint64_t)(data->number_of_subcurves)))
+        {
+            prc_error(ctx, PRC_ERROR_PARSE, "Count larger than the rest of the section in prc_parse_crv_composite\n");
+            return PRC_ERROR_PARSE;
+        }
         data->subcurves = (prc_composite_subcurve *)prc_calloc(ctx, data->number_of_subcurves,
             sizeof(prc_composite_subcurve));
         if (!data->subcurves)
@@ -3435,6 +3510,11 @@ prc_parse_crv_intersection(prc_context *ctx, prc_bit_state *bit_state,
 
     data->number_of_crossings = prc_bitread_uint32(ctx, bit_state);
 
+    if (!prc_bitread_count_fits(bit_state, (uint64_t)(data->number_of_crossings)))
+    {
+        prc_error(ctx, PRC_ERROR_PARSE, "Count larger than the rest of the section in prc_parse_crv_intersection\n");
+        return PRC_ERROR_PARSE;
+    }
     data->crossing_points = (prc_crv_crossing_points_intersection*)prc_calloc(ctx,
         data->number_of_crossings, sizeof(prc_crv_crossing_points_intersection));
     if (!data->crossing_points)
@@ -3643,6 +3723,11 @@ prc_parse_crv_polyline(prc_context *ctx, prc_bit_state *bit_state,
 
     if (data->number_of_points > 0)
     {
+        if (!prc_bitread_count_fits(bit_state, (uint64_t)(data->number_of_points)))
+        {
+            prc_error(ctx, PRC_ERROR_PARSE, "Count larger than the rest of the section in prc_parse_crv_polyline\n");
+            return PRC_ERROR_PARSE;
+        }
         data->points = (prc_polyline_point *)prc_calloc(ctx, data->number_of_points, sizeof(prc_polyline_point));
         if (data->points == NULL)
         {
@@ -4187,6 +4272,11 @@ prc_parse_topo_connex(prc_context *ctx, prc_bit_state *bit_state,
     data->number_of_shells = prc_bitread_uint32(ctx, bit_state);
     if (data->number_of_shells > 0)
     {
+        if (!prc_bitread_count_fits(bit_state, (uint64_t)(data->number_of_shells)))
+        {
+            prc_error(ctx, PRC_ERROR_PARSE, "Count larger than the rest of the section in prc_parse_topo_connex\n");
+            return PRC_ERROR_PARSE;
+        }
         data->shells = (prc_ptr_topology*) prc_calloc(ctx, data->number_of_shells, sizeof(prc_ptr_topology));
         if (data->shells == NULL)
         {
@@ -4258,7 +4348,7 @@ prc_parse_brep_data(prc_context *ctx, prc_bit_state *bit_state,
     data->number_of_connex = prc_bitread_uint32(ctx, bit_state);
     if (data->number_of_connex > 0)
     {
-        data->connex = (prc_ptr_topology *)prc_malloc(ctx, data->number_of_connex * sizeof(prc_ptr_topology));
+        data->connex = (prc_ptr_topology *)prc_calloc(ctx, data->number_of_connex, sizeof(prc_ptr_topology));
         if (data->connex == NULL)
         {
             prc_error(ctx, PRC_ERROR_MEMORY, "Allocation error in prc_parse_brep_data\n");
@@ -4633,6 +4723,11 @@ prc_parse_compressed_connex(prc_context *ctx, prc_bit_state *bit_state,
     data->number_of_shells = prc_bitread_number_of_bits_then_unsigned_int(ctx, bit_state);
     if (data->number_of_shells > 0)
     {
+        if (!prc_bitread_count_fits(bit_state, (uint64_t)(data->number_of_shells)))
+        {
+            prc_error(ctx, PRC_ERROR_PARSE, "Count larger than the rest of the section in prc_parse_compressed_connex\n");
+            return PRC_ERROR_PARSE;
+        }
         data->shells = (prc_compressed_shell*) prc_calloc(ctx, data->number_of_shells, sizeof(prc_compressed_shell));
         if (data->shells == NULL)
         {
@@ -4666,6 +4761,11 @@ prc_parse_multiple_compressed_connex(prc_context *ctx, prc_bit_state *bit_state,
     data->number_of_connex = prc_bitread_number_of_bits_then_unsigned_int(ctx, bit_state);
     if (data->number_of_connex > 0)
     {
+        if (!prc_bitread_count_fits(bit_state, (uint64_t)(data->number_of_connex)))
+        {
+            prc_error(ctx, PRC_ERROR_PARSE, "Count larger than the rest of the section in prc_parse_multiple_compressed_connex\n");
+            return PRC_ERROR_PARSE;
+        }
         data->connex = (prc_compressed_connex *)prc_calloc(ctx, data->number_of_connex, sizeof(prc_compressed_connex));
         if (data->connex == NULL)
         {
@@ -4819,6 +4919,11 @@ prc_parse_brep_data_compress(prc_context *ctx, prc_bit_state *bit_state,
     data->number_of_faces = number_of_faces;
     if (number_of_faces > 0)
     {
+        if (!prc_bitread_count_fits(bit_state, (uint64_t)(number_of_faces)))
+        {
+            prc_error(ctx, PRC_ERROR_PARSE, "Count larger than the rest of the section in prc_parse_brep_data_compress\n");
+            return PRC_ERROR_PARSE;
+        }
         data->base_topology = (prc_base_topology *)prc_calloc(ctx,
             number_of_faces, sizeof(prc_base_topology));
         if (data->base_topology == NULL)
@@ -4889,6 +4994,11 @@ prc_parse_multiple_vertex(prc_context *ctx, prc_bit_state *bit_state,
 
     if (data->number_of_points > 0)
     {
+        if (!prc_bitread_count_fits(bit_state, (uint64_t)(data->number_of_points)))
+        {
+            prc_error(ctx, PRC_ERROR_PARSE, "Count larger than the rest of the section in prc_parse_multiple_vertex\n");
+            return PRC_ERROR_PARSE;
+        }
         data->points = (prc_vec3 *)prc_calloc(ctx, data->number_of_points, sizeof(prc_vec3));
         if (data->points == NULL)
         {
@@ -4998,6 +5108,11 @@ prc_parse_loop(prc_context *ctx, prc_bit_state *bit_state,
 
     if (data->number_of_coedges > 0)
     {
+        if (!prc_bitread_count_fits(bit_state, (uint64_t)(data->number_of_coedges)))
+        {
+            prc_error(ctx, PRC_ERROR_PARSE, "Count larger than the rest of the section in prc_parse_loop\n");
+            return PRC_ERROR_PARSE;
+        }
         data->coedge = (prc_coedge_in_loop *)prc_calloc(ctx, data->number_of_coedges, sizeof(prc_coedge_in_loop));
         if (data->coedge == NULL)
         {
@@ -5278,6 +5393,11 @@ prc_parse_surf_blend03(prc_context *ctx, prc_bit_state *bit_state,
 
     if (data->number_of_elements > 0)
     {
+        if (!prc_bitread_count_fits(bit_state, (uint64_t)(data->number_of_elements)))
+        {
+            prc_error(ctx, PRC_ERROR_PARSE, "Count larger than the rest of the section in prc_parse_surf_blend03\n");
+            return PRC_ERROR_PARSE;
+        }
         data->parameters = (double *)prc_calloc(ctx, data->number_of_elements, sizeof(double));
         if (data->parameters == NULL)
         {
@@ -5289,6 +5409,11 @@ prc_parse_surf_blend03(prc_context *ctx, prc_bit_state *bit_state,
             data->parameters[k] = prc_bitread_double(ctx, bit_state);
         }
 
+        if (!prc_bitread_count_fits(bit_state, (uint64_t)(data->number_of_elements)))
+        {
+            prc_error(ctx, PRC_ERROR_PARSE, "Count larger than the rest of the section in prc_parse_surf_blend03\n");
+            return PRC_ERROR_PARSE;
+        }
         data->multiplicities = (int32_t *)prc_calloc(ctx, data->number_of_elements, sizeof(int32_t));
         if (data->multiplicities == NULL)
         {
@@ -5300,6 +5425,11 @@ prc_parse_surf_blend03(prc_context *ctx, prc_bit_state *bit_state,
             data->multiplicities[k] = prc_bitread_int32(ctx, bit_state);
         }
 
+        if (!prc_bitread_count_fits(bit_state, (uint64_t)(data->number_of_elements) * 3))
+        {
+            prc_error(ctx, PRC_ERROR_PARSE, "Count larger than the rest of the section in prc_parse_surf_blend03\n");
+            return PRC_ERROR_PARSE;
+        }
         data->points = (prc_vec3 *)prc_calloc(ctx, data->number_of_elements * 3, sizeof(prc_vec3));
         if (data->points == NULL)
         {
@@ -5311,6 +5441,11 @@ prc_parse_surf_blend03(prc_context *ctx, prc_bit_state *bit_state,
             data->points[k] = prc_parse_3d_vector(ctx, bit_state);
         }
 
+        if (!prc_bitread_count_fits(bit_state, (uint64_t)(data->number_of_elements)))
+        {
+            prc_error(ctx, PRC_ERROR_PARSE, "Count larger than the rest of the section in prc_parse_surf_blend03\n");
+            return PRC_ERROR_PARSE;
+        }
         data->rail_2_angles_v = (double *)prc_calloc(ctx, data->number_of_elements, sizeof(double));
         if (data->rail_2_angles_v == NULL)
         {
@@ -5322,6 +5457,11 @@ prc_parse_surf_blend03(prc_context *ctx, prc_bit_state *bit_state,
             data->rail_2_angles_v[k] = prc_bitread_double(ctx, bit_state);
         }
 
+        if (!prc_bitread_count_fits(bit_state, (uint64_t)(data->number_of_elements) * 3))
+        {
+            prc_error(ctx, PRC_ERROR_PARSE, "Count larger than the rest of the section in prc_parse_surf_blend03\n");
+            return PRC_ERROR_PARSE;
+        }
         data->tangents = (prc_vec3 *)prc_calloc(ctx, data->number_of_elements * 3, sizeof(prc_vec3));
         if (data->tangents == NULL)
         {
@@ -5333,6 +5473,11 @@ prc_parse_surf_blend03(prc_context *ctx, prc_bit_state *bit_state,
             data->tangents[k] = prc_parse_3d_vector(ctx, bit_state);
         }
 
+        if (!prc_bitread_count_fits(bit_state, (uint64_t)(data->number_of_elements)))
+        {
+            prc_error(ctx, PRC_ERROR_PARSE, "Count larger than the rest of the section in prc_parse_surf_blend03\n");
+            return PRC_ERROR_PARSE;
+        }
         data->rail_2_derivatives_v = (double *)prc_calloc(ctx, data->number_of_elements, sizeof(double));
         if (data->rail_2_derivatives_v == NULL)
         {
@@ -5344,6 +5489,11 @@ prc_parse_surf_blend03(prc_context *ctx, prc_bit_state *bit_state,
             data->rail_2_derivatives_v[k] = prc_bitread_double(ctx, bit_state);
         }
 
+        if (!prc_bitread_count_fits(bit_state, (uint64_t)(data->number_of_elements) * 3))
+        {
+            prc_error(ctx, PRC_ERROR_PARSE, "Count larger than the rest of the section in prc_parse_surf_blend03\n");
+            return PRC_ERROR_PARSE;
+        }
         data->second_derivatives = (prc_vec3 *)prc_calloc(ctx, data->number_of_elements * 3, sizeof(prc_vec3));
         if (data->second_derivatives == NULL)
         {
@@ -5355,6 +5505,11 @@ prc_parse_surf_blend03(prc_context *ctx, prc_bit_state *bit_state,
             data->second_derivatives[k] = prc_parse_3d_vector(ctx, bit_state);
         }
 
+        if (!prc_bitread_count_fits(bit_state, (uint64_t)(data->number_of_elements)))
+        {
+            prc_error(ctx, PRC_ERROR_PARSE, "Count larger than the rest of the section in prc_parse_surf_blend03\n");
+            return PRC_ERROR_PARSE;
+        }
         data->rail_2_second_derivatives = (double *)prc_calloc(ctx, data->number_of_elements, sizeof(double));
         if (data->rail_2_second_derivatives == NULL)
         {
@@ -5382,6 +5537,11 @@ prc_parse_surf_blend03(prc_context *ctx, prc_bit_state *bit_state,
     data->number_of_supplemental_doubles = prc_bitread_int32(ctx, bit_state);
     if (data->number_of_supplemental_doubles > 0)
     {
+        if (!prc_bitread_count_fits(bit_state, (uint64_t)(data->number_of_supplemental_doubles)))
+        {
+            prc_error(ctx, PRC_ERROR_PARSE, "Count larger than the rest of the section in prc_parse_surf_blend03\n");
+            return PRC_ERROR_PARSE;
+        }
         data->supplemental_doubles = (double *)prc_calloc(ctx, data->number_of_supplemental_doubles, sizeof(double));
         if (data->supplemental_doubles == NULL)
         {
@@ -5454,6 +5614,11 @@ prc_parse_surf_nurbs(prc_context *ctx, prc_bit_state *bit_state,
 
     array_size = (data->highest_index_of_control_points_u + 1) *
         (data->highest_index_of_control_points_v + 1);
+    if (!prc_bitread_count_fits(bit_state, (uint64_t)(array_size)))
+    {
+        prc_error(ctx, PRC_ERROR_PARSE, "Count larger than the rest of the section in prc_parse_surf_nurbs\n");
+        return PRC_ERROR_PARSE;
+    }
     data->p = (prc_control_points_nurbs_surf *)prc_calloc(ctx, array_size,
         sizeof(prc_control_points_nurbs_surf));
     if (data->p == NULL)
@@ -5467,6 +5632,11 @@ prc_parse_surf_nurbs(prc_context *ctx, prc_bit_state *bit_state,
     }
 
     array_size = data->highest_index_of_knots_u + 1;
+    if (!prc_bitread_count_fits(bit_state, (uint64_t)(array_size)))
+    {
+        prc_error(ctx, PRC_ERROR_PARSE, "Count larger than the rest of the section in prc_parse_surf_nurbs\n");
+        return PRC_ERROR_PARSE;
+    }
     data->knot_vector_u = (double *)prc_calloc(ctx, array_size, sizeof(double));
     if (data->knot_vector_u == NULL)
     {
@@ -5478,6 +5648,11 @@ prc_parse_surf_nurbs(prc_context *ctx, prc_bit_state *bit_state,
         data->knot_vector_u[k] = prc_bitread_double(ctx, bit_state);
     }
     array_size = data->highest_index_of_knots_v + 1;
+    if (!prc_bitread_count_fits(bit_state, (uint64_t)(array_size)))
+    {
+        prc_error(ctx, PRC_ERROR_PARSE, "Count larger than the rest of the section in prc_parse_surf_nurbs\n");
+        return PRC_ERROR_PARSE;
+    }
     data->knot_vector_v = (double *)prc_calloc(ctx, array_size, sizeof(double));
     if (data->knot_vector_v == NULL)
     {
@@ -6503,6 +6678,11 @@ prc_parse_face(prc_context *ctx, prc_bit_state *bit_state,
 
     if (data->number_of_loops > 0)
     {
+        if (!prc_bitread_count_fits(bit_state, (uint64_t)(data->number_of_loops)))
+        {
+            prc_error(ctx, PRC_ERROR_PARSE, "Count larger than the rest of the section in prc_parse_face\n");
+            return PRC_ERROR_PARSE;
+        }
         data->loops = (prc_ptr_topology *)prc_calloc(ctx, data->number_of_loops, sizeof(prc_ptr_topology));
         if (data->loops == NULL)
         {
@@ -6575,6 +6755,11 @@ prc_parse_shell(prc_context *ctx, prc_bit_state *bit_state,
     data->number_of_faces = prc_bitread_uint32(ctx, bit_state);
     if (data->number_of_faces > 0)
     {
+        if (!prc_bitread_count_fits(bit_state, (uint64_t)(data->number_of_faces)))
+        {
+            prc_error(ctx, PRC_ERROR_PARSE, "Count larger than the rest of the section in prc_parse_shell\n");
+            return PRC_ERROR_PARSE;
+        }
         data->faces = (prc_faces_in_shell *)prc_calloc(ctx, data->number_of_faces, sizeof(prc_faces_in_shell));
         if (data->faces == NULL)
         {
@@ -6910,6 +7095,11 @@ prc_parse_topo_contexts(prc_context *ctx, prc_bit_state *bit_state,
     data->number_of_bodies = prc_bitread_uint32(ctx, bit_state);
     if (data->number_of_bodies > 0)
     {
+        if (!prc_bitread_count_fits(bit_state, (uint64_t)(data->number_of_bodies)))
+        {
+            prc_error(ctx, PRC_ERROR_PARSE, "Count larger than the rest of the section in prc_parse_topo_contexts\n");
+            return PRC_ERROR_PARSE;
+        }
         data->bodies = (prc_topo *)prc_calloc(ctx, data->number_of_bodies, sizeof(prc_topo));
         if (data->bodies == NULL)
         {
@@ -6948,6 +7138,11 @@ prc_parse_exact_geometry(prc_context *ctx, prc_bit_state *bit_state, prc_file_st
     data->topo_context_count = prc_bitread_uint32(ctx, bit_state);
     if (data->topo_context_count > 0)
     {
+        if (!prc_bitread_count_fits(bit_state, (uint64_t)(data->topo_context_count)))
+        {
+            prc_error(ctx, PRC_ERROR_PARSE, "Count larger than the rest of the section in prc_parse_exact_geometry\n");
+            return PRC_ERROR_PARSE;
+        }
         data->topo_contexts = (prc_topo_context *)prc_calloc(ctx, data->topo_context_count, sizeof(prc_topo_context));
         if (data->topo_contexts == NULL)
         {
@@ -6996,7 +7191,7 @@ prc_parse_geometry_summary(prc_context *ctx, prc_bit_state *bit_state, prc_geome
     data->number_of_bodies = prc_bitread_uint32(ctx, bit_state);
     if (data->number_of_bodies > 0)
     {
-        data->bodies = (prc_body_information *)prc_malloc(ctx, data->number_of_bodies * sizeof(prc_body_information));
+        data->bodies = (prc_body_information *)prc_calloc(ctx, data->number_of_bodies, sizeof(prc_body_information));
         if (data->bodies == NULL)
         {
             prc_error(ctx, PRC_ERROR_MEMORY, "Allocation error in prc_parse_geometry_summary\n");
@@ -7063,7 +7258,7 @@ prc_parse_graphics_information(prc_context *ctx, prc_bit_state *bit_state, prc_g
 
     if (data->number_of_element > 0)
     {
-        data->element_information = (prc_element_information *)prc_malloc(ctx, data->number_of_element * sizeof(prc_element_information));
+        data->element_information = (prc_element_information *)prc_calloc(ctx, data->number_of_element, sizeof(prc_element_information));
         if (data->element_information == NULL)
         {
             prc_error(ctx, PRC_ERROR_MEMORY, "Allocation error in prc_parse_graphics_information\n");
@@ -7099,6 +7294,11 @@ prc_parse_context_graphics(prc_context *ctx, prc_bit_state *bit_state, prc_conte
            the full count, so release code later walks past the populated
            elements -- calloc keeps their pointer fields NULL (instead of
            uninitialized/malloc garbage) so that walk is safe. */
+        if (!prc_bitread_count_fits(bit_state, (uint64_t)(data->number_of_treat_type)))
+        {
+            prc_error(ctx, PRC_ERROR_PARSE, "Count larger than the rest of the section in prc_parse_context_graphics\n");
+            return PRC_ERROR_PARSE;
+        }
         data->treat_types = (prc_graphics_information *)prc_calloc(ctx, data->number_of_treat_type, sizeof(prc_graphics_information));
         if (data->treat_types == NULL)
         {

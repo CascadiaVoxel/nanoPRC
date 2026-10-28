@@ -28,6 +28,7 @@
 #include "prc_write_global.h"
 #include "prc_parse_global.h"
 #include "prc_api.h"
+#include "zlib.h"
 
 /* Mirrors the (static, so not reusable directly) prc_release_global_data in
    prc_release.c, specialized to what this encoder ever actually populates:
@@ -278,18 +279,33 @@ test_picture_roundtrip(prc_context *ctx)
     PRC_ASSERT_EQ(tables.pictures[2].biased_uncompressed_file_index, 3);
     PRC_ASSERT_EQ(tables.pictures[3].biased_uncompressed_file_index, 4);
 
-    /* Four different lengths, so a writer using a fixed stride or storing
-       data_size blindly fails here. The raw formats store the pixels the
-       DIMENSIONS describe; PNG/JPEG store the whole encoded file. */
-    PRC_ASSERT_EQ(tables.files[0].size, 10u * 5u * 3u);
-    PRC_ASSERT_EQ(tables.files[1].size, 8u * 4u * 4u);
+    /* The raw formats are stored as zlib streams ("flate-formatted pixel
+       data") that inflate to exactly the pixels the DIMENSIONS describe;
+       PNG/JPEG store the whole encoded file. Different lengths, so a writer
+       using a fixed stride or storing data_size blindly fails here. */
+    {
+        uint8_t inflated[10 * 5 * 3 + 16];
+        uLongf len;
+        size_t k;
+
+        PRC_ASSERT_EQ(tables.files[0].data[0], 0x78);   /* zlib header */
+        len = sizeof(inflated);
+        PRC_ASSERT_EQ(uncompress(inflated, &len, tables.files[0].data, tables.files[0].size), Z_OK);
+        PRC_ASSERT_EQ((uint32_t)len, 10u * 5u * 3u);
+        /* And the bytes are the caller's: the RGB buffer was filled with 0x7F
+           and the RGBA with 0x3C, so a mix-up between them shows here. */
+        for (k = 0; k < len; k++)
+            PRC_ASSERT_EQ(inflated[k], 0x7F);
+
+        PRC_ASSERT_EQ(tables.files[1].data[0], 0x78);
+        len = sizeof(inflated);
+        PRC_ASSERT_EQ(uncompress(inflated, &len, tables.files[1].data, tables.files[1].size), Z_OK);
+        PRC_ASSERT_EQ((uint32_t)len, 8u * 4u * 4u);
+        for (k = 0; k < len; k++)
+            PRC_ASSERT_EQ(inflated[k], 0x3C);
+    }
     PRC_ASSERT_EQ(tables.files[2].size, (uint32_t)sizeof(png_bytes));
     PRC_ASSERT_EQ(tables.files[3].size, (uint32_t)sizeof(jpeg_bytes));
-
-    /* And the bytes are the caller's: the RGB buffer was filled with 0x7F and
-       the RGBA with 0x3C, so a mix-up between them shows here. */
-    PRC_ASSERT_EQ(tables.files[0].data[0], 0x7F);
-    PRC_ASSERT_EQ(tables.files[1].data[0], 0x3C);
     PRC_ASSERT_EQ(tables.files[3].data[0], 0xFF);   /* JPEG SOI */
     PRC_ASSERT_EQ(tables.files[3].data[1], 0xD8);
 

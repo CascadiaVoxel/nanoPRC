@@ -175,6 +175,76 @@ test_example_view_returned(prc_context *ctx)
     prc_api_release_data(ctx, data, NULL, 0, NULL, 0, NULL, 0, NULL);
 }
 
+/* A 3D view name in UTF-16 (FE FF, then two bytes per character) whose
+   characters lie outside Latin-1. The reader keeps the low byte of each, so
+   three characters give a three-byte name. The copy used to write both bytes
+   of any character whose high byte was not 0, past the end of the name. */
+static void
+test_utf16_view_name(prc_context *ctx)
+{
+    static const double pos[9] = { 0, 0, 0,  1, 0, 0,  0, 1, 0 };
+    static const uint32_t tri[3] = { 0, 1, 2 };
+    static const uint32_t counts[1] = { 1 };
+    static const char vname[] = "\xFE\xFF\x04\x1F\x04\x30\x41\x42";
+    prc_api_write_tessellation t;
+    prc_api_write_rep_item ri;
+    prc_api_write_node leaf, root, *kids[1];
+    prc_pdf_view_spec view;
+    prc_pdf_write_options opts;
+    uint8_t *buf = NULL;
+    size_t size = 0;
+    prc_api_data data;
+    char *name = NULL;
+    double *m = NULL;
+    double z = 0.0;
+
+    printf("  sub-case: UTF-16 view name outside Latin-1\n");
+    memset(&t, 0, sizeof(t));
+    t.kind = PRC_API_WRITE_TESS_KIND_TRIANGLES;
+    t.positions = pos;
+    t.num_positions = 3;
+    t.tri_indices = tri;
+    t.num_triangles = 1;
+    t.face_tri_counts = counts;
+    t.num_faces = 1;
+    t.must_calculate_normals = 1;
+    memset(&ri, 0, sizeof(ri));
+    ri.kind = PRC_API_WRITE_RI_SURFACE;
+    ri.biased_tessellation_index = 1;
+    memset(&leaf, 0, sizeof(leaf));
+    leaf.rep_items = &ri;
+    leaf.num_rep_items = 1;
+    leaf.bbox_max[0] = leaf.bbox_max[1] = 1.0;
+    kids[0] = &leaf;
+    memset(&root, 0, sizeof(root));
+    root.name = "root";
+    root.children = kids;
+    root.num_children = 1;
+    root.bbox_max[0] = root.bbox_max[1] = 1.0;
+    PRC_ASSERT_EQ(prc_api_write_prc_buffer(ctx, "view_name", &root, &t, 1, &buf, &size), 0);
+
+    memset(&view, 0, sizeof(view));
+    view.name = vname;
+    view.eye[2] = 5.0;
+    view.up[1] = 1.0;
+    view.is_default = 1;
+    memset(&opts, 0, sizeof(opts));
+    opts.views = &view;
+    opts.num_views = 1;
+    PRC_ASSERT_EQ(prc_api_pdf_embed_prc(ctx, "test_view_name.pdf", buf, size, &opts), 0);
+    prc_api_write_prc_buffer_free(ctx, buf);
+
+    data = prc_api_open_contents(ctx, "test_view_name.pdf");
+    PRC_ASSERT_NOT_NULL(data);
+    PRC_ASSERT(prc_api_get_number_of_view(ctx, data) >= 1);
+    PRC_ASSERT_EQ(prc_api_get_view(ctx, data, 0, &name, &m, &z), 0);
+    PRC_ASSERT_NOT_NULL(name);
+    PRC_ASSERT_EQ(strlen(name), 3);
+    PRC_ASSERT(name[0] == 0x1F && name[1] == 0x30 && name[2] == 0x42);
+    prc_api_release_data(ctx, data, NULL, 0, NULL, 0, NULL, 0, NULL);
+    remove("test_view_name.pdf");
+}
+
 int
 main(void)
 {
@@ -191,6 +261,7 @@ main(void)
     test_no_id_in_trailer(ctx);
     test_literal_id_in_xref_stream(ctx);
     test_example_view_returned(ctx);
+    test_utf16_view_name(ctx);
 
     prc_release_context(ctx);
 

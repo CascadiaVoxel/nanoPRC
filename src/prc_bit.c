@@ -293,6 +293,18 @@ prc_bitread_double_with_variable_bit_number(prc_context *ctx, prc_bit_state *sta
     return tolerance * (is_negative ? -1.0 : 1.0) * (double)mantissa;
 }
 
+/* A count read from the stream, of things each stored in at least one more bit
+   of it, cannot exceed the bits left. Checked before such a count sizes an
+   allocation, so a single corrupted count cannot ask for gigabytes before
+   anything has been read. */
+int
+prc_bitread_count_fits(const prc_bit_state *state, uint64_t count)
+{
+    if (state->bit_count <= 0)
+        return count == 0;
+    return count <= (uint64_t)state->bit_count && count <= UINT32_MAX;
+}
+
 double
 prc_bitread_double(prc_context *ctx, prc_bit_state *state)
 {

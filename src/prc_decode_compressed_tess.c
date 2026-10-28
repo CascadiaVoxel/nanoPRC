@@ -1318,6 +1318,15 @@ prc_handle_empty_stack_decode(prc_context *ctx, prc_tess_3d_compressed *data,
     return 0;
 }
 
+/* The normal bit stream is read a few entries at a time, and how many are read
+   depends on the file. True if n more entries remain. */
+static int
+prc_normal_bits_left(const prc_normal_state *normal_state, uint32_t n)
+{
+    return normal_state->normal_bin_data_index <= normal_state->normal_bin_data_size &&
+        n <= normal_state->normal_bin_data_size - normal_state->normal_bin_data_index;
+}
+
 /* Here we decode the normals rather than do a computation of the normal
    from the triangle winding. */
 static int
@@ -1330,7 +1339,14 @@ prc_decode_normal(prc_context *ctx, prc_tess_3d_compressed *data,
     int code;
     double theta, phi;
 
-    /* Get the angles */
+    /* Get the angles. Both counts come from the file, so a corrupt one can ask
+       for more normals than there are angles. */
+    if (normal_state->angle_index > normal_state->decoded_angles_count ||
+        normal_state->decoded_angles_count - normal_state->angle_index < 2)
+    {
+        prc_error(ctx, PRC_ERROR_PARSE, "More compressed normals than stored angles\n");
+        return PRC_ERROR_PARSE;
+    }
     theta = normal_state->decoded_angles[normal_state->angle_index];
     phi = normal_state->decoded_angles[normal_state->angle_index + 1];
     normal_state->angle_index += 2;
@@ -1583,6 +1599,11 @@ prc_handle_normal_calculation(prc_context *ctx, prc_tess_3d_compressed *data,
                     share this normal.  However, other triangles NOT on this face
                     can reference this normal that we decode here, AND it is possible
                     that the face can have multiple normals! */
+                    if (!prc_normal_bits_left(normal_state, 4))
+                    {
+                        prc_error(ctx, PRC_ERROR_PARSE, "Compressed normal bits run past the stored array\n");
+                        return PRC_ERROR_PARSE;
+                    }
                     has_multiple_normals = normal_bin_data[0];
                     is_reversed = normal_bin_data[1];
                     x_is_reversed = normal_bin_data[2];
@@ -1645,6 +1666,11 @@ prc_handle_normal_calculation(prc_context *ctx, prc_tess_3d_compressed *data,
                        face must have multiple normals we are either going to
                        reference an existing one, or add one to this vertex.
                        Regardless, that normal is used for the entire face */
+                    if (!prc_normal_bits_left(normal_state, 1))
+                    {
+                        prc_error(ctx, PRC_ERROR_PARSE, "Compressed normal bits run past the stored array\n");
+                        return PRC_ERROR_PARSE;
+                    }
                     is_a_reference = normal_bin_data[0];
                     normal_bin_data += 1;
                     vertex_index = treated_tri->treated_index[0];
@@ -1658,6 +1684,11 @@ prc_handle_normal_calculation(prc_context *ctx, prc_tess_3d_compressed *data,
                         uint32_t existing_normal_index;
 
                         DEBUG_LOG("In PRC_VERTEX_NORM_IS_MULTIPLE Ref case FACE Case\n");
+                        if (!prc_normal_bits_left(normal_state, number_bits))
+                        {
+                            prc_error(ctx, PRC_ERROR_PARSE, "Compressed normal bits run past the stored array\n");
+                            return PRC_ERROR_PARSE;
+                        }
                         for (int bit_index = 0; bit_index < number_bits; bit_index++)
                         {
                             read_index |= (normal_bin_data[bit_index] << bit_index);
@@ -1696,6 +1727,11 @@ prc_handle_normal_calculation(prc_context *ctx, prc_tess_3d_compressed *data,
                     {
                         /* Decode the normal */
                         DEBUG_LOG("In PRC_VERTEX_NORM_IS_MULTIPLE non-ref case FACE Case\n");
+                        if (!prc_normal_bits_left(normal_state, 3))
+                        {
+                            prc_error(ctx, PRC_ERROR_PARSE, "Compressed normal bits run past the stored array\n");
+                            return PRC_ERROR_PARSE;
+                        }
                         is_reversed = normal_bin_data[0];
                         x_is_reversed = normal_bin_data[1];
                         y_is_reversed = normal_bin_data[2];
@@ -1782,6 +1818,11 @@ prc_handle_normal_calculation(prc_context *ctx, prc_tess_3d_compressed *data,
                 {
                     /* We have not processed this normal yet in the bin data
                        lets do that now */
+                    if (!prc_normal_bits_left(normal_state, 4))
+                    {
+                        prc_error(ctx, PRC_ERROR_PARSE, "Compressed normal bits run past the stored array\n");
+                        return PRC_ERROR_PARSE;
+                    }
                     has_multiple_normals = normal_bin_data[0];
                     is_reversed = normal_bin_data[1];
                     x_is_reversed = normal_bin_data[2];
@@ -1863,6 +1904,11 @@ prc_handle_normal_calculation(prc_context *ctx, prc_tess_3d_compressed *data,
                 {
                     /* This vertex has multiple normals. We need to check if
                        we are adding a new one or referencing a previous one */
+                    if (!prc_normal_bits_left(normal_state, 1))
+                    {
+                        prc_error(ctx, PRC_ERROR_PARSE, "Compressed normal bits run past the stored array\n");
+                        return PRC_ERROR_PARSE;
+                    }
                     is_a_reference = normal_bin_data[0];
                     normal_bin_data += 1;
                     normal_state->normal_bin_data_index += 1;
@@ -1880,6 +1926,11 @@ prc_handle_normal_calculation(prc_context *ctx, prc_tess_3d_compressed *data,
                         uint32_t existing_normal_index;
 
                         DEBUG_LOG("In PRC_VERTEX_NORM_IS_MULTIPLE Ref case\n");
+                        if (!prc_normal_bits_left(normal_state, number_bits))
+                        {
+                            prc_error(ctx, PRC_ERROR_PARSE, "Compressed normal bits run past the stored array\n");
+                            return PRC_ERROR_PARSE;
+                        }
                         for (int bit_index = 0; bit_index < number_bits; bit_index++)
                         {
                             read_index |= (normal_bin_data[bit_index] << bit_index);
@@ -1913,6 +1964,11 @@ prc_handle_normal_calculation(prc_context *ctx, prc_tess_3d_compressed *data,
                     {
                         /* Decode the normal */
                         DEBUG_LOG("In PRC_VERTEX_NORM_IS_MULTIPLE non-ref case\n");
+                        if (!prc_normal_bits_left(normal_state, 3))
+                        {
+                            prc_error(ctx, PRC_ERROR_PARSE, "Compressed normal bits run past the stored array\n");
+                            return PRC_ERROR_PARSE;
+                        }
                         is_reversed = normal_bin_data[0];
                         x_is_reversed = normal_bin_data[1];
                         y_is_reversed = normal_bin_data[2];
@@ -1981,7 +2037,9 @@ prc_initialize_normal_state(prc_context *ctx, prc_tess_3d_compressed *data,
     normal_state->normals_vertex_count = 0;
     normal_state->normal_bin_data_index = 0;
     normal_state->normal_bin_data = data->normal_binary_data;
+    normal_state->normal_bin_data_size = data->normal_binary_data_size;
     normal_state->angle_index = 0;
+    normal_state->decoded_angles_count = data->normal_angle_array_size;
     normal_state->face_is_planar = prc_face_is_planar(ctx, data, 0);
     normal_state->decoded_angles = decoded_angles;
     normal_state->face_normal_decoded = face_normal_decoded;

@@ -1553,9 +1553,10 @@ prc_parse_tess_3d_compressed(prc_context *ctx, prc_bit_state *bit_state, prc_tes
         if (code != 0)
             return code;
 
-        /* Don't do this if the normal angles are encoded OR if we have
-           vertex colors */
-        if (data->must_recalculate_normals && data->decoded_point_color_array == NULL)
+        /* Smooth recalculated normals across edges below the crease angle.
+           Point colours stay on their corners: this only replaces the
+           normals and their indices. */
+        if (data->must_recalculate_normals)
         {
             code = prc_compressed_tess_apply_crease_angle(ctx, data);
             if (code != 0)

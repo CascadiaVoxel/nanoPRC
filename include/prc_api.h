@@ -1482,7 +1482,9 @@ typedef struct prc_api_write_tessellation_s
     const prc_api_write_face_groups *face_groups;
 
     /* --- optional RGB(A) vertex colours ---
-       TRIANGLES and WIRE. One colour per *vertex reference* in the entity
+       TRIANGLES, COMPRESSED and WIRE. COMPRESSED takes exactly one colour per
+       triangle corner, 3 per triangle in tri_indices order; corners that
+       share a vertex may differ. One colour per *vertex reference* in the entity
        groups, not one per entry of `positions`: a position used by three
        triangles is coloured three times, once for each use. That is how the
        format stores it and how a reader counts it back, since the stored

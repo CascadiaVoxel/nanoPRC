@@ -57,6 +57,10 @@ add_executable(test_triangles_texture_read tests/unit/test_triangles_texture_rea
 target_link_libraries(test_triangles_texture_read prc_static)
 target_include_directories(test_triangles_texture_read PRIVATE tests)
 add_test(NAME test_triangles_texture_read COMMAND test_triangles_texture_read)
+add_executable(test_compressed_color_write tests/unit/test_compressed_color_write.c)
+target_link_libraries(test_compressed_color_write prc_static)
+target_include_directories(test_compressed_color_write PRIVATE tests)
+add_test(NAME test_compressed_color_write COMMAND test_compressed_color_write)
 
 add_executable(test_tess_primitives tests/unit/test_tess_primitives.c)
 target_link_libraries(test_tess_primitives prc_static)

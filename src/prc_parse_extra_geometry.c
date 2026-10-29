@@ -4348,6 +4348,11 @@ prc_parse_brep_data(prc_context *ctx, prc_bit_state *bit_state,
     data->number_of_connex = prc_bitread_uint32(ctx, bit_state);
     if (data->number_of_connex > 0)
     {
+        if (!prc_bitread_count_fits(bit_state, (uint64_t)(data->number_of_connex)))
+        {
+            prc_error(ctx, PRC_ERROR_PARSE, "Count larger than the rest of the section in prc_parse_brep_data\n");
+            return PRC_ERROR_PARSE;
+        }
         data->connex = (prc_ptr_topology *)prc_calloc(ctx, data->number_of_connex, sizeof(prc_ptr_topology));
         if (data->connex == NULL)
         {
@@ -7191,6 +7196,11 @@ prc_parse_geometry_summary(prc_context *ctx, prc_bit_state *bit_state, prc_geome
     data->number_of_bodies = prc_bitread_uint32(ctx, bit_state);
     if (data->number_of_bodies > 0)
     {
+        if (!prc_bitread_count_fits(bit_state, (uint64_t)(data->number_of_bodies)))
+        {
+            prc_error(ctx, PRC_ERROR_PARSE, "Count larger than the rest of the section in prc_parse_geometry_summary\n");
+            return PRC_ERROR_PARSE;
+        }
         data->bodies = (prc_body_information *)prc_calloc(ctx, data->number_of_bodies, sizeof(prc_body_information));
         if (data->bodies == NULL)
         {
@@ -7258,6 +7268,11 @@ prc_parse_graphics_information(prc_context *ctx, prc_bit_state *bit_state, prc_g
 
     if (data->number_of_element > 0)
     {
+        if (!prc_bitread_count_fits(bit_state, (uint64_t)(data->number_of_element)))
+        {
+            prc_error(ctx, PRC_ERROR_PARSE, "Count larger than the rest of the section in prc_parse_graphics_information\n");
+            return PRC_ERROR_PARSE;
+        }
         data->element_information = (prc_element_information *)prc_calloc(ctx, data->number_of_element, sizeof(prc_element_information));
         if (data->element_information == NULL)
         {

@@ -538,19 +538,19 @@ run_shape(prc_context *ctx, const tree_spec *spec)
         &num_tess, &num_line_tess, &num_exact, 0), 0);
     PRC_ASSERT_EQ(num_tess, f.num_leaves);
     PRC_ASSERT_EQ(num_exact, 0);
-    /* The two encodings differ here, and legitimately so. For TRIANGLES the
-       reader counts a line tessellation only where the file actually stores
-       wire indices, and these models store none. For COMPRESSED it counts
-       one wherever the decoder derived a non-empty boundary/crease edge set
-       for wireframe display (prc_tess_3d_compressed.number_of_edges, filled
-       in by prc_decode_compressed_tess) -- which every one of these strips
-       has, since a strip has a perimeter. So one per entry is correct, not
-       a phantom; asserting it pins that derived-edge path against
-       regression. */
-    if (spec->kind == PRC_API_WRITE_TESS_KIND_COMPRESSED)
-        PRC_ASSERT_EQ(num_line_tess, num_tess);
-    else
-        PRC_ASSERT_EQ(num_line_tess, 0);
+    /* No line tessellations, in either encoding. For TRIANGLES the reader
+       counts one only where the file stores wire indices, and these models
+       store none. For COMPRESSED it counts one wherever the decoder derives
+       a non-empty edge set for wireframe display
+       (prc_tess_3d_compressed.number_of_edges), and it drops a set made only
+       of boundary edges. These strips are flat and consistently wound, so
+       they have boundary edges only.
+
+       This used to expect one per entry. That count came from a writer bug:
+       written without normals, every other triangle of a strip came back
+       reversed, and each reversed pair met at what the decoder took for a
+       180-degree crease. */
+    PRC_ASSERT_EQ(num_line_tess, 0);
 
     tesses = (prc_api_tess *)calloc(num_tess, sizeof(prc_api_tess));
     PRC_ASSERT_NOT_NULL(tesses);

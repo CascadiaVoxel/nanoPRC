@@ -48,6 +48,12 @@ prc_parse_binary_texture_data(prc_context *ctx, prc_bit_state *bit_state)
     data->texture_binary_data_size = prc_bitread_uint32(ctx, bit_state);
     num_bytes = data->texture_binary_data_size * 4;
 
+    if (!prc_bitread_count_fits(bit_state, (uint64_t)((uint64_t)data->texture_binary_data_size * 32)))
+    {
+        prc_error(ctx, PRC_ERROR_PARSE, "Count larger than the rest of the section in prc_parse_binary_texture_data\n");
+        prc_free(ctx, data);
+        return NULL;
+    }
     data->texture_binary_data = (uint8_t *)prc_calloc(ctx, num_bytes, sizeof(uint8_t));
     if (data->texture_binary_data == NULL)
     {
@@ -86,6 +92,13 @@ prc_parse_texture_data(prc_context *ctx, prc_bit_state *bit_state)
     data->reference_array_size = prc_bitread_uint32(ctx, bit_state);
     if (data->reference_array_size > 0)
     {
+        if (!prc_bitread_count_fits(bit_state, (uint64_t)(data->reference_array_size)))
+        {
+            prc_error(ctx, PRC_ERROR_PARSE, "Count larger than the rest of the section in prc_parse_texture_data\n");
+            prc_free(ctx, data->binary_texture_data);
+            prc_free(ctx, data);
+            return NULL;
+        }
         data->reference_array = (uint32_t *)prc_calloc(ctx, data->reference_array_size, sizeof(uint32_t));
         if (data->reference_array == NULL)
         {
@@ -105,6 +118,14 @@ prc_parse_texture_data(prc_context *ctx, prc_bit_state *bit_state)
     data->texture_parameters_size = prc_bitread_uint32(ctx, bit_state);
     if (data->texture_parameters_size > 0)
     {
+        if (!prc_bitread_count_fits(bit_state, (uint64_t)((uint64_t)data->texture_parameters_size * 32)))
+        {
+            prc_error(ctx, PRC_ERROR_PARSE, "Count larger than the rest of the section in prc_parse_texture_data\n");
+            prc_free(ctx, data->binary_texture_data);
+            prc_free(ctx, data->reference_array);
+            prc_free(ctx, data);
+            return NULL;
+        }
         data->texture_parameters = (float *)prc_calloc(ctx, data->texture_parameters_size, sizeof(float));
         if (data->texture_parameters == NULL)
         {
@@ -168,6 +189,11 @@ prc_parse_vertexcolors(prc_context *ctx, prc_bit_state *bit_state, prc_vertex_co
             return PRC_ERROR_PARSE;
         }
         data->color_data.number_colors = number_colors;
+        if (!prc_bitread_count_fits(bit_state, (uint64_t)((uint64_t)number_colors - 1)))
+        {
+            prc_error(ctx, PRC_ERROR_PARSE, "Count larger than the rest of the section in prc_parse_vertexcolors\n");
+            return PRC_ERROR_PARSE;
+        }
         data->color_data.remaining_vertices = prc_calloc(ctx, (number_colors - 1), sizeof(prc_color_data_remainder));
         if (data->color_data.remaining_vertices == NULL)
         {
@@ -339,6 +365,11 @@ prc_parse_tess_face(prc_context *ctx, prc_bit_state *bit_state, uint8_t must_cal
     data->size_of_line_attributes = prc_bitread_uint32(ctx, bit_state);
     if (data->size_of_line_attributes > 0)
     {
+        if (!prc_bitread_count_fits(bit_state, (uint64_t)(data->size_of_line_attributes)))
+        {
+            prc_error(ctx, PRC_ERROR_PARSE, "Count larger than the rest of the section in prc_parse_tess_face\n");
+            return PRC_ERROR_PARSE;
+        }
         data->line_attributes = (uint32_t *)prc_calloc(ctx, sizeof(uint32_t), data->size_of_line_attributes);
         if (data->line_attributes == NULL)
         {
@@ -357,6 +388,11 @@ prc_parse_tess_face(prc_context *ctx, prc_bit_state *bit_state, uint8_t must_cal
     data->size_of_sizes_wire = prc_bitread_uint32(ctx, bit_state);
     if (data->size_of_sizes_wire > 0)
     {
+        if (!prc_bitread_count_fits(bit_state, (uint64_t)(data->size_of_sizes_wire)))
+        {
+            prc_error(ctx, PRC_ERROR_PARSE, "Count larger than the rest of the section in prc_parse_tess_face\n");
+            return PRC_ERROR_PARSE;
+        }
         data->sizes_wire = (uint32_t *)prc_calloc(ctx, sizeof(uint32_t), data->size_of_sizes_wire);
         if (data->sizes_wire == NULL)
         {
@@ -376,6 +412,11 @@ prc_parse_tess_face(prc_context *ctx, prc_bit_state *bit_state, uint8_t must_cal
     data->size_of_triangulateddata = prc_bitread_uint32(ctx, bit_state);
     if (data->size_of_triangulateddata > 0)
     {
+        if (!prc_bitread_count_fits(bit_state, (uint64_t)(data->size_of_triangulateddata)))
+        {
+            prc_error(ctx, PRC_ERROR_PARSE, "Count larger than the rest of the section in prc_parse_tess_face\n");
+            return PRC_ERROR_PARSE;
+        }
         data->triangulateddata = (uint32_t *)prc_calloc(ctx, sizeof(uint32_t), data->size_of_triangulateddata);
         if (data->triangulateddata == NULL)
         {
@@ -687,6 +728,11 @@ prc_parse_tess_3d(prc_context *ctx, prc_bit_state *bit_state, prc_tess_3d **data
     data->number_of_normal_coordinates = prc_bitread_uint32(ctx, bit_state);
     if (data->number_of_normal_coordinates > 0)
     {
+        if (!prc_bitread_count_fits(bit_state, (uint64_t)(data->number_of_normal_coordinates)))
+        {
+            prc_error(ctx, PRC_ERROR_PARSE, "Count larger than the rest of the section in prc_parse_tess_3d\n");
+            return PRC_ERROR_PARSE;
+        }
         data->normal_coordinates = (double *)prc_calloc(ctx, sizeof(double), data->number_of_normal_coordinates);
         if (data->normal_coordinates == NULL)
         {
@@ -703,6 +749,11 @@ prc_parse_tess_3d(prc_context *ctx, prc_bit_state *bit_state, prc_tess_3d **data
     data->number_of_wire_indices = prc_bitread_uint32(ctx, bit_state);
     if (data->number_of_wire_indices > 0)
     {
+        if (!prc_bitread_count_fits(bit_state, (uint64_t)(data->number_of_wire_indices)))
+        {
+            prc_error(ctx, PRC_ERROR_PARSE, "Count larger than the rest of the section in prc_parse_tess_3d\n");
+            return PRC_ERROR_PARSE;
+        }
         data->wire_indices = (uint32_t *)prc_calloc(ctx, sizeof(uint32_t), data->number_of_wire_indices);
         if (data->wire_indices == NULL)
         {
@@ -722,6 +773,11 @@ prc_parse_tess_3d(prc_context *ctx, prc_bit_state *bit_state, prc_tess_3d **data
     data->number_of_triangulated_indicies = prc_bitread_uint32(ctx, bit_state);
     if (data->number_of_triangulated_indicies > 0)
     {
+        if (!prc_bitread_count_fits(bit_state, (uint64_t)(data->number_of_triangulated_indicies)))
+        {
+            prc_error(ctx, PRC_ERROR_PARSE, "Count larger than the rest of the section in prc_parse_tess_3d\n");
+            return PRC_ERROR_PARSE;
+        }
         data->triangulated_index_array = (uint32_t *)prc_calloc(ctx, sizeof(uint32_t), data->number_of_triangulated_indicies);
         if (data->triangulated_index_array == NULL)
         {
@@ -738,6 +794,11 @@ prc_parse_tess_3d(prc_context *ctx, prc_bit_state *bit_state, prc_tess_3d **data
     data->number_of_face_tessellation = prc_bitread_uint32(ctx, bit_state);
     if (data->number_of_face_tessellation > 0)
     {
+        if (!prc_bitread_count_fits(bit_state, (uint64_t)(data->number_of_face_tessellation)))
+        {
+            prc_error(ctx, PRC_ERROR_PARSE, "Count larger than the rest of the section in prc_parse_tess_3d\n");
+            return PRC_ERROR_PARSE;
+        }
         data->face_tessellation_data = (prc_tess_face *)prc_calloc(ctx, sizeof(prc_tess_face), data->number_of_face_tessellation);
         if (data->face_tessellation_data == NULL)
         {
@@ -760,6 +821,11 @@ prc_parse_tess_3d(prc_context *ctx, prc_bit_state *bit_state, prc_tess_3d **data
     data->number_of_texture_coordinates = prc_bitread_uint32(ctx, bit_state);
     if (data->number_of_texture_coordinates > 0)
     {
+        if (!prc_bitread_count_fits(bit_state, (uint64_t)(data->number_of_texture_coordinates)))
+        {
+            prc_error(ctx, PRC_ERROR_PARSE, "Count larger than the rest of the section in prc_parse_tess_3d\n");
+            return PRC_ERROR_PARSE;
+        }
         data->texture_coordinates = (double *)prc_calloc(ctx, sizeof(double), data->number_of_texture_coordinates);
         if (data->texture_coordinates == NULL)
         {
@@ -819,6 +885,11 @@ prc_parse_tess_3d_wire(prc_context *ctx, prc_bit_state *bit_state, prc_tess_3d_w
        encoded tells us the number of indices that follow.  */
     if (data->number_of_wire_indexes > 0)
     {
+        if (!prc_bitread_count_fits(bit_state, (uint64_t)(data->number_of_wire_indexes)))
+        {
+            prc_error(ctx, PRC_ERROR_PARSE, "Count larger than the rest of the section in prc_parse_tess_3d_wire\n");
+            return PRC_ERROR_PARSE;
+        }
         data->wire_elements = (prc_tess_3d_wire_element*)prc_calloc(ctx, data->number_of_wire_indexes, sizeof(prc_tess_3d_wire_element));
         if (data->wire_elements == NULL)
         {
@@ -846,6 +917,11 @@ prc_parse_tess_3d_wire(prc_context *ctx, prc_bit_state *bit_state, prc_tess_3d_w
                in prc_parse_shell for its face array. */
             if (data->wire_elements[num_wires].number_of_wire_indexes > 0)
             {
+                if (!prc_bitread_count_fits(bit_state, (uint64_t)(data->wire_elements[num_wires].number_of_wire_indexes)))
+                {
+                    prc_error(ctx, PRC_ERROR_PARSE, "Count larger than the rest of the section in prc_parse_tess_3d_wire\n");
+                    return PRC_ERROR_PARSE;
+                }
                 data->wire_elements[num_wires].wire_indexes = (uint32_t *)prc_calloc(ctx, data->wire_elements[num_wires].number_of_wire_indexes, sizeof(uint32_t));
                 if (data->wire_elements[num_wires].wire_indexes == NULL)
                 {
@@ -929,6 +1005,11 @@ prc_parse_tess_markup(prc_context *ctx, prc_bit_state *bit_state, prc_tess_marku
     data->number_of_codes = prc_bitread_uint32(ctx, bit_state);
     if (data->number_of_codes > 0)
     {
+        if (!prc_bitread_count_fits(bit_state, (uint64_t)(data->number_of_codes)))
+        {
+            prc_error(ctx, PRC_ERROR_PARSE, "Count larger than the rest of the section in prc_parse_tess_markup\n");
+            return PRC_ERROR_PARSE;
+        }
         data->code_numbers = (prc_unsigned_int *)prc_calloc(ctx, data->number_of_codes, sizeof(prc_unsigned_int));
         if (data->code_numbers == NULL)
         {
@@ -945,6 +1026,11 @@ prc_parse_tess_markup(prc_context *ctx, prc_bit_state *bit_state, prc_tess_marku
     data->number_of_text_strings = prc_bitread_uint32(ctx, bit_state);
     if (data->number_of_text_strings > 0)
     {
+        if (!prc_bitread_count_fits(bit_state, (uint64_t)(data->number_of_text_strings)))
+        {
+            prc_error(ctx, PRC_ERROR_PARSE, "Count larger than the rest of the section in prc_parse_tess_markup\n");
+            return PRC_ERROR_PARSE;
+        }
         data->text_strings = (prc_string *)prc_calloc(ctx, data->number_of_text_strings, sizeof(prc_string));
         if (data->text_strings == NULL)
         {
@@ -1097,6 +1183,11 @@ prc_parse_tess_3d_compressed(prc_context *ctx, prc_bit_state *bit_state, prc_tes
 
     if (data->reference_array_size > 0)
     {
+        if (!prc_bitread_count_fits(bit_state, (uint64_t)(data->reference_array_size)))
+        {
+            prc_error(ctx, PRC_ERROR_PARSE, "Count larger than the rest of the section in prc_parse_tess_3d_compressed\n");
+            return PRC_ERROR_PARSE;
+        }
         data->points_is_reference_array = (uint8_t *)prc_calloc(ctx, data->reference_array_size, sizeof(uint8_t));
         if (data->points_is_reference_array == NULL)
         {
@@ -1155,6 +1246,11 @@ prc_parse_tess_3d_compressed(prc_context *ctx, prc_bit_state *bit_state, prc_tes
     {
         if (data->triangle_face_array_size > 0)
         {
+            if (!prc_bitread_count_fits(bit_state, (uint64_t)(data->triangle_face_array_size)))
+            {
+                prc_error(ctx, PRC_ERROR_PARSE, "Count larger than the rest of the section in prc_parse_tess_3d_compressed\n");
+                return PRC_ERROR_PARSE;
+            }
             data->normal_is_reversed = (uint8_t *)prc_calloc(ctx, data->triangle_face_array_size, sizeof(uint8_t));
             if (data->normal_is_reversed == NULL)
             {
@@ -1202,6 +1298,11 @@ prc_parse_tess_3d_compressed(prc_context *ctx, prc_bit_state *bit_state, prc_tes
         data->normal_binary_data_size = prc_bitread_uint32(ctx, bit_state);
         if (data->normal_binary_data_size > 0)
         {
+            if (!prc_bitread_count_fits(bit_state, (uint64_t)(data->normal_binary_data_size)))
+            {
+                prc_error(ctx, PRC_ERROR_PARSE, "Count larger than the rest of the section in prc_parse_tess_3d_compressed\n");
+                return PRC_ERROR_PARSE;
+            }
             data->normal_binary_data = (uint8_t *)prc_calloc(ctx, data->normal_binary_data_size, sizeof(uint8_t));
             if (data->normal_binary_data == NULL)
             {
@@ -1249,6 +1350,11 @@ prc_parse_tess_3d_compressed(prc_context *ctx, prc_bit_state *bit_state, prc_tes
 
         data->has_faces = 1; /* Must be true if we have normal data like this */
         /* Spec not clear on the size of this array, I suspect data->face_number */
+        if (!prc_bitread_count_fits(bit_state, (uint64_t)(data->face_number)))
+        {
+            prc_error(ctx, PRC_ERROR_PARSE, "Count larger than the rest of the section in prc_parse_tess_3d_compressed\n");
+            return PRC_ERROR_PARSE;
+        }
         data->is_face_planar = (uint8_t *)prc_calloc(ctx, data->face_number, sizeof(uint8_t));
         if (data->is_face_planar == NULL)
         {
@@ -1274,6 +1380,11 @@ prc_parse_tess_3d_compressed(prc_context *ctx, prc_bit_state *bit_state, prc_tes
     if (data->is_point_color)
     {
         /* Spec not clear on the size of this array */
+        if (!prc_bitread_count_fits(bit_state, (uint64_t)(data->face_number)))
+        {
+            prc_error(ctx, PRC_ERROR_PARSE, "Count larger than the rest of the section in prc_parse_tess_3d_compressed\n");
+            return PRC_ERROR_PARSE;
+        }
         data->is_point_color_on_face = (uint8_t *)prc_calloc(ctx, data->face_number, sizeof(uint8_t));
         if (data->is_point_color_on_face == NULL)
         {
@@ -1333,6 +1444,11 @@ prc_parse_tess_3d_compressed(prc_context *ctx, prc_bit_state *bit_state, prc_tes
     if (data->is_multiple_line_attribute)
     {
         /* Spec not clear on the size of this array */
+        if (!prc_bitread_count_fits(bit_state, (uint64_t)(data->face_number)))
+        {
+            prc_error(ctx, PRC_ERROR_PARSE, "Count larger than the rest of the section in prc_parse_tess_3d_compressed\n");
+            return PRC_ERROR_PARSE;
+        }
         data->is_multiple_line_attribute_on_face = (uint8_t *)prc_calloc(ctx, data->face_number, sizeof(uint8_t));
         if (data->is_multiple_line_attribute_on_face == NULL)
         {
@@ -1381,6 +1497,11 @@ prc_parse_tess_3d_compressed(prc_context *ctx, prc_bit_state *bit_state, prc_tes
         if (!data->all_faces_have_texture)
         {
             /* Spec not clear on the size of this array */
+            if (!prc_bitread_count_fits(bit_state, (uint64_t)(data->face_number)))
+            {
+                prc_error(ctx, PRC_ERROR_PARSE, "Count larger than the rest of the section in prc_parse_tess_3d_compressed\n");
+                return PRC_ERROR_PARSE;
+            }
             data->face_has_texture = (uint8_t *)prc_calloc(ctx, data->face_number, sizeof(uint8_t));
             if (data->face_has_texture == NULL)
             {

@@ -143,6 +143,11 @@ prc_parse_ri_point_set(prc_context *ctx, prc_bit_state *bit_state, prc_ri_point_
     data->number_of_points = prc_bitread_uint32(ctx, bit_state);
     if (data->number_of_points > 0)
     {
+        if (!prc_bitread_count_fits(bit_state, (uint64_t)(data->number_of_points)))
+        {
+            prc_error(ctx, PRC_ERROR_PARSE, "Count larger than the rest of the section in prc_parse_ri_point_set_notag\n");
+            return PRC_ERROR_PARSE;
+        }
         data->points = (prc_vec3 *)prc_calloc(ctx, data->number_of_points, sizeof(prc_vec3));
         if (data->points == NULL)
         {
@@ -209,6 +214,11 @@ prc_parse_ri_set(prc_context *ctx, prc_bit_state *bit_state, prc_ri_set *data, i
 
     if (data->number_of_items > 0)
     {
+        if (!prc_bitread_count_fits(bit_state, (uint64_t)(data->number_of_items)))
+        {
+            prc_error(ctx, PRC_ERROR_PARSE, "Count larger than the rest of the section in prc_parse_ri_set\n");
+            return PRC_ERROR_PARSE;
+        }
         data->rep_items = (prc_ri *)prc_calloc(ctx,
                                         data->number_of_items, sizeof(prc_ri));
         if (data->rep_items == NULL)
@@ -575,6 +585,11 @@ prc_parse_additional_target_data(prc_context *ctx, prc_bit_state *bit_state, prc
 
     if (data->number_of_indices > 0)
     {
+        if (!prc_bitread_count_fits(bit_state, (uint64_t)(data->number_of_indices)))
+        {
+            prc_error(ctx, PRC_ERROR_PARSE, "Count larger than the rest of the section in prc_parse_additional_target_data\n");
+            return PRC_ERROR_PARSE;
+        }
         data->indices = (prc_unsigned_int *)prc_calloc(ctx, data->number_of_indices, sizeof(prc_unsigned_int));
         if (data->indices == NULL)
         {
@@ -799,6 +814,11 @@ prc_parse_mkp_annotation_ref_notag(prc_context *ctx, prc_bit_state *bit_state, p
     data->number_of_linked_items = prc_bitread_uint32(ctx, bit_state);
     if (data->number_of_linked_items > 0)
     {
+        if (!prc_bitread_count_fits(bit_state, (uint64_t)(data->number_of_linked_items)))
+        {
+            prc_error(ctx, PRC_ERROR_PARSE, "Count of linked items larger than the rest of the section\n");
+            return PRC_ERROR_PARSE;
+        }
         data->linked_items = (prc_misc_reference_on_prcbase *)prc_calloc(ctx, data->number_of_linked_items, sizeof(prc_misc_reference_on_prcbase));
         if (data->linked_items == NULL)
         {
@@ -846,6 +866,11 @@ prc_parse_mkp_annotation_set_notag(prc_context *ctx, prc_bit_state *bit_state,
     data->number_of_annotations = prc_bitread_uint32(ctx, bit_state);
     if (data->number_of_annotations > 0)
     {
+        if (!prc_bitread_count_fits(bit_state, (uint64_t)(data->number_of_annotations)))
+        {
+            prc_error(ctx, PRC_ERROR_PARSE, "Count larger than the rest of the section in prc_parse_mkp_annotation_set_notag\n");
+            return PRC_ERROR_PARSE;
+        }
         data->annotations = (prc_annotation_entity *)prc_calloc(ctx, data->number_of_annotations, sizeof(prc_annotation_entity));
         if (data->annotations == NULL)
         {
@@ -935,6 +960,11 @@ prc_parse_mkp_markups(prc_context *ctx, prc_bit_state *bit_state, prc_mkp_markup
     data->number_of_linked_items = prc_bitread_uint32(ctx, bit_state);
     if (data->number_of_linked_items > 0)
     {
+        if (!prc_bitread_count_fits(bit_state, (uint64_t)(data->number_of_linked_items)))
+        {
+            prc_error(ctx, PRC_ERROR_PARSE, "Count of linked items larger than the rest of the section\n");
+            return PRC_ERROR_PARSE;
+        }
         data->linked_items = (prc_misc_reference_on_prcbase *)prc_calloc(ctx, data->number_of_linked_items, sizeof(prc_misc_reference_on_prcbase));
         if (data->linked_items == NULL)
         {
@@ -956,6 +986,11 @@ prc_parse_mkp_markups(prc_context *ctx, prc_bit_state *bit_state, prc_mkp_markup
     data->number_of_leaders = prc_bitread_uint32(ctx, bit_state);
     if (data->number_of_leaders > 0)
     {
+        if (!prc_bitread_count_fits(bit_state, (uint64_t)(data->number_of_leaders)))
+        {
+            prc_error(ctx, PRC_ERROR_PARSE, "Count larger than the rest of the section in prc_parse_mkp_markups\n");
+            return PRC_ERROR_PARSE;
+        }
         data->leaders = (prc_misc_reference_on_prcbase *)prc_calloc(ctx, data->number_of_leaders, sizeof(prc_misc_reference_on_prcbase));
         if (data->leaders == NULL)
         {
@@ -998,6 +1033,11 @@ prc_parse_markup_data(prc_context *ctx, prc_bit_state *bit_state, prc_markup_dat
     data->number_of_linked_items = prc_bitread_uint32(ctx, bit_state);
     if (data->number_of_linked_items > 0)
     {
+        if (!prc_bitread_count_fits(bit_state, (uint64_t)(data->number_of_linked_items)))
+        {
+            prc_error(ctx, PRC_ERROR_PARSE, "Count larger than the rest of the section in prc_parse_markup_data\n");
+            return PRC_ERROR_PARSE;
+        }
         data->linked_items = (prc_misc_markup_linked_item *)prc_calloc(ctx, data->number_of_linked_items, sizeof(prc_misc_markup_linked_item));
         if (data->linked_items == NULL)
         {
@@ -1019,6 +1059,11 @@ prc_parse_markup_data(prc_context *ctx, prc_bit_state *bit_state, prc_markup_dat
     data->number_of_leaders = prc_bitread_uint32(ctx, bit_state);
     if (data->number_of_leaders > 0)
     {
+        if (!prc_bitread_count_fits(bit_state, (uint64_t)(data->number_of_leaders)))
+        {
+            prc_error(ctx, PRC_ERROR_PARSE, "Count larger than the rest of the section in prc_parse_markup_data\n");
+            return PRC_ERROR_PARSE;
+        }
         data->leaders = (prc_mkp_leader *)prc_calloc(ctx, data->number_of_leaders, sizeof(prc_mkp_leader));
         if (data->leaders == NULL)
         {
@@ -1040,6 +1085,11 @@ prc_parse_markup_data(prc_context *ctx, prc_bit_state *bit_state, prc_markup_dat
     data->number_of_markups = prc_bitread_uint32(ctx, bit_state);
     if (data->number_of_markups > 0)
     {
+        if (!prc_bitread_count_fits(bit_state, (uint64_t)(data->number_of_markups)))
+        {
+            prc_error(ctx, PRC_ERROR_PARSE, "Count larger than the rest of the section in prc_parse_markup_data\n");
+            return PRC_ERROR_PARSE;
+        }
         data->markups = (prc_mkp_markup *)prc_calloc(ctx, data->number_of_markups, sizeof(prc_mkp_markup));
         if (data->markups == NULL)
         {
@@ -1061,6 +1111,11 @@ prc_parse_markup_data(prc_context *ctx, prc_bit_state *bit_state, prc_markup_dat
     data->number_of_annotation_entities = prc_bitread_uint32(ctx, bit_state);
     if (data->number_of_annotation_entities != 0)
     {
+        if (!prc_bitread_count_fits(bit_state, (uint64_t)(data->number_of_annotation_entities)))
+        {
+            prc_error(ctx, PRC_ERROR_PARSE, "Count larger than the rest of the section in prc_parse_markup_data\n");
+            return PRC_ERROR_PARSE;
+        }
         data->annotation_entities = (prc_annotation_entity *)prc_calloc(ctx, data->number_of_annotation_entities, sizeof(prc_annotation_entity));
         if (data->annotation_entities == NULL)
         {
@@ -1279,6 +1334,11 @@ prc_parse_scene_display_parameters(prc_context *ctx, prc_bit_state *bit_state, p
     data->number_of_lights = prc_bitread_uint32(ctx, bit_state);
     if (data->number_of_lights > 0)
     {
+        if (!prc_bitread_count_fits(bit_state, (uint64_t)(data->number_of_lights)))
+        {
+            prc_error(ctx, PRC_ERROR_PARSE, "Count larger than the rest of the section in prc_parse_scene_display_parameters\n");
+            return PRC_ERROR_PARSE;
+        }
         data->lights = (prc_graph_light_object *)prc_calloc(ctx, data->number_of_lights, sizeof(prc_graph_light_object));
         if (data->lights == NULL)
         {
@@ -1316,6 +1376,11 @@ prc_parse_scene_display_parameters(prc_context *ctx, prc_bit_state *bit_state, p
     data->number_of_clipping_planes = prc_bitread_uint32(ctx, bit_state);
     if (data->number_of_clipping_planes > 0)
     {
+        if (!prc_bitread_count_fits(bit_state, (uint64_t)(data->number_of_clipping_planes)))
+        {
+            prc_error(ctx, PRC_ERROR_PARSE, "Count larger than the rest of the section in prc_parse_scene_display_parameters\n");
+            return PRC_ERROR_PARSE;
+        }
         data->clipping_planes = (prc_surf_plane *)prc_calloc(ctx, data->number_of_clipping_planes, sizeof(prc_surf_plane));
         if (data->clipping_planes == NULL)
         {
@@ -1339,6 +1404,11 @@ prc_parse_scene_display_parameters(prc_context *ctx, prc_bit_state *bit_state, p
     data->number_default_styles = prc_bitread_uint32(ctx, bit_state);
     if (data->number_default_styles > 0)
     {
+        if (!prc_bitread_count_fits(bit_state, (uint64_t)((uint64_t)data->number_default_styles * 2)))
+        {
+            prc_error(ctx, PRC_ERROR_PARSE, "Count larger than the rest of the section in prc_parse_scene_display_parameters\n");
+            return PRC_ERROR_PARSE;
+        }
         data->styles = (prc_unsigned_int *)prc_calloc(ctx, data->number_default_styles, sizeof(prc_unsigned_int) * 2);
         if (data->styles == NULL)
         {
@@ -1366,6 +1436,11 @@ prc_parse_content_layer_filter_item(prc_context *ctx, prc_bit_state *bit_state, 
     data->number_of_layers = prc_bitread_uint32(ctx, bit_state);
     if (data->number_of_layers > 0)
     {
+        if (!prc_bitread_count_fits(bit_state, (uint64_t)(data->number_of_layers)))
+        {
+            prc_error(ctx, PRC_ERROR_PARSE, "Count larger than the rest of the section in prc_parse_content_layer_filter_items\n");
+            return PRC_ERROR_PARSE;
+        }
         data->layers = (prc_unsigned_int *)prc_calloc(ctx, data->number_of_layers, sizeof(prc_unsigned_int));
         if (data->layers == NULL)
         {
@@ -1427,6 +1502,11 @@ prc_parse_content_entity_filter_items(prc_context *ctx, prc_bit_state *bit_state
     data->number_of_entities = prc_bitread_uint32(ctx, bit_state);
     if (data->number_of_entities > 0)
     {
+        if (!prc_bitread_count_fits(bit_state, (uint64_t)(data->number_of_entities)))
+        {
+            prc_error(ctx, PRC_ERROR_PARSE, "Count larger than the rest of the section in prc_parse_content_entity_filter_items\n");
+            return PRC_ERROR_PARSE;
+        }
         data->entities = (prc_misc_entity_reference *)prc_calloc(ctx, data->number_of_entities, sizeof(prc_misc_entity_reference));
         if (data->entities == NULL)
         {
@@ -1522,6 +1602,11 @@ prc_parse_mkp_view(prc_context *ctx, prc_bit_state *bit_state, prc_mkp_view *dat
     data->number_of_annotations = prc_bitread_uint32(ctx, bit_state);
     if (data->number_of_annotations > 0)
     {
+        if (!prc_bitread_count_fits(bit_state, (uint64_t)(data->number_of_annotations)))
+        {
+            prc_error(ctx, PRC_ERROR_PARSE, "Count larger than the rest of the section in prc_parse_mkp_view\n");
+            return PRC_ERROR_PARSE;
+        }
         data->annotations = (prc_misc_reference_on_prcbase *)prc_calloc(ctx, data->number_of_annotations, sizeof(prc_misc_reference_on_prcbase));
         if (data->annotations == NULL)
         {
@@ -1575,6 +1660,11 @@ prc_parse_mkp_view(prc_context *ctx, prc_bit_state *bit_state, prc_mkp_view *dat
         data->number_of_linked_items = prc_bitread_uint32(ctx, bit_state);
         if (data->number_of_linked_items > 0)
         {
+            if (!prc_bitread_count_fits(bit_state, (uint64_t)(data->number_of_linked_items)))
+            {
+                prc_error(ctx, PRC_ERROR_PARSE, "Count of linked items larger than the rest of the section\n");
+                return PRC_ERROR_PARSE;
+            }
             data->linked_items = (prc_misc_reference_on_prcbase *)prc_calloc(ctx, data->number_of_linked_items, sizeof(prc_misc_reference_on_prcbase));
             if (data->linked_items == NULL)
             {
@@ -1596,6 +1686,11 @@ prc_parse_mkp_view(prc_context *ctx, prc_bit_state *bit_state, prc_mkp_view *dat
         data->number_of_filters = prc_bitread_uint32(ctx, bit_state);
         if (data->number_of_filters > 0)
         {
+            if (!prc_bitread_count_fits(bit_state, (uint64_t)(data->number_of_filters)))
+            {
+                prc_error(ctx, PRC_ERROR_PARSE, "Count larger than the rest of the section in prc_parse_mkp_view\n");
+                return PRC_ERROR_PARSE;
+            }
             data->filters = (prc_asm_filter *)prc_calloc(ctx, data->number_of_filters, sizeof(prc_asm_filter));
             if (data->filters == NULL)
             {
@@ -1679,6 +1774,11 @@ prc_parse_references_of_product_occurrence(prc_context *ctx, prc_bit_state *bit_
     data->number_of_child_product_occurrences = prc_bitread_uint32(ctx, bit_state);
     if (data->number_of_child_product_occurrences > 0)
     {
+        if (!prc_bitread_count_fits(bit_state, (uint64_t)(data->number_of_child_product_occurrences)))
+        {
+            prc_error(ctx, PRC_ERROR_PARSE, "Count larger than the rest of the section in prc_parse_references_of_product_occurrence\n");
+            return PRC_ERROR_PARSE;
+        }
         data->index_child_occurrence = (prc_unsigned_int *)prc_calloc(ctx,
             data->number_of_child_product_occurrences, sizeof(prc_unsigned_int));
         if (data->index_child_occurrence == NULL)
@@ -1784,6 +1884,11 @@ prc_parse_product_occurrence(prc_context *ctx, prc_bit_state *bit_state, prc_asm
     data->entity_ref_count = prc_bitread_uint32(ctx, bit_state);
     if (data->entity_ref_count > 0)
     {
+        if (!prc_bitread_count_fits(bit_state, (uint64_t)(data->entity_ref_count)))
+        {
+            prc_error(ctx, PRC_ERROR_PARSE, "Count larger than the rest of the section in prc_parse_product_occurrence\n");
+            return PRC_ERROR_PARSE;
+        }
         data->entity_reference = (prc_misc_entity_reference *)prc_calloc(ctx, data->entity_ref_count, sizeof(prc_misc_entity_reference));
         if (data->entity_reference == NULL)
         {
@@ -1812,6 +1917,11 @@ prc_parse_product_occurrence(prc_context *ctx, prc_bit_state *bit_state, prc_asm
     data->number_of_views = prc_bitread_uint32(ctx, bit_state);
     if (data->number_of_views > 0)
     {
+        if (!prc_bitread_count_fits(bit_state, (uint64_t)(data->number_of_views)))
+        {
+            prc_error(ctx, PRC_ERROR_PARSE, "Count larger than the rest of the section in prc_parse_product_occurrence\n");
+            return PRC_ERROR_PARSE;
+        }
         data->views = (prc_mkp_view *)prc_calloc(ctx, data->number_of_views, sizeof(prc_mkp_view));
         if (data->views == NULL)
         {
@@ -1844,6 +1954,11 @@ prc_parse_product_occurrence(prc_context *ctx, prc_bit_state *bit_state, prc_asm
     data->number_of_display_filters = prc_bitread_uint32(ctx, bit_state);
     if (data->number_of_display_filters > 0)
     {
+        if (!prc_bitread_count_fits(bit_state, (uint64_t)(data->number_of_display_filters)))
+        {
+            prc_error(ctx, PRC_ERROR_PARSE, "Count larger than the rest of the section in prc_parse_product_occurrence\n");
+            return PRC_ERROR_PARSE;
+        }
         data->display_filters = (prc_asm_filter *)prc_calloc(ctx, data->number_of_display_filters, sizeof(prc_asm_filter));
         if (data->display_filters == NULL)
         {
@@ -1865,6 +1980,11 @@ prc_parse_product_occurrence(prc_context *ctx, prc_bit_state *bit_state, prc_asm
     data->number_of_scene_parameters = prc_bitread_uint32(ctx, bit_state);
     if (data->number_of_scene_parameters > 0)
     {
+        if (!prc_bitread_count_fits(bit_state, (uint64_t)(data->number_of_scene_parameters)))
+        {
+            prc_error(ctx, PRC_ERROR_PARSE, "Count larger than the rest of the section in prc_parse_product_occurrence\n");
+            return PRC_ERROR_PARSE;
+        }
         data->scene_display_parameters = (prc_scene_display_parameters *)prc_calloc(ctx, data->number_of_scene_parameters, sizeof(prc_scene_display_parameters));
         if (data->scene_display_parameters == NULL)
         {
@@ -1966,6 +2086,11 @@ prc_parse_parts(prc_context *ctx, prc_bit_state *bit_state, prc_asm_parts_defini
 
     if (data->num_rep_items > 0)
     {
+        if (!prc_bitread_count_fits(bit_state, (uint64_t)(data->num_rep_items)))
+        {
+            prc_error(ctx, PRC_ERROR_PARSE, "Count larger than the rest of the section in prc_parse_parts\n");
+            return PRC_ERROR_PARSE;
+        }
         data->rep_items = (prc_ri *)prc_calloc(ctx, data->num_rep_items, sizeof(prc_ri));
         if (data->rep_items == NULL)
         {
@@ -1994,6 +2119,11 @@ prc_parse_parts(prc_context *ctx, prc_bit_state *bit_state, prc_asm_parts_defini
     data->number_views = prc_bitread_uint32(ctx, bit_state);
     if (data->number_views > 0)
     {
+        if (!prc_bitread_count_fits(bit_state, (uint64_t)(data->number_views)))
+        {
+            prc_error(ctx, PRC_ERROR_PARSE, "Count larger than the rest of the section in prc_parse_parts\n");
+            return PRC_ERROR_PARSE;
+        }
         data->views = (prc_mkp_view *)prc_calloc(ctx, data->number_views, sizeof(prc_mkp_view));
         if (data->views == NULL)
         {

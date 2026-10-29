@@ -4363,7 +4363,6 @@ prc_get_hcg_circle_data(prc_context *ctx, prc_hcg_circle *hcg_circle,
             }
             else
             {
-
                 code = prc_get_start_end_data(ctx, &hcg_circle->particular_circle.start_end_data,
                     &info->start_point, &info->end_point, compressed_data);
                 if (code < 0)
@@ -4391,8 +4390,13 @@ prc_get_hcg_circle_data(prc_context *ctx, prc_hcg_circle *hcg_circle,
         if (!hcg_circle->general_circle.compressed_iso_spline)
         {
             info->has_start_end_points = 1;
-            info->start_point = hcg_circle->general_circle.start_end_data.start_point.point;
-            info->end_point = hcg_circle->general_circle.start_end_data.end_point.point;
+            code = prc_get_start_end_data(ctx, &hcg_circle->general_circle.start_end_data,
+                &info->start_point, &info->end_point, compressed_data);
+            if (code < 0)
+            {
+                prc_error(ctx, code, "Failed to get start end in prc_get_hcg_circle_data\n");
+                return code;
+            }
         }
         info->has_center = 1;
         info->center = hcg_circle->general_circle.center.point;
@@ -6709,7 +6713,8 @@ prc_get_ptr_vertex(prc_context *ctx, prc_nano_brep_ref_data *brep_ref_data,
     }
     else
     {
-        if (ptr_topo_in->topo_identifier >= brep_ref_data->number_of_topo_refs)
+        if (ptr_topo_in->topo_identifier > brep_ref_data->number_of_topo_refs ||
+            ptr_topo_in->topo_identifier == 0)
         {
             prc_error(ctx, PRC_ERROR_INTERNAL, "Invalid topo identifier in prc_get_ptr_vertex\n");
             return PRC_ERROR_INTERNAL;
@@ -6752,7 +6757,8 @@ prc_sample_coedge(prc_context *ctx, prc_nano_brep_ref_data *brep_ref_data,
         }
         else
         {
-            if (topo_coedge->next_coedge.topo->topo_coedge->ptr_topology.topo_identifier >= brep_ref_data->number_of_topo_refs)
+            if (topo_coedge->next_coedge.topo->topo_coedge->ptr_topology.topo_identifier > brep_ref_data->number_of_topo_refs ||
+                topo_coedge->next_coedge.topo->topo_coedge->ptr_topology.topo_identifier == 0)
             {
                 prc_error(ctx, PRC_ERROR_INTERNAL, "Invalid topo identifier in prc_sample_coedge\n");
                 return PRC_ERROR_INTERNAL;
@@ -6936,7 +6942,8 @@ prc_sample_loop(prc_context *ctx, prc_nano_brep_ref_data *brep_ref_data,
     }
     else
     {
-        if (loop->topo_identifier >= brep_ref_data->number_of_topo_refs)
+        if (loop->topo_identifier > brep_ref_data->number_of_topo_refs ||
+            loop->topo_identifier == 0)
         {
             prc_error(ctx, PRC_ERROR_INTERNAL, "Invalid loop identifier in prc_sample_loop\n");
             return PRC_ERROR_INTERNAL;

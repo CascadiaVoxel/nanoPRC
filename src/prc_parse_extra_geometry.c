@@ -2747,6 +2747,15 @@ prc_parse_ptr_topology(prc_context *ctx, prc_bit_state *bit_state, prc_ptr_topol
             prc_error(ctx, code, "Failed in prc_parse_topo\n");
             return code;
         }
+
+        /* We should NOT be adding to the references any entry whose type
+           is PRC_TYPE_ROOT (0) If that was what was encountered, then 
+           we need to remove it from the refs and decrement the count.  Thanks
+           to Ian for catching this */
+        if (data->topo->tag == PRC_TYPE_ROOT)
+        {
+            ref_data->number_of_topo_refs--;
+        }
     }
     else
     {

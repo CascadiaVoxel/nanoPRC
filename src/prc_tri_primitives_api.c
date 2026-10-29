@@ -4735,7 +4735,7 @@ uncompressed_done:
             file_struct->tessellation->tess[tess_index].tess_3d_compressed;
         int num_prc_indices = tess->num_triangle_indices_prc_compressed_3d;
         uint8_t has_vertex_colors =
-            (tess->decoded_point_color_array != NULL) ? true : false;
+            (tess->point_colors_prc_compressed_3d != NULL) ? true : false;
         /* Gated on is_multiple_line_attribute (real per-face/per-triangle
            style variation), not mere line_attribute_array != NULL -- see
            the identical fix/comment in prc_api_get_number_faces. A lone
@@ -5532,14 +5532,14 @@ uncompressed_done:
                     {
                         if (has_vertex_colors)
                         {
-                            vertex_out->vertices[vertex_index].color[0] = tess->decoded_point_color_array[k * 4];
-                            vertex_out->vertices[vertex_index].color[1] = tess->decoded_point_color_array[k * 4 + 1];
-                            vertex_out->vertices[vertex_index].color[2] = tess->decoded_point_color_array[k * 4 + 2];
-                            vertex_out->vertices[vertex_index].color[3] = tess->decoded_point_color_array[k * 4 + 3];
-                            prev->next->vertex_color[0] = tess->decoded_point_color_array[k * 4];
-                            prev->next->vertex_color[1] = tess->decoded_point_color_array[k * 4 + 1];
-                            prev->next->vertex_color[2] = tess->decoded_point_color_array[k * 4 + 2];
-                            prev->next->vertex_color[3] = tess->decoded_point_color_array[k * 4 + 3];
+                            vertex_out->vertices[vertex_index].color[0] = tess->point_colors_prc_compressed_3d[k * 4];
+                            vertex_out->vertices[vertex_index].color[1] = tess->point_colors_prc_compressed_3d[k * 4 + 1];
+                            vertex_out->vertices[vertex_index].color[2] = tess->point_colors_prc_compressed_3d[k * 4 + 2];
+                            vertex_out->vertices[vertex_index].color[3] = tess->point_colors_prc_compressed_3d[k * 4 + 3];
+                            prev->next->vertex_color[0] = tess->point_colors_prc_compressed_3d[k * 4];
+                            prev->next->vertex_color[1] = tess->point_colors_prc_compressed_3d[k * 4 + 1];
+                            prev->next->vertex_color[2] = tess->point_colors_prc_compressed_3d[k * 4 + 2];
+                            prev->next->vertex_color[3] = tess->point_colors_prc_compressed_3d[k * 4 + 3];
                             prev->next->color_set = PRC_INTERNAL_API_COLOR_SET;
                         }
                         else

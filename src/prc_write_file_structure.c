@@ -501,7 +501,7 @@ prc_write_file_struct_header_bytes_ex(uint8_t *out, uint32_t min_vers_for_read,
        section's far reference to this file structure -- see
        PRC_WRITE_FILE_STRUCT_UID0's doc comment in prc_write_common.h. */
     p = prc_write_le_unique_id(p, PRC_WRITE_FILE_STRUCT_UID0);
-    p = prc_write_le_unique_id(p, PRC_WRITE_APP_UID0);
+    p = prc_write_le_app_unique_id(p);
     p = prc_write_le_uint32(p, num_files); /* file_count (embedded uncompressed files) */
 
     /* Each block: a uint32 byte count then the bytes, no type tag. The

@@ -440,6 +440,22 @@ PRC_EXPORT void prc_api_print_error_stack(prc_context *ctx);
 PRC_EXPORT prc_api_data prc_api_open_contents(prc_context *ctx, const char *infile);
 
 /**
+ * @brief Whether the opened PRC was written by nanoPRC.
+ *
+ * nanoPRC's writer puts its own application identifier in the PRC header's
+ * unique_id_application, the field the format provides for naming the
+ * application that wrote a file. Its 16 bytes are the ASCII text "nanoPRC"
+ * followed by nine zero bytes. This reports whether the main header carries
+ * it. Files nanoPRC wrote before the identifier was added carry {2,0,0,0}
+ * there instead, and are not recognised.
+ *
+ * @param ctx Active API context.
+ * @param data Data handle returned by prc_api_open_contents.
+ * @return 1 if the header names nanoPRC, 0 if not or if data is NULL.
+ */
+PRC_EXPORT int prc_api_written_by_nanoprc(prc_context *ctx, prc_api_data data);
+
+/**
  * @brief Release API data and optional tessellation/model-tree allocations.
  *
  * @param ctx Active API context.

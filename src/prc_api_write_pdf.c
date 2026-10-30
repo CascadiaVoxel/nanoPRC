@@ -18,6 +18,8 @@
    The only embedding path is the standard (ISO 32000) 3D annotation --
    see prc_write_pdf_3d.c for the object graph. */
 
+#include <math.h>
+#include <string.h>
 #include "../include/prc_api.h"
 #include "prc_write_pdf_3d.h"
 
@@ -32,4 +34,37 @@ prc_api_pdf_embed_prc(prc_context *ctx, const char *pdf_path,
     }
 
     return prc_write_pdf_3d_annotation(ctx, pdf_path, prc_data, prc_size, options);
+}
+
+void
+prc_api_pdf_view_from_bounds(const double min[3], const double max[3], prc_pdf_view_spec *view)
+{
+    double center[3], d[3], diagonal;
+    int a;
+
+    if (min == NULL || max == NULL || view == NULL)
+        return;
+
+    for (a = 0; a < 3; a++)
+    {
+        center[a] = 0.5 * (min[a] + max[a]);
+        d[a] = max[a] - min[a];
+    }
+    diagonal = sqrt(d[0] * d[0] + d[1] * d[1] + d[2] * d[2]);
+    /* A single point still needs the camera some distance away. */
+    if (!(diagonal > 0.0))
+        diagonal = 1.0;
+
+    /* demos/stl_import's direction and distance, which Adobe Acrobat frames
+       correctly; also checked on a wrapped PRC whose parts are placed about
+       2,000 units from the origin. */
+    memset(view, 0, sizeof(*view));
+    view->name = "Default";
+    view->eye[0] = center[0] + diagonal * 1.0;
+    view->eye[1] = center[1] - diagonal * 1.3;
+    view->eye[2] = center[2] + diagonal * 0.7;
+    for (a = 0; a < 3; a++)
+        view->target[a] = center[a];
+    view->up[2] = 1.0;
+    view->is_default = 1;
 }

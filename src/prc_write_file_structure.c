@@ -221,11 +221,13 @@ prc_write_tessellation_section_to_stream(prc_context *ctx, prc_bit_write_state *
                 "which only PRC_API_WRITE_TESS_KIND_TRIANGLES can write\n", i);
             goto fail;
         }
-        if (e->vertex_colors != NULL && e->kind == PRC_WRITE_TESS_KIND_COMPRESSED)
+        if (e->vertex_colors != NULL && e->kind == PRC_WRITE_TESS_KIND_COMPRESSED &&
+            e->num_vertex_colors != e->num_triangles * 3u)
         {
             prc_error(ctx, PRC_ERROR_INTERNAL,
-                "prc_write_file_structure: tessellation entry %u supplies vertex colours, "
-                "which the compressed encoder cannot write\n", i);
+                "prc_write_file_structure: tessellation entry %u supplies %u vertex colours "
+                "for %u triangles; a compressed tessellation takes one per corner\n",
+                i, e->num_vertex_colors, e->num_triangles);
             goto fail;
         }
 
@@ -307,6 +309,7 @@ prc_write_tessellation_section_to_stream(prc_context *ctx, prc_bit_write_state *
             if (prc_write_compress_tess_entry(ctx, s, e->positions, e->num_positions,
                     e->normals, e->num_normals, e->tri_indices, e->norm_indices, e->num_triangles,
                     e->face_tri_counts, e->num_faces, e->tex_coords, e->num_tex_coords, e->tex_indices,
+                    e->vertex_colors, e->num_vertex_colors, e->vertex_colors_have_alpha,
                     tol, crease) != 0)
                 goto fail;
         }

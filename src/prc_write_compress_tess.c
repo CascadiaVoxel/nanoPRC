@@ -4432,7 +4432,8 @@ prc_write_compress_tess_to_stream(prc_context *ctx, prc_bit_write_state *state,
 {
     return prc_write_compress_tess_to_stream_ex(ctx, state, trav, tolerance_mm,
         normal_is_reversed_c1, crease_angle_degrees, normal_angle_array, normal_angle_array_count,
-        normal_binary_data, normal_binary_data_size, must_recalculate_normals, is_face_planar, NULL);
+        normal_binary_data, normal_binary_data_size, must_recalculate_normals, is_face_planar, NULL,
+        NULL, 0);
 }
 
 int
@@ -4442,9 +4443,17 @@ prc_write_compress_tess_to_stream_ex(prc_context *ctx, prc_bit_write_state *stat
     const int32_t *normal_angle_array, uint32_t normal_angle_array_count,
     const uint8_t *normal_binary_data, uint32_t normal_binary_data_size,
     uint8_t must_recalculate_normals, const uint8_t *is_face_planar,
-    const prc_encode_texture_block *texture)
+    const prc_encode_texture_block *texture,
+    const uint8_t *point_colors, uint32_t num_point_colors)
 {
     uint32_t k, num_refs = 0;
+
+    if (point_colors != NULL && num_point_colors != trav->triangle_face_array_size * 3u)
+    {
+        prc_error(ctx, PRC_ERROR_INTERNAL,
+            "prc_write_compress_tess_to_stream: point colours must be one per corner\n");
+        return PRC_ERROR_INTERNAL;
+    }
 
     if (state == NULL || trav == NULL || !(tolerance_mm > 0.0))
     {
@@ -4662,8 +4671,21 @@ prc_write_compress_tess_to_stream_ex(prc_context *ctx, prc_bit_write_state *stat
         }
         PRC_DIAG_TESS_FIELD_SIZES_MARK("normals_block");
 
-        if (prc_bitwrite_bit(ctx, state, 0) != 0)   /* is_point_color */
+        if (prc_bitwrite_bit(ctx, state, point_colors != NULL ? 1 : 0) != 0)   /* is_point_color */
             goto werr;
+        if (point_colors != NULL)
+        {
+            /* is_point_color_on_face, one per face, then point_color_array:
+               5 characters per corner, Huffman-coded 8-bit characters. */
+            for (k = 0; k < face_count; k++)
+            {
+                if (prc_bitwrite_bit(ctx, state, 1) != 0)
+                    goto werr;
+            }
+            if (prc_bitwrite_character_array(ctx, state, point_colors,
+                    num_point_colors * 5u, 8, 1, 0) != 0)
+                goto werr;
+        }
         if (prc_bitwrite_bit(ctx, state, 0) != 0)   /* is_multiple_line_attribute */
             goto werr;
         /* line_attribute_array: read unconditionally by the parser, one
@@ -5291,6 +5313,78 @@ fail:
     return ret;
 }
 
+/* The point_color_array of one compressed tessellation: for each triangle
+   in traversal order, its corners in the order the decoder treats them
+   (trav->triangle_point_indices), each as 5 characters -- 0 then R, G, B and
+   255 for an opaque colour, or 1 then R, G, B, A. Every colour in prc-db's
+   compressed tessellations (October 2026, 9.2 million) is written the first
+   way. vertex_colors is the caller's, one per input corner. A mesh triangle
+   keeps its input corners in order (mesh->tri_orig_index), so a treated
+   corner's colour is the input colour of the mesh corner at the same
+   vertex. */
+static int
+prc_encode_point_colors_build(prc_context *ctx, const prc_encode_mesh *mesh,
+    const prc_encode_traversal_result *trav, const uint8_t *vertex_colors,
+    int have_alpha, uint8_t **out)
+{
+    uint32_t num_tris = trav->triangle_face_array_size;
+    uint32_t stride = have_alpha ? 4u : 3u;
+    uint8_t *bytes;
+    uint32_t t, c, k;
+
+    *out = NULL;
+    if (trav->triangle_point_indices == NULL || trav->point_mesh_vertex == NULL ||
+        trav->triangle_mesh_order == NULL)
+    {
+        prc_error(ctx, PRC_ERROR_INTERNAL, "prc_write_compress_tess_entry: traversal has no corner map\n");
+        return PRC_ERROR_INTERNAL;
+    }
+    bytes = (uint8_t *)prc_malloc(ctx, (size_t)num_tris * 15);
+    if (bytes == NULL)
+    {
+        prc_error(ctx, PRC_ERROR_MEMORY, "Allocation error in prc_write_compress_tess_entry (point colours)\n");
+        return PRC_ERROR_MEMORY;
+    }
+    for (t = 0; t < num_tris; t++)
+    {
+        uint32_t m = trav->triangle_mesh_order[t];
+        uint32_t orig;
+
+        if (m >= mesh->num_triangles)
+            goto bad;
+        orig = mesh->tri_orig_index[m];
+        for (c = 0; c < 3; c++)
+        {
+            int32_t pt = trav->triangle_point_indices[(size_t)t * 3 + c];
+            int32_t mv;
+            const uint8_t *rgb = NULL;
+            uint8_t *dst = &bytes[((size_t)t * 3 + c) * 5];
+
+            if (pt < 0 || (uint32_t)pt >= trav->num_decoded_points)
+                goto bad;
+            mv = trav->point_mesh_vertex[pt];
+            for (k = 0; k < 3; k++)
+                if ((int32_t)mesh->tri_indices[(size_t)m * 3 + k] == mv)
+                    rgb = &vertex_colors[((size_t)orig * 3 + k) * stride];
+            if (rgb == NULL)
+                goto bad;
+            dst[0] = have_alpha ? 1 : 0;
+            dst[1] = rgb[0];
+            dst[2] = rgb[1];
+            dst[3] = rgb[2];
+            dst[4] = have_alpha ? rgb[3] : 255;
+        }
+    }
+    *out = bytes;
+    return 0;
+
+bad:
+    prc_free(ctx, bytes);
+    prc_error(ctx, PRC_ERROR_INTERNAL,
+        "prc_write_compress_tess_entry: a treated corner is not a corner of its triangle\n");
+    return PRC_ERROR_INTERNAL;
+}
+
 int
 prc_write_compress_tess_entry(prc_context *ctx, prc_bit_write_state *s,
     const double *positions, uint32_t num_positions,
@@ -5298,6 +5392,7 @@ prc_write_compress_tess_entry(prc_context *ctx, prc_bit_write_state *s,
     const uint32_t *tri_indices, const uint32_t *norm_indices, uint32_t num_triangles,
     const uint32_t *face_tri_counts, uint32_t num_faces,
     const double *tex_coords, uint32_t num_tex_coords, const uint32_t *tex_indices,
+    const uint8_t *vertex_colors, uint32_t num_vertex_colors, int vertex_colors_have_alpha,
     prc_write_tolerance tolerance, double crease_angle_degrees)
 {
     prc_encode_mesh mesh;
@@ -5317,6 +5412,7 @@ prc_write_compress_tess_entry(prc_context *ctx, prc_bit_write_state *s,
     prc_encode_textured_input textured;
     prc_encode_texture_block tex_block;
     uint32_t *mesh_uv = NULL;           /* mesh.num_positions entries: each mesh vertex's UV id */
+    uint8_t *point_colors = NULL;       /* 5 bytes per corner, traversal order */
     int mesh_ready = 0, trav_ready = 0;
     int ret = PRC_ERROR_INTERNAL;
     int code;
@@ -5327,7 +5423,8 @@ prc_write_compress_tess_entry(prc_context *ctx, prc_bit_write_state *s,
     memset(&tex_block, 0, sizeof(tex_block));
 
     if (ctx == NULL || s == NULL || num_triangles == 0 ||
-        (tex_coords == NULL) != (tex_indices == NULL) || (tex_coords != NULL && num_tex_coords == 0))
+        (tex_coords == NULL) != (tex_indices == NULL) || (tex_coords != NULL && num_tex_coords == 0) ||
+        (vertex_colors != NULL && num_vertex_colors != num_triangles * 3u))
     {
         prc_error(ctx, PRC_ERROR_INTERNAL, "prc_write_compress_tess_entry: invalid arguments\n");
         return PRC_ERROR_INTERNAL;
@@ -5383,6 +5480,12 @@ prc_write_compress_tess_entry(prc_context *ctx, prc_bit_write_state *s,
             }
         }
     }
+
+    /* As for textures: no triangle's first two corners get swapped at a
+       chain start, so the corner order of the stored colours never depends
+       on that swap. */
+    if (vertex_colors != NULL)
+        mesh.avoid_chain_start_swap = 1;
 
     if (mesh.num_triangles == 0)
     {
@@ -5607,13 +5710,26 @@ prc_write_compress_tess_entry(prc_context *ctx, prc_bit_write_state *s,
         }
     }
 
+    if (vertex_colors != NULL)
+    {
+        code = prc_encode_point_colors_build(ctx, &mesh, &trav, vertex_colors,
+            vertex_colors_have_alpha, &point_colors);
+        if (code != 0)
+        {
+            ret = code;
+            goto cleanup;
+        }
+    }
+
     code = prc_write_compress_tess_to_stream_ex(ctx, s, &trav, mesh.tolerance_mm,
         rev, crease_angle_degrees, angles, acount, bin, bsize, must_recalculate_normals,
-        is_face_planar, tex_coords != NULL ? &tex_block : NULL);
+        is_face_planar, tex_coords != NULL ? &tex_block : NULL,
+        point_colors, point_colors != NULL ? trav.triangle_face_array_size * 3u : 0u);
     ret = code;
 
 cleanup:
     if (mesh_uv != NULL) prc_free(ctx, mesh_uv);
+    if (point_colors != NULL) prc_free(ctx, point_colors);
     if (tex_block.bits != NULL) prc_free(ctx, tex_block.bits);
     if (tex_block.refs != NULL) prc_free(ctx, tex_block.refs);
     if (tex_block.pairs != NULL) prc_free(ctx, tex_block.pairs);

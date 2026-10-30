@@ -248,14 +248,19 @@ typedef struct prc_encode_texture_block_s
     uint32_t  num_pairs;
 } prc_encode_texture_block;
 
-/* prc_write_compress_tess_to_stream, plus texture: NULL writes no_texture. */
+/* prc_write_compress_tess_to_stream, plus texture (NULL writes no_texture)
+   and point colours: point_colors holds 5 bytes per triangle corner in
+   traversal order, as point_color_array stores them (Table 175), and
+   num_point_colors counts corners, which must be 3 per triangle. NULL/0
+   writes none. Every face is coloured. */
 int prc_write_compress_tess_to_stream_ex(prc_context *ctx, prc_bit_write_state *state,
     const prc_encode_traversal_result *trav, double tolerance_mm,
     const uint8_t *normal_is_reversed_c1, double crease_angle_degrees,
     const int32_t *normal_angle_array, uint32_t normal_angle_array_count,
     const uint8_t *normal_binary_data, uint32_t normal_binary_data_size,
     uint8_t must_recalculate_normals, const uint8_t *is_face_planar,
-    const prc_encode_texture_block *texture);
+    const prc_encode_texture_block *texture,
+    const uint8_t *point_colors, uint32_t num_point_colors);
 
 /* Full orchestration (Steps A through E) for one PRC_TYPE_TESS_3D_Compressed
    tessellation entry, from raw caller-supplied geometry straight to bits:
@@ -273,13 +278,19 @@ int prc_write_compress_tess_to_stream_ex(prc_context *ctx, prc_bit_write_state *
    per triangle, parallel to tri_indices) are optional and go together:
    with them every face is textured. A vertex whose corners carry different
    UVs (a texture seam) is split into one vertex per UV, so each decoded
-   vertex holds exactly one pair. */
+   vertex holds exactly one pair.
+
+   vertex_colors is optional: one colour per triangle corner (3 per input
+   triangle, in tri_indices order), 3 bytes each, or 4 when
+   vertex_colors_have_alpha is set. Colours are stored per corner, so a
+   vertex whose corners differ in colour is not split. */
 int prc_write_compress_tess_entry(prc_context *ctx, prc_bit_write_state *s,
     const double *positions, uint32_t num_positions,
     const double *normals, uint32_t num_normals,
     const uint32_t *tri_indices, const uint32_t *norm_indices, uint32_t num_triangles,
     const uint32_t *face_tri_counts, uint32_t num_faces,
     const double *tex_coords, uint32_t num_tex_coords, const uint32_t *tex_indices,
+    const uint8_t *vertex_colors, uint32_t num_vertex_colors, int vertex_colors_have_alpha,
     prc_write_tolerance tolerance, double crease_angle_degrees);
 
 #endif

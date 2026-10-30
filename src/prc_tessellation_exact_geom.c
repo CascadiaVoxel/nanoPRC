@@ -4267,6 +4267,43 @@ prc_compute_hcg_circle_theta(prc_hcg_circle_information *info)
 
     if (!info->has_center || !info->has_normal || !info->has_start_end_points)
     {
+        if (info->has_center && info->has_start_end_points && info->has_circle_angle_bit)
+        {
+            /* In this case, we have the general circle and the flag that specifies
+               if it is greater than pi.  */
+            prc_vec3 diff1, diff2;
+            double dot;
+            double norm1, norm2;
+            double cos_theta;
+
+            prc_vec_sub(info->start_point, info->center, &diff1);
+            prc_vec_sub(info->end_point, info->center, &diff2);
+            dot = prc_vec_dot_product(diff1, diff2);
+            norm1 = prc_vec_length(diff1);
+            norm2 = prc_vec_length(diff2);
+
+            if (norm1 == 0 || norm2 == 0)
+            {
+                return;
+            }
+
+            cos_theta = dot / (norm1 * norm2);
+            if (cos_theta > 1.0f)
+            {
+                cos_theta = 1.0f;
+            }
+            if (cos_theta < -1.0f)
+            {
+                cos_theta = -1.0f;
+            }
+
+            info->theta = acos(cos_theta);
+
+            if (info->circle_angle_bit)
+            {
+                info->theta = (2.0f * PRC_PI) - info->theta;
+            }
+        }
         return;
     }
 
@@ -4398,8 +4435,11 @@ prc_get_hcg_circle_data(prc_context *ctx, prc_hcg_circle *hcg_circle,
                 return code;
             }
         }
+        /* In the general circle case, we have a center */
         info->has_center = 1;
         info->center = hcg_circle->general_circle.center.point;
+
+        /* In the general circle case, the circle_angle_bit is true if the angle > pi */
         info->has_circle_angle_bit = 1;
         info->circle_angle_bit = hcg_circle->general_circle.circle_angle;
     }
@@ -5279,52 +5319,106 @@ prc_decompress_knot_vector(prc_context *ctx, uint32_t degree, uint32_t num_contr
         return 0;
     }
 
-    /* Non-Uniform Knot Vector Reconstruction */
+    /* Non-Uniform / Pseudo-Uniform Knot Vector Reconstruction */
     uint32_t knot_idx = 0;
-    uint32_t num_bits = comp_knot_vector->knots.number_bit_parameter;
-    double tolerance_param = 1.0 / (double)((1ULL) << (num_bits - 1)); // 1.0 / 2^(num_bits - 1)
 
-    /* Standard implementations assume multi-clamped endpoints matching CAD configurations */
-    /* Pad the baseline starting clamp up to degree + 1 multiplicity */
-    for (i = 0; i <= degree; i++)
+    if (number_stored_knots < 2)
     {
-        output_knot_vector[knot_idx++] = 0.0;
+        prc_error(ctx, PRC_ERROR_PARSE, "Invalid number of stored knots in decompression\n");
+        return PRC_ERROR_PARSE;
     }
 
     double current_knot_value = 0.0;
 
-    /* Reconstruct stored inner knot parameters sequence */
+    /* Pseudo-Uniform Form Branch */
+    if (comp_knot_vector->knots.is_pseudo_uniform)
+    {
+        double first_interval = comp_knot_vector->knots.compressed_knots[0].knot;
+        double last_interval = comp_knot_vector->knots.compressed_knots[1].knot;
+
+        /* A pseudo-uniform vector populates 'number_stored_knots' distinct positions.
+           The middle steps are perfectly uniform. */
+        uint32_t num_inner_segments = number_stored_knots - 3;
+        double remaining_range = 1.0 - first_interval - last_interval;
+        double inner_step = (num_inner_segments > 0) ? (remaining_range / (double)num_inner_segments) : 0.0;
+
+        for (i = 0; i < number_stored_knots; i++)
+        {
+            if (i == 0)
+            {
+                current_knot_value = 0.0;
+            }
+            else if (i == 1)
+            {
+                current_knot_value = first_interval;
+            }
+            else if (i == number_stored_knots - 1)
+            {
+                current_knot_value = 1.0;
+            }
+            else
+            {
+                current_knot_value = first_interval + ((double)(i - 1) * inner_step);
+            }
+
+            uint32_t multiplicity = mult_array[i].multiplicity;
+            for (j = 0; j < multiplicity; j++)
+            {
+                if (knot_idx < total_knots)
+                {
+                    output_knot_vector[knot_idx++] = current_knot_value;
+                }
+            }
+        }
+
+        while (knot_idx < total_knots)
+        {
+            output_knot_vector[knot_idx++] = 1.0;
+        }
+
+        return 0;
+    }
+
+    /* General Non-Uniform Form Loop */
     for (i = 0; i < number_stored_knots; i++)
     {
-        uint32_t multiplicity = 1;
-
-        /* Resolve implicitly omitted multiplicity values */
-        if (mult_array[i].multiplicity_is_stored)
+        /* 1. Determine the knot's value */
+        if (i == 0)
         {
-            multiplicity = mult_array[i].multiplicity;
+            /* First knot is implicitly 0.0 */
+            current_knot_value = 0.0;
         }
-        else if (i > 0)
+        else if (i == number_stored_knots - 1)
         {
-            /* Fallback to matching prior iteration state */
-            multiplicity = mult_array[i - 1].multiplicity_is_stored ? mult_array[i - 1].multiplicity : 1;
+            /* Last knot is implicitly 1.0 */
+            current_knot_value = 1.0;
+        }
+        else
+        {
+            /* Interior knots accumulate the increments stored in the array.
+               Index shifted by -1 because array only holds the (number_stored_knots - 2) interior elements */
+            double compressed_delta = comp_knot_vector->knots.compressed_knots[i - 1].knot;
+            current_knot_value += compressed_delta;
         }
 
-        /* Unpack delta parameter accumulation from the variable bitstream array */
-        /* (Assumes your wrapper abstracts DoubleWithVariableBitNumber calculations) */
-        double compressed_delta = comp_knot_vector->knots.compressed_knots[i].knot;
-        current_knot_value += compressed_delta;
+        /* 2. Retrieve the multiplicity directly */
+        uint32_t multiplicity = mult_array[i].multiplicity;
 
-        /* Apply multiplicity sequence writing */
+        /* 3. Write the value 'multiplicity' times to the output vector */
         for (j = 0; j < multiplicity; j++)
         {
             if (knot_idx < total_knots)
             {
                 output_knot_vector[knot_idx++] = current_knot_value;
             }
+            else
+            {
+                break;
+            }
         }
     }
 
-    /* Pad trailing clamp up to matching length requirement boundary */
+    /* Safety fallback padding if the total count wasn't met */
     while (knot_idx < total_knots)
     {
         output_knot_vector[knot_idx++] = 1.0;
@@ -5462,20 +5556,19 @@ prc_tessellate_compressed_face(prc_context *ctx, prc_data *data, uint32_t shell_
 
         case PRC_HCG_IsoCylinder:
         {
-            /* For this we have one circle and one line plus a vertex, where
-             * the circle defines the radius and axis and the line supplies an
-             * axis direction; we then synthesize a normal prc_surf_cylinder and
-             * tessellate it through the standard surface path. */
+            /* WIP! */
             prc_hcg_iso_cylinder *hcg_iso_cylinder = &topo_face->hcg_iso_cylinder;
             prc_content_compressed_face *face = &hcg_iso_cylinder->face;
             prc_compressed_curve *first_trim_curve = NULL;
             prc_compressed_curve *second_trim_curve = NULL;
             prc_compressed_curve *third_trim_curve = NULL;
             prc_compressed_curve *fourth_trim_curve = NULL;
-            prc_compressed_curve *line_curve = first_trim_curve;
-            prc_compressed_curve *circle_curve = second_trim_curve;
-            prc_vec3 line_start, line_end;
-            prc_hcg_circle_information circle_info;
+            prc_compressed_curve *line_curve1 = first_trim_curve;
+            prc_compressed_curve *circle_curve1 = second_trim_curve;
+            prc_compressed_curve *line_curve2;
+            prc_compressed_curve *circle_curve2;
+            prc_vec3 line_start1, line_end1, line_start2, line_end2;
+            prc_hcg_circle_information circle_info1, circle_info2;
             prc_vec3 common_vertex;
             prc_surf_cylinder cylinder = { 0 };
             prc_topo_face synthetic_face = { 0 };
@@ -5497,15 +5590,17 @@ prc_tessellate_compressed_face(prc_context *ctx, prc_data *data, uint32_t shell_
                 return code;
             }
 
-            if (first_trim_curve->curve_type == PRC_HCG_Circle && second_trim_curve->curve_type == PRC_HCG_Line)
+            if (first_trim_curve->curve_type == PRC_HCG_Circle &&
+                second_trim_curve->curve_type == PRC_HCG_Line)
             {
-                circle_curve = first_trim_curve;
-                line_curve = second_trim_curve;
+                circle_curve1 = first_trim_curve;
+                line_curve1 = second_trim_curve;
             }
-            else if (first_trim_curve->curve_type == PRC_HCG_Line && second_trim_curve->curve_type == PRC_HCG_Circle)
+            else if (first_trim_curve->curve_type == PRC_HCG_Line &&
+                second_trim_curve->curve_type == PRC_HCG_Circle)
             {
-                line_curve = first_trim_curve;
-                circle_curve = second_trim_curve;
+                line_curve1 = first_trim_curve;
+                circle_curve1 = second_trim_curve;
             }
             else
             {
@@ -5513,27 +5608,74 @@ prc_tessellate_compressed_face(prc_context *ctx, prc_data *data, uint32_t shell_
                 return PRC_ERROR_PARSE;
             }
 
-            code = prc_get_hcg_circle_data(ctx, &circle_curve->hcg_circle, &circle_info, compressed_data);
+            /* Per discussion with Patrick, the curve ARE ordered to form a loop,
+               however, if they are referenced due to being from another face,
+               then we have to flip them around. */
+
+
+
+            code = prc_get_hcg_circle_data(ctx, &circle_curve1->hcg_circle,
+                                           &circle_info1, compressed_data);
             if (code < 0)
             {
                 prc_error(ctx, code, "Failed to get circle data in prc_tessellate_compressed_face\n");
                 return code;
             }
-            code = prc_get_hcg_line_data(ctx, &line_curve->hcg_line, &line_start, &line_end, compressed_data);
+            code = prc_get_hcg_line_data(ctx, &line_curve1->hcg_line, &line_start1,
+                                         &line_end1, compressed_data);
             if (code < 0)
             {
                 prc_error(ctx, code, "Failed to get line data in prc_tessellate_compressed_face\n");
                 return code;
             }
 
-            code = prc_get_compressed_vertex(ctx, &face->iso_face.common_third_fourth_vertex,
-                &common_vertex, compressed_data);
-            if (code < 0)
+            if (face->iso_face.fourth_trim_curve_is_not_yet_saved &&
+                face->iso_face.third_trim_curve_is_not_yet_saved)
             {
-                prc_error(ctx, code, "Failed to get common vertex in prc_tessellate_compressed_face\n");
-                return code;
+                /* In this case, we will be deducing the third and fourth curves
+                   using the first ones AND the vertex */
+                code = prc_get_compressed_vertex(ctx, &face->iso_face.common_third_fourth_vertex,
+                                                 &common_vertex, compressed_data);
+                if (code < 0)
+                {
+                    prc_error(ctx, code, "Failed to get common vertex in prc_tessellate_compressed_face\n");
+                    return code;
+                }
+
+                /* First figure out our path. Figure out what is the shared point
+                   between the line1 and circle1 */
+                double dist[4], min_dist;
+                double index = 0;
+                dist[0] = prc_vec_dist_between_two_points(line_start1, circle_info1.start_point);
+                dist[1] = prc_vec_dist_between_two_points(line_start1, circle_info1.end_point);
+                dist[2] = prc_vec_dist_between_two_points(line_end1, circle_info1.start_point);
+                dist[3] = prc_vec_dist_between_two_points(line_end1, circle_info1.end_point);
+
+                min_dist = dist[0];
+                for (uint8_t k = 1; k < 4; k++)
+                {
+                    if (dist[k] < min_dist)
+                    {
+                        index = k;
+                        min_dist = dist[k];
+                    }
+                }
+                
+                /* Lets always start at the line point that is NOT shared, go
+                   to the circle, then to the circle end, then add the new line
+                   and then add the new circle */
+                if (index == 0 || index == 1)
+                {
+                    int zz = 1;
+                }
+            }
+            else
+            {
+                /* In this case we get curve three and four from the reference */
+
             }
 
+#if 0
             /* The missing bounds close the ISO cylinder parameter rectangle.
                Curve 3 is the line parallel to the supplied axis line, while
                curve 4 is the same circle translated by the line length along the axis. */
@@ -5655,6 +5797,7 @@ prc_tessellate_compressed_face(prc_context *ctx, prc_data *data, uint32_t shell_
                 prc_error(ctx, code, "Failed in prc_tessellate_surface for compressed ISO cylinder\n");
                 return code;
             }
+#endif
 
             break;
         }

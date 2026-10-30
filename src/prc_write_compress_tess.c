@@ -2182,6 +2182,28 @@ prc_encode_grow_triangle(prc_encode_state *st, const prc_encode_grow_op *op,
     return 0;
 }
 
+/* The reversed bit that keeps triangle cur's winding when normals are
+   recalculated. With must_recalculate_normals set, the decoder takes each
+   triangle's winding from its stored normal_is_reversed bit alone: a set bit
+   keeps the traversal order (idx0, idx1, idx2), a clear bit gives
+   (idx0, idx2, idx1) (prc_store_triangle_indices). So the bit is 1 exactly
+   when the traversal order mv[] is a rotation of the triangle's own order in
+   mesh->tri_indices. Exact, and needs no normal at all. */
+static uint8_t
+prc_encode_winding_reversed_bit(const prc_encode_state *st, uint32_t cur, const uint32_t mv[3])
+{
+    const uint32_t *t = &st->mesh->tri_indices[(size_t)cur * 3];
+    uint32_t j;
+
+    for (j = 0; j < 3; j++)
+    {
+        if (t[j] == mv[0])
+            return (uint8_t)(t[(j + 1) % 3] == mv[1]);
+    }
+    /* Cannot happen: mv[0] is one of triangle cur's own vertices. */
+    return 0;
+}
+
 /* Decide whether the just-finalized triangle (idx[]/mv[] already established
    by chain_start or grow_triangle for THIS traversal, not a stale baseline)
    should be marked normal_was_reversed, from the real supplied normal vs.
@@ -2937,22 +2959,27 @@ prc_encode_traversal(prc_context *ctx, const prc_encode_mesh *mesh,
                overrides both cases to 0, for comparison/regression testing. */
             if (prc_diag_getenv("PRC_DIAG_FORCE_UNREVERSED") != NULL)
                 st.tri_reversed[cur] = 0;
-            /* Inherit ONLY when the normals driving this decision are the
-               smoothed proxies built for the must_recalculate_normals path.
-               That is what the inheritance rule was for: a per-triangle
-               geometric call taken from an approximation is noisy, and
-               inheriting the chain's value beat it decisively (42.4% -> 1.9%
-               wrong-normal rate, 2026-08-10).
+            /* When normals are recalculated (the normals here are only
+               smoothed proxies), the decoder reads this bit as the triangle's
+               winding, so set it from the winding itself, for chain starts
+               and growing triangles alike.
 
-               When the caller supplied REAL per-corner normals the argument
-               inverts. There is no proxy noise, and the decoder derives each
-               triangle's winding from the decoded corner-0 normal
-               (prc_is_normal_reversed_single_normal) -- so inheriting a
-               parent's value is what creates a disagreement with what the
-               decoder will conclude. Deciding geometrically here is what
-               makes the two agree. */
-            else if (is_growing && normals_are_proxy)
-                st.tri_reversed[cur] = entering_reversed;
+               This replaces inheriting the parent's value along a chain
+               (2026-08-10), which was chosen against a proxy-normal error
+               measure and reversed the winding of every other triangle of a
+               strip: written without normals and read back, a 16-triangle
+               flat strip had all 15 of its shared edges inconsistently
+               wound, the unit cube 9 of 18. Independently written files
+               decoded the same way have consistent winding (prc-db,
+               3D-PDF-Example_CFD_Cooling: 0 of 620,898 edges), and set
+               this bit per triangle rather than per chain.
+
+               When the caller supplied REAL per-corner normals, the decoder
+               derives each triangle's winding from the decoded corner-0
+               normal (prc_is_normal_reversed_single_normal) instead, so the
+               geometric decision below is what makes the two agree. */
+            else if (normals_are_proxy)
+                st.tri_reversed[cur] = prc_encode_winding_reversed_bit(&st, cur, mv);
             else
                 st.tri_reversed[cur] = prc_encode_decide_reversed(&st, cur, idx, mv);
             out->triangle_reversed[emitted] = st.tri_reversed[cur];

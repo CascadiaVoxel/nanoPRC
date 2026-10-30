@@ -14,6 +14,32 @@
     along with nanoPRC. If not, see <https://www.gnu.org/licenses/>.
 */
 
+/* The version of the nanoPRC library itself -- not of the PRC format.
+
+   CMake configures this file into <build>/generated/prc_version.h, which is
+   on the nano_prc target's public include path. Both strings come from
+   `git describe --tags --dirty --always --match "v[0-9]*"` run in the
+   nanoPRC checkout being built (see CMakeLists.txt):
+
+     PRC_GIT_DESCRIBE  as git prints it: "v0.2.0" on a release tag,
+                       "v0.2.0-5-g1a2b3c4" five commits after one,
+                       "1a2b3c4" where no release tag is reachable, with
+                       "-dirty" appended if the working tree has
+                       uncommitted changes.
+     PRC_VERSION       the same with any leading "v" removed: "0.2.0".
+
+   Built from a copy that is not a git checkout (a source archive), both
+   fall back to the project version in CMakeLists.txt, "v0.1.0" and
+   "0.1.0". Release tags are vMAJOR.MINOR.PATCH (RELEASE_CHECKLIST.md).
+
+   The PRC format version numbers are separate, and private:
+     - read: the reader accepts files whose min_version_for_read is at most
+       10001 (ctx->internal.reader_version, set in src/prc_context.c);
+     - write: the writer declares 8137 as both min_version_for_read and
+       authoring_version (PRC_WRITE_MIN_VERS_FOR_READ and
+       PRC_WRITE_AUTH_VERS in src/prc_write_common.h, which explains the
+       choice). */
+
 #ifndef PRC_VERSION_H
 #define PRC_VERSION_H
 

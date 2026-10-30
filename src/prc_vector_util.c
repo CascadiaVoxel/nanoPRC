@@ -94,7 +94,7 @@ prc_vec_dist_between_two_points(prc_vec3 pt1, prc_vec3 pt2)
 {
     prc_vec3 diff;
     prc_vec_sub(pt1, pt2, &diff);
-    return prc_vec_length(diff);
+    return prc_vec_length_sqrt(diff);
 }
 
 void

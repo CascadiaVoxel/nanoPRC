@@ -99,6 +99,7 @@ void prc_vec_compute_find_normal_from_sides(prc_vec3 vec1, prc_vec3 vec2, prc_ve
 void prc_vec_set_triangle(prc_vec3 v0, prc_vec3 v1, prc_vec3 v2, prc_vec3 normal, uint8_t edge,
     prc_compress_triangle *triangle, double norm_test, uint8_t null_children);
 double prc_vec_dist_between_two_points(prc_vec3 pt1, prc_vec3 pt2);
+double prc_vec_dist_between_two_points_sqrt(prc_vec3 pt1, prc_vec3 pt2);
 int prc_vec_angle_between_vectors_normal(prc_vec3 vec1, prc_vec3 vec2, double *angle);
 
 #endif

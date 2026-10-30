@@ -4057,22 +4057,8 @@ prc_compressed_tess_get_indice_offset(prc_context *ctx, uint32_t *indices,
     return -1;
 }
 
-static uint8_t
-prc_compressed_tess_float_equal(float a, float b, double epsilon)
-{
-    double diff = (double)a - (double)b;
-    if (diff < 0.0)
-    {
-        diff = -diff;
-    }
-    return (diff <= epsilon) ? true : false;
-}
-
-/* Smoothing tuning knobs:
-    - COLOR_EPSILON/UV_EPSILON control seam matching tolerance.
+/* Smoothing tuning knob:
     - CREASE_HYSTERESIS_DEGREES stabilizes threshold behavior near crease_angle. */
-#define PRC_COMPRESSED_TESS_COLOR_EPSILON 1.0e-4
-#define PRC_COMPRESSED_TESS_UV_EPSILON 1.0e-5
 #define PRC_COMPRESSED_TESS_CREASE_HYSTERESIS_DEGREES 0.25
 #define PRC_LINE_EDGE_NORMAL_ANGLE_MIN_DEGREES 90.0
 #define PRC_LINE_EDGE_CONCAVE_DOT_EPSILON 1000
@@ -4088,14 +4074,16 @@ prc_compressed_tess_float_equal(float a, float b, double epsilon)
 #define PRC_COMPRESSED_TESS_EDGE_DEBUG 0
 #endif
 
+/* Whether the two triangles of an edge may share a smoothed normal. Only
+   prc_compressed_tess_apply_crease_angle calls this, and only for
+   tessellations without point colours, before any UVs are copied out
+   (prc_parse_tess_3d_compressed), so neither colours nor UVs are compared. */
 static uint8_t
 prc_compressed_tess_edge_attributes_compatible(prc_tess_3d_compressed *data,
     prc_compressed_tess_edge *edge)
 {
     uint32_t tri1 = edge->tri_one_indices_offset / 3;
     uint32_t tri2 = edge->tri_two_indices_offset / 3;
-    /* One colour per corner, in the corner order of the triangle indices. */
-    const float *corner_colors = data->point_colors_prc_compressed_3d;
     uint32_t tri1_face, tri2_face;
     uint8_t tri1_has_texture = true;
     uint8_t tri2_has_texture = true;
@@ -4124,71 +4112,13 @@ prc_compressed_tess_edge_attributes_compatible(prc_tess_3d_compressed *data,
         }
     }
 
-    /* Compare per-vertex attributes on the two shared edge vertices. */
+    /* Both edge vertices of the first triangle must be on the second's edge. */
     for (i = 0; i < 2; i++)
     {
-        uint32_t v1 = edge->tri_one_edge_indices[i];
-        uint32_t v2 = 0;
-        uint8_t found = false;
-        uint8_t j;
-
-        for (j = 0; j < 2; j++)
-        {
-            if (edge->tri_two_edge_indices[j] == v1)
-            {
-                v2 = edge->tri_two_edge_indices[j];
-                found = true;
-                break;
-            }
-        }
-
-        if (!found)
+        if (edge->tri_one_edge_indices[i] != edge->tri_two_edge_indices[0] &&
+            edge->tri_one_edge_indices[i] != edge->tri_two_edge_indices[1])
         {
             return false;
-        }
-
-        if (corner_colors != NULL)
-        {
-            /* The colours of each triangle's own corner at this vertex. Color
-               seams are checked with tolerance so tiny decode differences do
-               not prevent smoothing across an otherwise smooth edge. */
-            const float *c1 = NULL;
-            const float *c2 = NULL;
-            uint32_t c;
-
-            for (c = 0; c < 3; c++)
-            {
-                if (data->triangle_indices_prc_compressed_3d[tri1 * 3 + c] == v1)
-                    c1 = &corner_colors[(size_t)(tri1 * 3 + c) * 4];
-                if (data->triangle_indices_prc_compressed_3d[tri2 * 3 + c] == v2)
-                    c2 = &corner_colors[(size_t)(tri2 * 3 + c) * 4];
-            }
-            if (c1 == NULL || c2 == NULL)
-            {
-                return false;
-            }
-            for (c = 0; c < 4; c++)
-            {
-                if (!prc_compressed_tess_float_equal(c1[c], c2[c],
-                                                     PRC_COMPRESSED_TESS_COLOR_EPSILON))
-                {
-                    return false;
-                }
-            }
-        }
-
-        if (!data->no_texture && data->uv_coordinates_3d != NULL && tri1_has_texture)
-        {
-            /* UV seams are also tolerance-based to absorb quantization noise. */
-            if (!prc_compressed_tess_float_equal(data->uv_coordinates_3d[v1 * 2],
-                                                 data->uv_coordinates_3d[v2 * 2],
-                                                 PRC_COMPRESSED_TESS_UV_EPSILON) ||
-                !prc_compressed_tess_float_equal(data->uv_coordinates_3d[v1 * 2 + 1],
-                                                 data->uv_coordinates_3d[v2 * 2 + 1],
-                                                 PRC_COMPRESSED_TESS_UV_EPSILON))
-            {
-                return false;
-            }
         }
     }
 

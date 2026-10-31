@@ -407,6 +407,21 @@ extern "C"
 #endif
 
 /**
+ * @brief The version of the nanoPRC library that was built, as a string.
+ *
+ * The same string as PRC_VERSION in the generated prc_version.h: `git
+ * describe` of the nanoPRC checkout without its leading "v", such as
+ * "0.2.0" on a release tag or "0.2.0-5-g1a2b3c4" after one; a commit hash
+ * where no release tag is reachable; with "-dirty" for a build with
+ * uncommitted changes. Unlike PRC_VERSION, which a program sees as it was
+ * when the program was compiled, this reports the library actually loaded.
+ * It is not a PRC format version.
+ *
+ * @return A static, NUL-terminated string; never NULL, and not to be freed.
+ */
+PRC_EXPORT const char *prc_api_get_version(void);
+
+/**
  * @brief Create a new API context.
  *
  * @param hooks Optional allocation/logging hooks; pass NULL for defaults.

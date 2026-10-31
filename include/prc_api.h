@@ -407,6 +407,21 @@ extern "C"
 #endif
 
 /**
+ * @brief The version of the nanoPRC library that was built, as a string.
+ *
+ * The same string as PRC_VERSION in the generated prc_version.h: `git
+ * describe` of the nanoPRC checkout without its leading "v", such as
+ * "0.2.0" on a release tag or "0.2.0-5-g1a2b3c4" after one; a commit hash
+ * where no release tag is reachable; with "-dirty" for a build with
+ * uncommitted changes. Unlike PRC_VERSION, which a program sees as it was
+ * when the program was compiled, this reports the library actually loaded.
+ * It is not a PRC format version.
+ *
+ * @return A static, NUL-terminated string; never NULL, and not to be freed.
+ */
+PRC_EXPORT const char *prc_api_get_version(void);
+
+/**
  * @brief Create a new API context.
  *
  * @param hooks Optional allocation/logging hooks; pass NULL for defaults.
@@ -1670,6 +1685,35 @@ PRC_EXPORT int prc_api_write_prc_buffer(prc_context *ctx,
 PRC_EXPORT void prc_api_write_prc_buffer_free(prc_context *ctx, uint8_t *buf);
 
 /**
+ * @brief Bounding box of the model prc_api_write_prc_file would write, as
+ * placed by the tree's transforms.
+ *
+ * Takes the same tree and tessellation entries as prc_api_write_prc_file
+ * and checks them the same way. Each tessellation entry's box is taken from
+ * all its positions; every node that draws it moves that box by the
+ * transforms from the root down to the node, and the moved corners are
+ * added to the result. Under a rotation the result can be a little larger
+ * than the true box. The nodes' own bbox_min/bbox_max are not used: they
+ * are whatever the caller wrote there, in the node's own coordinates.
+ *
+ * Pass the result to prc_api_pdf_view_from_bounds for a default view.
+ *
+ * @param ctx              Active context.
+ * @param root             As for prc_api_write_prc_file.
+ * @param tess_entries     As for prc_api_write_prc_file.
+ * @param num_tess_entries As for prc_api_write_prc_file.
+ * @param min_out          Receives the box's lowest corner.
+ * @param max_out          Receives the box's highest corner.
+ * @param has_bounds       Receives 1, or 0 if the tree draws no positions
+ *                         (min_out and max_out are then left unchanged).
+ * @return 0 on success, negative PRC_ERROR_* code on input that
+ *         prc_api_write_prc_file would refuse.
+ */
+PRC_EXPORT int prc_api_write_bounds(prc_context *ctx, const prc_api_write_node *root,
+    const prc_api_write_tessellation *tess_entries, uint32_t num_tess_entries,
+    double min_out[3], double max_out[3], uint8_t *has_bounds);
+
+/**
  * @brief One named camera view for prc_api_pdf_embed_prc, written as a
  * 3DView dictionary referenced from the 3D stream's view array.
  *
@@ -1705,13 +1749,30 @@ typedef struct prc_pdf_write_options_s
     double page_height_pt;  /**< 0 => 594 (4:3-aspect landscape height,
                                   points; long edge is the 11in width). */
     double margin_pt;       /**< 0 => 36 (half an inch). */
-    /** Named views to embed, or NULL/0 for none -- in which case the 3D
-        stream carries no view array at all and a reader falls back to its
-        own auto-framed default view rather than one built from a guessed
-        camera position. */
+    /** Named views to embed, or NULL/0 for none. With none, the 3D stream
+        gets one view with lighting but no camera, and the framing is left
+        to the reader -- which Adobe Acrobat does badly (see
+        prc_api_pdf_view_from_bounds). Pass at least a default view. */
     const prc_pdf_view_spec *views;
     uint32_t num_views;
 } prc_pdf_write_options;
+
+/**
+ * @brief Fill `view` with a default view of a bounding box: named
+ * "Default", looking at the box's centre from +x, -y, +z with z up, from
+ * about 1.8 box diagonals away, with is_default set.
+ *
+ * A PDF 3D view with no camera leaves the framing to the reader, and Adobe
+ * Acrobat then often shows nothing until the model is fitted by hand, turns
+ * the model about a point away from it, and does nothing on Home. This view
+ * avoids all three. Get the box from prc_api_write_bounds.
+ *
+ * @param min  The box's lowest corner.
+ * @param max  The box's highest corner.
+ * @param view Receives the view. Its name points at a string constant.
+ */
+PRC_EXPORT void prc_api_pdf_view_from_bounds(const double min[3], const double max[3],
+    prc_pdf_view_spec *view);
 
 /**
  * @brief Embed an in-memory PRC byte stream into a new, minimal, single-

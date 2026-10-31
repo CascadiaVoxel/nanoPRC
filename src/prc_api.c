@@ -137,6 +137,18 @@ prc_api_open_contents(prc_context *ctx, const char *infile)
     return prc_open_contents(ctx, infile);
 }
 
+/* PRC_VERSION_STRING is set for the library targets by CMakeLists.txt, from
+   the same git describe as the generated prc_version.h. */
+#ifndef PRC_VERSION_STRING
+#define PRC_VERSION_STRING "unknown"
+#endif
+
+PRC_EXPORT const char *
+prc_api_get_version(void)
+{
+    return PRC_VERSION_STRING;
+}
+
 static void
 prc_api_helper_release_attributes(prc_context *ctx, prc_api_attributes *attribute)
 {

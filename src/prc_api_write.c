@@ -23,6 +23,8 @@
    conversion step is needed here, only supplying the (currently always
    empty) global color/material/style table those internals require. */
 
+#include <float.h>
+#include <string.h>
 #include "../include/prc_api.h"
 #include "prc_write_global.h"
 #include "prc_write_tree.h"
@@ -346,4 +348,205 @@ void
 prc_api_write_prc_buffer_free(prc_context *ctx, uint8_t *buf)
 {
     prc_free(ctx, buf);
+}
+
+/* One node to visit, with the transform from the root down to it. */
+typedef struct
+{
+    const prc_api_write_node *node;
+    prc_api_transform world;
+} prc_api_write_bounds_item;
+
+/* Grows lo/hi by every position of one tessellation entry. Returns 1 if the
+   entry has any. */
+static int
+prc_api_write_tess_bounds(const prc_api_write_tessellation *t, double lo[3], double hi[3])
+{
+    int found = 0;
+    uint32_t i, k;
+    int a;
+
+    if (t->kind == PRC_API_WRITE_TESS_KIND_WIRE)
+    {
+        for (k = 0; k < t->num_wire_elements; k++)
+        {
+            const prc_api_write_wire_element *w = &t->wire_elements[k];
+
+            for (i = 0; i < w->num_vertices; i++)
+                for (a = 0; a < 3; a++)
+                {
+                    double v = (double)w->positions[3 * (size_t)i + a];
+
+                    if (v < lo[a]) lo[a] = v;
+                    if (v > hi[a]) hi[a] = v;
+                    found = 1;
+                }
+        }
+        return found;
+    }
+
+    for (i = 0; i < t->num_positions; i++)
+        for (a = 0; a < 3; a++)
+        {
+            double v = t->positions[3 * (size_t)i + a];
+
+            if (v < lo[a]) lo[a] = v;
+            if (v > hi[a]) hi[a] = v;
+            found = 1;
+        }
+    return found;
+}
+
+int
+prc_api_write_bounds(prc_context *ctx, const prc_api_write_node *root,
+    const prc_api_write_tessellation *tess_entries, uint32_t num_tess_entries,
+    double min_out[3], double max_out[3], uint8_t *has_bounds)
+{
+    double *tess_box = NULL;     /* 6 per entry: lo[3], hi[3] */
+    uint8_t *tess_found = NULL;
+    prc_api_write_bounds_item *stack = NULL;
+    uint32_t top = 0, cap = 64, e;
+    uint64_t visits = 0;
+    double lo[3], hi[3];
+    int found = 0;
+    int code;
+    int a;
+
+    if (ctx == NULL || root == NULL || min_out == NULL || max_out == NULL || has_bounds == NULL)
+    {
+        prc_error(ctx, PRC_ERROR_INTERNAL, "prc_api_write_bounds: invalid arguments\n");
+        return PRC_ERROR_INTERNAL;
+    }
+    *has_bounds = 0;
+    code = prc_api_write_check_inputs(ctx, root, tess_entries, num_tess_entries);
+    if (code != 0)
+        return code;
+
+    /* Each entry's own box once, however many nodes draw it. */
+    if (num_tess_entries > 0)
+    {
+        tess_box = (double *)prc_malloc(ctx, (size_t)num_tess_entries * 6 * sizeof(double));
+        tess_found = (uint8_t *)prc_calloc(ctx, num_tess_entries, 1);
+        if (tess_box == NULL || tess_found == NULL)
+        {
+            code = PRC_ERROR_MEMORY;
+            goto done;
+        }
+    }
+    for (e = 0; e < num_tess_entries; e++)
+    {
+        double *b = &tess_box[6 * (size_t)e];
+
+        for (a = 0; a < 3; a++)
+        {
+            b[a] = DBL_MAX;
+            b[3 + a] = -DBL_MAX;
+        }
+        tess_found[e] = (uint8_t)prc_api_write_tess_bounds(&tess_entries[e], b, b + 3);
+    }
+
+    for (a = 0; a < 3; a++)
+    {
+        lo[a] = DBL_MAX;
+        hi[a] = -DBL_MAX;
+    }
+
+    stack = (prc_api_write_bounds_item *)prc_malloc(ctx, cap * sizeof(*stack));
+    if (stack == NULL)
+    {
+        code = PRC_ERROR_MEMORY;
+        goto done;
+    }
+    stack[0].node = root;
+    prc_api_set_transform_identity(ctx, &stack[0].world);
+    top = 1;
+    while (top > 0)
+    {
+        prc_api_write_bounds_item item = stack[--top];
+        const prc_api_write_node *node = item.node;
+        uint32_t k;
+
+        /* prc_api_write_check_inputs has already refused a tree this big. */
+        if (++visits > PRC_WRITE_MAX_TREE_VISITS)
+            break;
+
+        /* The node's own placement, applied after its parents' (see
+           prc_api_update_transform). */
+        if (node->has_transform && !node->is_identity)
+        {
+            prc_api_transform local;
+
+            memcpy(local.matrix, node->transform, sizeof(local.matrix));
+            local.is_identity = 0;
+            prc_api_update_transform(ctx, &item.world, &local);
+        }
+
+        for (k = 0; k < node->num_rep_items; k++)
+        {
+            uint32_t idx = node->rep_items[k].biased_tessellation_index - 1;
+            const double *b = &tess_box[6 * (size_t)idx];
+            int c;
+
+            if (!tess_found[idx])
+                continue;
+            for (c = 0; c < 8; c++)
+            {
+                double in[3], out[3];
+
+                in[0] = b[(c & 1) ? 3 : 0];
+                in[1] = b[(c & 2) ? 4 : 1];
+                in[2] = b[(c & 4) ? 5 : 2];
+                prc_api_transform_point(&item.world, in, out);
+                for (a = 0; a < 3; a++)
+                {
+                    if (out[a] < lo[a]) lo[a] = out[a];
+                    if (out[a] > hi[a]) hi[a] = out[a];
+                }
+            }
+            found = 1;
+        }
+
+        for (k = 0; k < node->num_children; k++)
+        {
+            if (top == cap)
+            {
+                prc_api_write_bounds_item *grown;
+
+                if (cap > 0x7FFFFFFFu / 2)
+                {
+                    code = PRC_ERROR_MEMORY;
+                    goto done;
+                }
+                grown = (prc_api_write_bounds_item *)prc_realloc(ctx, stack, (size_t)cap * 2 * sizeof(*stack));
+                if (grown == NULL)
+                {
+                    code = PRC_ERROR_MEMORY;
+                    goto done;
+                }
+                stack = grown;
+                cap *= 2;
+            }
+            stack[top].node = node->children[k];
+            stack[top].world = item.world;
+            top++;
+        }
+    }
+
+    if (found)
+    {
+        for (a = 0; a < 3; a++)
+        {
+            min_out[a] = lo[a];
+            max_out[a] = hi[a];
+        }
+        *has_bounds = 1;
+    }
+
+done:
+    if (code == PRC_ERROR_MEMORY)
+        prc_error(ctx, PRC_ERROR_MEMORY, "prc_api_write_bounds: allocation failed\n");
+    prc_free(ctx, stack);
+    prc_free(ctx, tess_found);
+    prc_free(ctx, tess_box);
+    return code;
 }

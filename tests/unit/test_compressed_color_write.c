@@ -50,8 +50,9 @@ typedef struct
     uint32_t num_normals;
     const uint32_t *tris;
     uint32_t num_triangles;
-    const uint8_t *colors;      /* 3 or 4 bytes per corner */
+    const uint8_t *colors;      /* 3 or 4 bytes per corner, or NULL */
     int have_alpha;
+    double crease_angle;        /* degrees; 0: the writer's default */
 } test_mesh;
 
 static int
@@ -76,8 +77,9 @@ write_mesh(prc_context *ctx, const test_mesh *m)
     tess_entry.tri_indices = m->tris;
     tess_entry.num_triangles = m->num_triangles;
     tess_entry.vertex_colors = m->colors;
-    tess_entry.num_vertex_colors = m->num_triangles * 3;
+    tess_entry.num_vertex_colors = m->colors != NULL ? m->num_triangles * 3 : 0;
     tess_entry.vertex_colors_have_alpha = m->have_alpha;
+    tess_entry.crease_angle_degrees = m->crease_angle;
 
     memset(&ri, 0, sizeof(ri));
     ri.kind = PRC_WRITE_RI_SURFACE;
@@ -304,6 +306,101 @@ test_grid(prc_context *ctx)
     check_corners(ctx, &m);
 }
 
+/* Reads the file back and checks the recalculated normals were smoothed:
+   with no edge sharper than the crease angle, every corner at a position
+   has the same unit normal, pointing up (+z) as the grid's triangles do.
+   Left as one flat normal per triangle, corners at a shared position differ,
+   since no two neighbouring triangles of the grid lie in one plane. */
+static void
+check_smooth_normals(prc_context *ctx, const test_mesh *m)
+{
+    prc_data *pd;
+    prc_tess_3d_compressed *t;
+    uint32_t a, b, k, shared = 0;
+    uint32_t num_corners;
+
+    pd = (prc_data *)prc_api_open_contents(ctx, TEST_PRC_FILENAME);
+    if (pd == NULL)
+        prc_print_error_stack(ctx);
+    PRC_ASSERT_NOT_NULL(pd);
+    t = pd->file_struct[0].tessellation->tess[0].tess_3d_compressed;
+    PRC_ASSERT_NOT_NULL(t);
+    PRC_ASSERT_EQ(t->must_recalculate_normals, 1);
+    PRC_ASSERT_EQ(t->triangle_face_array_size, m->num_triangles);
+    num_corners = m->num_triangles * 3;
+    PRC_ASSERT_EQ(t->num_normal_indices_prc_compressed_3d, num_corners);
+
+    for (a = 0; a < num_corners; a++)
+    {
+        const double *pa = &t->vertices_prc_compressed_3d[(size_t)t->triangle_indices_prc_compressed_3d[a] * 3];
+        const double *na = &t->normals_prc_compressed_3d[(size_t)t->normal_indices_prc_compressed_3d[a] * 3];
+
+        PRC_ASSERT_NEAR(na[0] * na[0] + na[1] * na[1] + na[2] * na[2], 1.0, 1e-6);
+        PRC_ASSERT(na[2] > 0.5);
+        for (b = a + 1; b < num_corners; b++)
+        {
+            const double *pb = &t->vertices_prc_compressed_3d[(size_t)t->triangle_indices_prc_compressed_3d[b] * 3];
+            const double *nb = &t->normals_prc_compressed_3d[(size_t)t->normal_indices_prc_compressed_3d[b] * 3];
+
+            if (a / 3 == b / 3 || !same_position(pa, pb))
+                continue;
+            shared++;
+            for (k = 0; k < 3; k++)
+                PRC_ASSERT_NEAR(na[k], nb[k], 1e-6);
+        }
+    }
+    /* Every interior position is shared by six corners: the check above
+       compared something. */
+    PRC_ASSERT(shared > m->num_triangles);
+
+    prc_api_release_data(ctx, (prc_api_data)pd, NULL, 0, NULL, 0, NULL, 0, NULL);
+}
+
+/* The 6x6 grid with no normals supplied, so the reader recalculates them and
+   smooths them across edges below the crease angle. A colour on every corner
+   once skipped the smoothing and left the mesh faceted. The same grid
+   without colours is checked first, as the case that always smoothed. */
+static void
+test_grid_smoothed(prc_context *ctx)
+{
+    double pos[36 * 3];
+    uint32_t tris[50 * 3];
+    uint8_t colors[50 * 3 * 3];
+    test_mesh m;
+    uint32_t x, y, n = 0;
+
+    for (y = 0; y < 6; y++)
+        for (x = 0; x < 6; x++)
+        {
+            pos[(y * 6 + x) * 3 + 0] = (double)x;
+            pos[(y * 6 + x) * 3 + 1] = (double)y;
+            pos[(y * 6 + x) * 3 + 2] = 0.2 * sin((double)(x + 2 * y));
+        }
+    for (y = 0; y < 5; y++)
+        for (x = 0; x < 5; x++)
+        {
+            uint32_t a = y * 6 + x, b = a + 1, c = a + 7, d = a + 6;
+            tris[n * 3 + 0] = a; tris[n * 3 + 1] = b; tris[n * 3 + 2] = c; n++;
+            tris[n * 3 + 0] = a; tris[n * 3 + 1] = c; tris[n * 3 + 2] = d; n++;
+        }
+    memset(&m, 0, sizeof(m));
+    m.positions = pos; m.num_positions = 36;
+    m.tris = tris; m.num_triangles = n;
+    /* Well above the grid's sharpest edge, so every edge is smoothed. */
+    m.crease_angle = 60.0;
+
+    printf("  sub-case: 6x6 grid, no colours, recalculated normals are smoothed\n");
+    PRC_ASSERT_EQ(write_mesh(ctx, &m), 0);
+    check_smooth_normals(ctx, &m);
+
+    printf("  sub-case: 6x6 grid, a colour per corner, recalculated normals are smoothed\n");
+    make_colors(colors, n, 0);
+    m.colors = colors;
+    PRC_ASSERT_EQ(write_mesh(ctx, &m), 0);
+    check_smooth_normals(ctx, &m);
+    check_corners(ctx, &m);
+}
+
 static void
 test_refusals(prc_context *ctx)
 {
@@ -347,6 +444,7 @@ main(void)
 
     test_cube(ctx);
     test_grid(ctx);
+    test_grid_smoothed(ctx);
     test_refusals(ctx);
 
     prc_release_context(ctx);

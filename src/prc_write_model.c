@@ -214,7 +214,7 @@ prc_write_main_header_bytes(uint8_t *out, uint32_t section_count, const uint32_t
     p = prc_write_le_uint32(p, prc_write_diag_min_vers_for_read());
     p = prc_write_le_uint32(p, prc_write_diag_auth_vers());
     p = prc_write_le_unique_id(p, PRC_WRITE_FILE_UID0);
-    p = prc_write_le_unique_id(p, PRC_WRITE_APP_UID0);
+    p = prc_write_le_app_unique_id(p);
     p = prc_write_le_uint32(p, 1); /* filestructure_count */
 
     /* Must equal the file-structure header's own unique_id_file

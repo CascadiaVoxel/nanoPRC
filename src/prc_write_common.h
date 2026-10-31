@@ -68,14 +68,20 @@ uint8_t *prc_write_le_uint32(uint8_t *p, uint32_t v);
    this write facility goes back to treating it as independent. PRC_WRITE_
    APP_UID0 (authoring application identity) is likewise independent of
    both in every real file checked so far. A future revision could
-   generate these per call instead of reusing fixed values. */
+   generate these per call instead of reusing fixed values.
+
+   The application identifier is not a placeholder: it names nanoPRC (see
+   prc_app_id.h) and is written by prc_write_le_app_unique_id. */
 #define PRC_WRITE_FILE_UID0 1u
-#define PRC_WRITE_APP_UID0 2u
 #define PRC_WRITE_FILE_STRUCT_UID0 3u
 
 /* Writes a 4x uint32 unique id {word0, 0, 0, 0} as raw little-endian bytes
    at `p`, returning p + 16 (PRC_WRITE_UNIQUE_ID_BYTES). */
 uint8_t *prc_write_le_unique_id(uint8_t *p, uint32_t word0);
+
+/* Writes nanoPRC's application identifier (prc_app_id.h) as raw
+   little-endian bytes at `p`, returning p + 16. */
+uint8_t *prc_write_le_app_unique_id(uint8_t *p);
 
 /* min_vers_for_read / auth_vers, written in both the main prc_header and
    every PRC_TYPE_ASM_FileStructure header (Tables 5/37). Confirmed the

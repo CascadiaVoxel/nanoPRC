@@ -16,6 +16,7 @@
 
 #include <string.h>
 #include "prc_write_common.h"
+#include "prc_app_id.h"
 
 int
 prc_write_name(prc_context *ctx, prc_bit_write_state *s, const char *name)
@@ -52,6 +53,16 @@ prc_write_le_unique_id(uint8_t *p, uint32_t word0)
     p = prc_write_le_uint32(p, 0);
     p = prc_write_le_uint32(p, 0);
     p = prc_write_le_uint32(p, 0);
+    return p;
+}
+
+uint8_t *
+prc_write_le_app_unique_id(uint8_t *p)
+{
+    p = prc_write_le_uint32(p, PRC_NANOPRC_APP_UID0);
+    p = prc_write_le_uint32(p, PRC_NANOPRC_APP_UID1);
+    p = prc_write_le_uint32(p, PRC_NANOPRC_APP_UID2);
+    p = prc_write_le_uint32(p, PRC_NANOPRC_APP_UID3);
     return p;
 }
 

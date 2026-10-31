@@ -17,6 +17,7 @@
 #include "prc_internal_api.h"
 #include "prc_api_debug.h"
 #include "prc_data.h"
+#include "prc_app_id.h"
 #include <stdio.h>
 #include <string.h>
 #include <stdint.h> /* for UINT32_MAX */
@@ -4573,4 +4574,22 @@ prc_api_get_face_material(prc_context *ctx, const prc_api_tess *api_tess,
         material->specular_alpha = 1.0f;
         material->shininess = 0.0f;
     }
+}
+
+/* The main header's unique_id_application against nanoPRC's own (see
+   prc_app_id.h). */
+PRC_EXPORT int
+prc_api_written_by_nanoprc(prc_context *ctx, prc_api_data data_in)
+{
+    prc_data *data = (prc_data *)data_in;
+    const prc_unique_id *id;
+
+    (void)ctx;
+    if (data == NULL || data->header == NULL)
+        return 0;
+    id = &data->header->unique_id_application;
+    return id->unique_id0 == PRC_NANOPRC_APP_UID0 &&
+           id->unique_id1 == PRC_NANOPRC_APP_UID1 &&
+           id->unique_id2 == PRC_NANOPRC_APP_UID2 &&
+           id->unique_id3 == PRC_NANOPRC_APP_UID3;
 }

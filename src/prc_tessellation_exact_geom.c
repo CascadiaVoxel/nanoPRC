@@ -174,6 +174,10 @@ static int prc_get_surface_data(prc_context *ctx, prc_type_surf *surface,
 static int prc_get_curve_sample_info(prc_context *ctx, prc_ptr_curve *ptr_curve,
     prc_curve_sampling_info *sample_info);
 
+/* Forward declaration - used by prc_get_compressed_curve_start_end before the function body appears */
+static int prc_get_start_end_data(prc_context *ctx, prc_start_end_data *data,
+    prc_vec3 *start, prc_vec3 *end, prc_nano_brep_compressed_data *compressed_data);
+
 /* Forward declaration - used in curves before surfaces occur */
 static int prc_get_surface_eval_func(prc_context *ctx, prc_type_surf *surface,
     surface_func *eval_func, void **params);
@@ -665,16 +669,12 @@ prc_evaluate_circle_compressed(prc_context *ctx, void *params, double input)
        instead of the un-normalized 'info->normal' parameter */
     prc_vec_cross(normal, basis_vector1, &basis_vector2);
 
-    /* ADJUSTMENT: If the circle_angle_bit indicates a long arc (> pi),
-       interpolate across the flipped range (2*pi - theta) */
-    if (info->has_circle_angle_bit && info->circle_angle_bit)
-    {
-        target_angle = input * (2.0 * PRC_PI - info->theta);
-    }
-    else
-    {
-        target_angle = input * info->theta;
-    }
+    /* theta already accounts for circle_angle_bit: for a general circle
+       prc_get_hcg_circle_data negates the normal when the bit is set, and
+       prc_compute_hcg_circle_theta measures the angle about that normal, so
+       a long arc arrives here as 2*pi minus the short angle. Flipping it
+       again would sweep the short angle the wrong way round. */
+    target_angle = input * info->theta;
 
     scale1 = cos(target_angle);
     scale2 = sin(target_angle);

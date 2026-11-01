@@ -76,6 +76,7 @@ set(PRC_CORE_SOURCES
 	"src/prc_write_tree.c"
 	"src/prc_write_file_structure.c"
 	"src/prc_write_model.c"
+	"src/prc_write_ablate.c"
 	"src/prc_write_pdf.c"
 	"src/prc_write_pdf_3d.c"
 	"src/prc_context.c"

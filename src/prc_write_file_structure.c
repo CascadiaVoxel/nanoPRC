@@ -17,6 +17,7 @@
 #include <stdio.h>
 #include <string.h>
 #include "prc_write_file_structure.h"
+#include "prc_write_ablate.h"
 #include "prc_write_tess_3d.h"
 #include "prc_write_compress_tess.h"
 #include "prc_data.h"
@@ -413,6 +414,7 @@ prc_write_deflate(prc_context *ctx, const uint8_t *src, size_t src_len, uint8_t 
     uLong bound;
     uint8_t *dst;
     int ret;
+    prc_write_ablation ablation;
 
     if (ctx == NULL || out == NULL || out_len == NULL || (src == NULL && src_len > 0))
     {
@@ -420,8 +422,10 @@ prc_write_deflate(prc_context *ctx, const uint8_t *src, size_t src_len, uint8_t 
         return PRC_ERROR_INTERNAL;
     }
 
+    /* PRC_DIAG_ABLATE_DEFLATE: zlib format, stored blocks only. */
+    prc_write_ablation_get(&ablation);
     memset(&strm, 0, sizeof(strm));
-    if (deflateInit(&strm, Z_DEFAULT_COMPRESSION) != Z_OK)
+    if (deflateInit(&strm, ablation.deflate ? Z_NO_COMPRESSION : Z_DEFAULT_COMPRESSION) != Z_OK)
     {
         prc_error(ctx, PRC_ERROR_INTERNAL, "prc_write_deflate: deflateInit failed\n");
         return PRC_ERROR_INTERNAL;

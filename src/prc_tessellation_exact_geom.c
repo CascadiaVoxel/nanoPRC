@@ -669,16 +669,12 @@ prc_evaluate_circle_compressed(prc_context *ctx, void *params, double input)
        instead of the un-normalized 'info->normal' parameter */
     prc_vec_cross(normal, basis_vector1, &basis_vector2);
 
-    /* ADJUSTMENT: If the circle_angle_bit indicates a long arc (> pi),
-       interpolate across the flipped range (2*pi - theta) */
-    if (info->has_circle_angle_bit && info->circle_angle_bit)
-    {
-        target_angle = input * (2.0 * PRC_PI - info->theta);
-    }
-    else
-    {
-        target_angle = input * info->theta;
-    }
+    /* theta already accounts for circle_angle_bit: for a general circle
+       prc_get_hcg_circle_data negates the normal when the bit is set, and
+       prc_compute_hcg_circle_theta measures the angle about that normal, so
+       a long arc arrives here as 2*pi minus the short angle. Flipping it
+       again would sweep the short angle the wrong way round. */
+    target_angle = input * info->theta;
 
     scale1 = cos(target_angle);
     scale2 = sin(target_angle);

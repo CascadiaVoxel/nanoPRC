@@ -5798,50 +5798,104 @@ prc_create_deduced_curve(prc_context *ctx, prc_compressed_curve *src_curve,
                 prc_vec_negate(&des_normal);
             }
 
-            /* Compute the new circle center using validated Chord Bisector math */
-            prc_vec3 chord, chord_mid, bisector_dir, des_center;
+            /* Compute fundamental chord geometry first to check tracking bounds */
+            prc_vec3 chord, chord_mid;
             prc_vec_sub(des_end, des_start, &chord);
             prc_vec_avg(des_start, des_end, &chord_mid);
-
             double half_chord_len = prc_vec_length_sqrt(chord) / 2.0;
 
-            prc_vec_cross(chord, des_normal, &bisector_dir);
-            prc_vec_normalize(&bisector_dir);
-
-            double dist_to_center = 0.0;
-            if (radius > half_chord_len)
-            {
-                dist_to_center = sqrt((radius * radius) - (half_chord_len * half_chord_len));
-            }
-
-            prc_vec3 offset_vec = bisector_dir;
-            prc_vec_scale(dist_to_center, &offset_vec);
-
-            /* Generate both prospective center points */
-            prc_vec3 center_pos, center_neg;
-            prc_vec_add(chord_mid, offset_vec, &center_pos);
-            prc_vec_sub(chord_mid, offset_vec, &center_neg);
-
-            /* Dot - product loop sign selection logic */
-            prc_vec3 src_chord, src_chord_mid, src_to_center;
-            prc_vec_sub(info.end_point, info.start_point, &src_chord);
-            prc_vec_avg(info.start_point, info.end_point, &src_chord_mid);
-            prc_vec_sub(info.center, src_chord_mid, &src_to_center);
-
+            prc_vec3 des_center;
             int use_negative_offset = 0;
-            if (prc_vec_dot_product(bisector_dir, src_to_center) < 0.0) {
-                use_negative_offset = 1;
+
+            /* Determine if this is a Coaxial Varying-Radius surface (Cone, Sphere Latitudes, Torus Major) */
+            int is_coaxial_varying = 0;
+            if (torus_data->type == PRC_MAJOR_ISO_TORUS_CIRCLE)
+            {
+                is_coaxial_varying = 1;
+            }
+            else if (torus_data->type != PRC_MINOR_ISO_TORUS_CIRCLE)
+            {
+                /* Check 1: Is the new chord too wide to fit the old radius? (Expanding Cone/Sphere) */
+                if (radius <= half_chord_len)
+                {
+                    is_coaxial_varying = 1;
+                }
+                else
+                {
+                    /* Check 2: Has the plane shifted along the axis normal? (Shrinking Cone/Sphere)
+                       If the vector from the old center to the new chord midpoint points along
+                       the normal axis, the circles are parallel but non-coplanar. */
+                    prc_vec3 center_to_mid;
+                    prc_vec_sub(chord_mid, info.center, &center_to_mid);
+                    double axial_shift = fabs(prc_vec_dot_product(center_to_mid, raw_normal));
+
+                    /* If the shift along the axis is non-trivial, it's a cone or sphere latitude */
+                    if (axial_shift > 1e-5)
+                    {
+                        is_coaxial_varying = 1;
+                    }
+                }
             }
 
-            if (use_negative_offset)
+            if (is_coaxial_varying)
             {
-                des_center = center_neg;
+                /* --- IAN'S AXIAL PROJECTION RULE ---
+                   Find the foot of the perpendicular from des_start onto the source axis line.
+                   The axis line passes through info.center along the direction of raw_normal. */
+                prc_vec3 v_to_start;
+                prc_vec_sub(des_start, info.center, &v_to_start);
+
+                double t = prc_vec_dot_product(v_to_start, raw_normal);
+
+                prc_vec3 axis_offset = raw_normal;
+                prc_vec_scale(t, &axis_offset);
+                prc_vec_add(info.center, axis_offset, &des_center);
+
+                /* Recalculate true radius for this height/level */
+                prc_vec3 new_rad_vec;
+                prc_vec_sub(des_start, des_center, &new_rad_vec);
+                radius = prc_vec_length_sqrt(new_rad_vec);
             }
             else
             {
-                des_center = center_pos;
-            }
+                /* --- STANDARD CHORD BISECTOR RULE --- (Cylinders, Sphere Meridians, Torus Minors) */
+                prc_vec3 bisector_dir;
+                prc_vec_cross(chord, des_normal, &bisector_dir);
+                prc_vec_normalize(&bisector_dir);
 
+                double dist_to_center = 0.0;
+                if (radius > half_chord_len)
+                {
+                    dist_to_center = sqrt((radius * radius) - (half_chord_len * half_chord_len));
+                }
+
+                prc_vec3 offset_vec = bisector_dir;
+                prc_vec_scale(dist_to_center, &offset_vec);
+
+                /* Generate both prospective center points */
+                prc_vec3 center_pos, center_neg;
+                prc_vec_add(chord_mid, offset_vec, &center_pos);
+                prc_vec_sub(chord_mid, offset_vec, &center_neg);
+
+                /* Dot-product loop sign selection logic */
+                prc_vec3 src_chord, src_chord_mid, src_to_center;
+                prc_vec_sub(info.end_point, info.start_point, &src_chord);
+                prc_vec_avg(info.start_point, info.end_point, &src_chord_mid);
+                prc_vec_sub(info.center, src_chord_mid, &src_to_center);
+
+                if (prc_vec_dot_product(bisector_dir, src_to_center) < 0.0) {
+                    use_negative_offset = 1;
+                }
+
+                if (use_negative_offset)
+                {
+                    des_center = center_neg;
+                }
+                else
+                {
+                    des_center = center_pos;
+                }
+            }
 #if 0
             printf("\n---[ DEDUCE CURVE DEBUG ]---\n");
             printf("src_reversed state:    %d\n", src_reversed);
@@ -5861,7 +5915,6 @@ prc_create_deduced_curve(prc_context *ctx, prc_compressed_curve *src_curve,
             printf("Final Assigned Center: (%.6f, %.6f, %.6f)\n", des_center.x, des_center.y, des_center.z);
             printf("----------------------------\n\n");
 #endif
-
             /* Assign results back to destination structures */
             if (src_curve->hcg_circle.is_particular_circle)
             {
@@ -5875,16 +5928,22 @@ prc_create_deduced_curve(prc_context *ctx, prc_compressed_curve *src_curve,
 
                 if (p_circle_des->full_circle)
                 {
-                    p_circle_des->center.point = p_circle_src->center.point;
+                    p_circle_des->center.point = des_center;
                     p_circle_des->normal_plane.point = des_normal;
                 }
                 else
                 {
-                    prc_vec3 mid_arc_offset = bisector_dir;
-                    if (use_negative_offset) {
-                        prc_vec_negate(&mid_arc_offset);
+                    prc_vec3 mid_arc_offset;
+                    if (is_coaxial_varying)
+                    {
+                        /* For axial projection, compute mid-arc directly outward from center to chord midpoint */
+                        prc_vec_sub(chord_mid, des_center, &mid_arc_offset);
+                        prc_vec_normalize(&mid_arc_offset);
                     }
-                    /* Scale the mid-arc offset in-place */
+                    else
+                    {
+                        mid_arc_offset = raw_normal; /* base reference fallback */
+                    }
                     prc_vec_scale(radius, &mid_arc_offset);
                     prc_vec_add(des_center, mid_arc_offset, &p_circle_des->middle_of_arc.point);
                 }
@@ -5907,15 +5966,18 @@ prc_create_deduced_curve(prc_context *ctx, prc_compressed_curve *src_curve,
             if (torus_data->type == PRC_MAJOR_ISO_TORUS_CIRCLE)
             {
                 torus_data->normal = raw_normal;
-                torus_data->center = des_curve->hcg_circle.is_particular_circle ?
-                    des_curve->hcg_circle.particular_circle.center.point :
-                    des_curve->hcg_circle.general_circle.center.point;
+                torus_data->center = des_center;
             }
             break;
         }
+
         case  PRC_HCG_BsplineHermiteCurve:
+            prc_error(ctx, PRC_ERROR_PARSE, "Unsupported curve type in prc_get_compressed_curve_start_end\n");
+            return PRC_ERROR_PARSE;
             break;
         case PRC_HCG_CompositeCurve:
+            prc_error(ctx, PRC_ERROR_PARSE, "Unsupported curve type in prc_get_compressed_curve_start_end\n");
+            return PRC_ERROR_PARSE;
             break;
         default:
             prc_error(ctx, PRC_ERROR_PARSE, "Unsupported curve type in prc_get_compressed_curve_start_end\n");

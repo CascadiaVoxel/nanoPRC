@@ -775,6 +775,16 @@ prc_huff_build_tree(prc_context *ctx, const uint32_t *values, uint32_t count,
     }
     prc_free(ctx, sorted);
 
+    /* PRC_DIAG_ABLATE_HUFFMAN (prc_write_ablate.h): every value present gets
+       the same weight, so the tree is balanced and the codes no shorter for
+       common values than for rare ones. */
+    if (prc_diag_getenv("PRC_DIAG_ABLATE_HUFFMAN") != NULL)
+    {
+        uint32_t di;
+        for (di = 0; di < distinct_count; di++)
+            distinct_freqs[di] = 1;
+    }
+
     if (prc_diag_getenv("PRC_DIAG_HUFF_FREQ") != NULL)
     {
         uint32_t di;
@@ -1698,6 +1708,9 @@ prc_bitwrite_character_array(prc_context *ctx, prc_bit_write_state *state,
        entirely. Zero behavior change when unset. */
     if (compressed && prc_diag_getenv("PRC_DIAG_FORCE_UNCOMPRESSED_CHARARRAY") != NULL)
         compressed = 0;
+    /* PRC_DIAG_ABLATE_HUFFMAN: plain wherever the writer has the choice. */
+    if (compressed && has_comp_bit && prc_diag_getenv("PRC_DIAG_ABLATE_HUFFMAN") != NULL)
+        compressed = 0;
     if (has_comp_bit)
         if (prc_bitwrite_bit(ctx, state, compressed) != 0)
             return -1;
@@ -1785,6 +1798,19 @@ prc_bitwrite_short_array(prc_context *ctx, prc_bit_write_state *state,
        above (PRC_DIAG_FORCE_UNCOMPRESSED_CHARARRAY). */
     if (compressed && prc_diag_getenv("PRC_DIAG_FORCE_UNCOMPRESSED_CHARARRAY") != NULL)
         compressed = 0;
+    /* PRC_DIAG_ABLATE_HUFFMAN: plain, but only when every value survives the
+       plain form's 16 bits; otherwise the Huffman block, with equal-length
+       codes. */
+    if (compressed && prc_diag_getenv("PRC_DIAG_ABLATE_HUFFMAN") != NULL)
+    {
+        compressed = 0;
+        for (k = 0; k < data_size; k++)
+            if (data[k] < 0 || data[k] > 0xFFFF)
+            {
+                compressed = 1;
+                break;
+            }
+    }
     if (has_comp_bit)
         if (prc_bitwrite_bit(ctx, state, compressed) != 0)
             return -1;

@@ -19,6 +19,7 @@
 #include <string.h>
 #include <math.h>
 #include "prc_write_model.h"
+#include "prc_write_ablate.h"
 #include "prc_data.h"
 #include "prc_diag_env.h"
 
@@ -343,12 +344,25 @@ prc_write_texture_picture(prc_context *ctx, prc_write_global_tables *tables, uin
     const uint8_t *image, size_t image_size, uint32_t width, uint32_t height)
 {
     prc_write_picture pic;
+    prc_write_ablation ablation;
 
     if (image == NULL || image_size == 0)
     {
         prc_error(ctx, PRC_ERROR_INTERNAL,
             "prc_write_add_item_style: has_texture with no image\n");
         return 0;
+    }
+
+    /* PRC_DIAG_ABLATE_TINY_TEXTURES: the same small image in place of every
+       one, so the images' own size drops out of the file. */
+    prc_write_ablation_get(&ablation);
+    if (ablation.tiny_textures)
+    {
+        format = PRC_API_WRITE_TEXTURE_RGB;
+        image = prc_write_ablation_tiny_rgb;
+        image_size = sizeof(prc_write_ablation_tiny_rgb);
+        width = PRC_WRITE_ABLATION_TINY_SIZE;
+        height = PRC_WRITE_ABLATION_TINY_SIZE;
     }
 
     memset(&pic, 0, sizeof(pic));
@@ -466,6 +480,12 @@ prc_write_add_item_style(prc_context *ctx, prc_write_global_tables *tables,
     uint32_t biased_color_index, biased_material_index;
     uint32_t biased_ambient, biased_specular, biased_emissive;
     double alpha = ri->material_alpha;
+    prc_write_ablation ablation;
+    int textured;
+
+    /* PRC_DIAG_ABLATE_TEXTURES: the item keeps its material only. */
+    prc_write_ablation_get(&ablation);
+    textured = ri->has_texture && !ablation.textures;
 
     biased_color_index = prc_write_add_rgb(ctx, tables, ri->material_color);
     if (biased_color_index == 0)
@@ -521,7 +541,7 @@ prc_write_add_item_style(prc_context *ctx, prc_write_global_tables *tables,
         return 0;
     }
 
-    if (ri->has_texture)
+    if (textured)
     {
         prc_graph_material app;
         uint32_t biased_picture, biased_definition, biased_app;
@@ -717,6 +737,7 @@ prc_write_prc_buffer(prc_context *ctx,
     size_t file_struct_header_size;
     uint8_t *buf = NULL;
     size_t total_size;
+    prc_write_ablation ablation;
 
     memset(&item_styles, 0, sizeof(item_styles));
     memset(&schema_s, 0, sizeof(schema_s));
@@ -733,6 +754,10 @@ prc_write_prc_buffer(prc_context *ctx,
     }
     *out_buf = NULL;
     *out_size = 0;
+
+    prc_write_ablation_get(&ablation);
+    if (prc_write_ablation_any(&ablation))
+        prc_write_ablation_report(&ablation);
 
     default_style_index = prc_write_add_default_style(ctx, tables);
     if (default_style_index == 0)
@@ -781,6 +806,20 @@ prc_write_prc_buffer(prc_context *ctx,
     if (prc_bitwrite_init(ctx, &model_s, 256) != 0) goto cleanup;
     if (prc_write_model_file_to_stream(ctx, &model_s, model_name, root_biased_index, 1) != 0) goto cleanup;
     if (prc_bitwrite_flush(ctx, &model_s) != 0) goto cleanup;
+
+    /* PRC_DIAG_ABLATE_DUMP_DIR: each section as written, before deflate. */
+    if (ablation.dump_dir != NULL)
+    {
+        uint32_t call = prc_write_ablation_next_call();
+
+        prc_write_ablation_dump_section(&ablation, call, 1, "schema_globals", schema_s.buf, schema_s.byte_pos);
+        prc_write_ablation_dump_section(&ablation, call, 2, "tree", tree_s.buf, tree_s.byte_pos);
+        prc_write_ablation_dump_section(&ablation, call, 3, "tessellation", tess_s.buf, tess_s.byte_pos);
+        prc_write_ablation_dump_section(&ablation, call, 4, "geometry", geom_s.buf, geom_s.byte_pos);
+        prc_write_ablation_dump_section(&ablation, call, 5, "extra_geometry", extra_geom_s.buf,
+            extra_geom_s.byte_pos);
+        prc_write_ablation_dump_section(&ablation, call, 6, "model", model_s.buf, model_s.byte_pos);
+    }
 
     if (prc_write_deflate(ctx, schema_s.buf, schema_s.byte_pos, &schema_comp, &schema_comp_len) != 0) goto cleanup;
     if (prc_write_deflate(ctx, tree_s.buf, tree_s.byte_pos, &tree_comp, &tree_comp_len) != 0) goto cleanup;

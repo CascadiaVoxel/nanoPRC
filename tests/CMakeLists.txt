@@ -119,6 +119,34 @@ add_executable(test_write_validation tests/unit/test_write_validation.c)
 target_link_libraries(test_write_validation prc_static)
 target_include_directories(test_write_validation PRIVATE tests)
 add_test(NAME test_write_validation COMMAND test_write_validation)
+
+# The write pipeline's ablation switches (src/prc_write_ablate.h). The plain
+# run checks that nothing is ablated without a switch; the others exist only
+# where the switches do, in a PRC_ENABLE_DIAG_ENV build.
+add_executable(test_write_ablation tests/unit/test_write_ablation.c)
+target_link_libraries(test_write_ablation prc_static)
+target_include_directories(test_write_ablation PRIVATE tests)
+add_test(NAME test_write_ablation COMMAND test_write_ablation)
+if(PRC_ENABLE_DIAG_ENV)
+  set(PRC_ABLATION_DUMP_DIR "${CMAKE_CURRENT_BINARY_DIR}/ablation_dump")
+  file(MAKE_DIRECTORY "${PRC_ABLATION_DUMP_DIR}")
+  add_test(NAME test_write_ablation_normals COMMAND test_write_ablation)
+  set_tests_properties(test_write_ablation_normals PROPERTIES
+    ENVIRONMENT "PRC_DIAG_ABLATE_NORMALS=1")
+  add_test(NAME test_write_ablation_colors_deflate COMMAND test_write_ablation)
+  set_tests_properties(test_write_ablation_colors_deflate PROPERTIES
+    ENVIRONMENT "PRC_DIAG_ABLATE_COLORS=1;PRC_DIAG_ABLATE_DEFLATE=1;PRC_DIAG_ABLATE_DUMP_DIR=${PRC_ABLATION_DUMP_DIR}")
+  add_test(NAME test_write_ablation_tiny_huffman COMMAND test_write_ablation)
+  set_tests_properties(test_write_ablation_tiny_huffman PROPERTIES
+    ENVIRONMENT "PRC_DIAG_ABLATE_TINY_TEXTURES=1;PRC_DIAG_ABLATE_HUFFMAN=1")
+  add_test(NAME test_write_ablation_all COMMAND test_write_ablation)
+  set_tests_properties(test_write_ablation_all PROPERTIES
+    ENVIRONMENT "PRC_DIAG_ABLATE_NORMALS=1;PRC_DIAG_ABLATE_COLORS=1;PRC_DIAG_ABLATE_TEXTURES=1;PRC_DIAG_ABLATE_HUFFMAN=1;PRC_DIAG_ABLATE_DEFLATE=1;PRC_DIAG_ABLATE_DUMP_DIR=${PRC_ABLATION_DUMP_DIR}")
+  # Each run writes and removes the same files.
+  set_tests_properties(test_write_ablation test_write_ablation_normals
+    test_write_ablation_colors_deflate test_write_ablation_tiny_huffman test_write_ablation_all
+    PROPERTIES RESOURCE_LOCK prc_write_ablation)
+endif()
 add_executable(test_schema_bounds tests/unit/test_schema_bounds.c)
 target_link_libraries(test_schema_bounds prc_static)
 target_include_directories(test_schema_bounds PRIVATE tests)

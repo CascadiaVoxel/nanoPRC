@@ -113,6 +113,26 @@ available.
 Kraft sum of the stored code lengths — the property that distinguishes a textbook-optimal tree (sum 1)
 from the phantom-wrapped shape real PRC producers emit (sum exactly 1/2, one wasted leading bit).
 
+#### Ablating parts of the write pipeline
+
+For measuring how much each stage of the writer contributes to a file's size, these switches turn one
+off at a time. Each is on when its variable is set; every file written with them is still valid PRC,
+and the writer prints the switches in use on stderr.
+
+| Variable | Effect |
+|---|---|
+| `PRC_DIAG_ABLATE_NORMALS` | Supplied normals dropped: TRIANGLES entries recalculate (`must_calculate_normals`), COMPRESSED entries take their recalculated-normals path |
+| `PRC_DIAG_ABLATE_COLORS` | Vertex colours dropped |
+| `PRC_DIAG_ABLATE_TEXTURES` | Texture coordinates, textures and texture layers dropped; materials kept |
+| `PRC_DIAG_ABLATE_TINY_TEXTURES` | Every texture image replaced by one 2 x 2 RGB image (red, green, blue, white); texture coordinates kept |
+| `PRC_DIAG_ABLATE_HUFFMAN` | Huffman codes built with every value weighted equally (equal-length codes); arrays the format lets the writer leave uncoded are written plain |
+| `PRC_DIAG_ABLATE_DEFLATE` | Every deflated stream stored at zlib level 0 |
+| `PRC_DIAG_ABLATE_DUMP_DIR` | Each section's bytes before deflate also written to this directory, for entropy coders tried outside nanoPRC |
+
+Because they act at `prc_api_write_prc_file`/`prc_api_write_prc_buffer`, any writer built on the public
+API (`nano_prc_stl_import`, the OBJ and PLY importers) can be measured unchanged. See
+`src/prc_write_ablate.h` for the details of each.
+
 ### Deterministic Unzipped-Section Fuzzing
 
 For robustness testing of parser error paths, you can fuzz only the unzipped PRC section buffers

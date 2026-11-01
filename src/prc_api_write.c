@@ -30,6 +30,7 @@
 #include "prc_write_tree.h"
 #include "prc_write_file_structure.h"
 #include "prc_write_model.h"
+#include "prc_write_ablate.h"
 
 /* Every count, index and pointer the caller passes is checked here, before
    the encoder reads any of it. The encoder trusts what it is given, so a NULL
@@ -297,6 +298,9 @@ prc_api_write_prc_file(prc_context *ctx, const char *filename,
     const prc_api_write_tessellation *tess_entries, uint32_t num_tess_entries)
 {
     prc_write_global_tables tables;
+    prc_write_ablation ablation;
+    prc_write_ablated_entries ablated;
+    const prc_api_write_tessellation *entries;
     int code;
 
     if (ctx == NULL || filename == NULL || root == NULL)
@@ -308,12 +312,24 @@ prc_api_write_prc_file(prc_context *ctx, const char *filename,
     if (code != 0)
         return code;
 
-    if (prc_write_global_tables_init(ctx, &tables) != 0)
-        return PRC_ERROR_MEMORY;
+    /* The ablation switches (prc_write_ablate.h) act on a copy, after the
+       caller's own entries have been checked. */
+    prc_write_ablation_get(&ablation);
+    code = prc_write_ablation_apply_entries(ctx, &ablation, tess_entries, num_tess_entries,
+        &ablated, &entries);
+    if (code != 0)
+        return code;
 
-    code = prc_write_prc_file(ctx, filename, model_name, &tables, root, tess_entries, num_tess_entries);
+    if (prc_write_global_tables_init(ctx, &tables) != 0)
+    {
+        prc_write_ablation_free_entries(ctx, &ablated);
+        return PRC_ERROR_MEMORY;
+    }
+
+    code = prc_write_prc_file(ctx, filename, model_name, &tables, root, entries, num_tess_entries);
 
     prc_write_global_tables_free(ctx, &tables);
+    prc_write_ablation_free_entries(ctx, &ablated);
     return code;
 }
 
@@ -324,6 +340,9 @@ prc_api_write_prc_buffer(prc_context *ctx,
     uint8_t **out_buf, size_t *out_size)
 {
     prc_write_global_tables tables;
+    prc_write_ablation ablation;
+    prc_write_ablated_entries ablated;
+    const prc_api_write_tessellation *entries;
     int code;
 
     if (ctx == NULL || root == NULL || out_buf == NULL || out_size == NULL)
@@ -335,12 +354,24 @@ prc_api_write_prc_buffer(prc_context *ctx,
     if (code != 0)
         return code;
 
-    if (prc_write_global_tables_init(ctx, &tables) != 0)
-        return PRC_ERROR_MEMORY;
+    /* The ablation switches (prc_write_ablate.h) act on a copy, after the
+       caller's own entries have been checked. */
+    prc_write_ablation_get(&ablation);
+    code = prc_write_ablation_apply_entries(ctx, &ablation, tess_entries, num_tess_entries,
+        &ablated, &entries);
+    if (code != 0)
+        return code;
 
-    code = prc_write_prc_buffer(ctx, model_name, &tables, root, tess_entries, num_tess_entries, out_buf, out_size);
+    if (prc_write_global_tables_init(ctx, &tables) != 0)
+    {
+        prc_write_ablation_free_entries(ctx, &ablated);
+        return PRC_ERROR_MEMORY;
+    }
+
+    code = prc_write_prc_buffer(ctx, model_name, &tables, root, entries, num_tess_entries, out_buf, out_size);
 
     prc_write_global_tables_free(ctx, &tables);
+    prc_write_ablation_free_entries(ctx, &ablated);
     return code;
 }
 

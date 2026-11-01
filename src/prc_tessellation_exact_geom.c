@@ -174,6 +174,10 @@ static int prc_get_surface_data(prc_context *ctx, prc_type_surf *surface,
 static int prc_get_curve_sample_info(prc_context *ctx, prc_ptr_curve *ptr_curve,
     prc_curve_sampling_info *sample_info);
 
+/* Forward declaration - used by prc_get_compressed_curve_start_end before the function body appears */
+static int prc_get_start_end_data(prc_context *ctx, prc_start_end_data *data,
+    prc_vec3 *start, prc_vec3 *end, prc_nano_brep_compressed_data *compressed_data);
+
 /* Forward declaration - used in curves before surfaces occur */
 static int prc_get_surface_eval_func(prc_context *ctx, prc_type_surf *surface,
     surface_func *eval_func, void **params);

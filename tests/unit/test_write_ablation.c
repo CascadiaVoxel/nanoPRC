@@ -30,6 +30,7 @@
 #include "prc_data.h"
 #include "prc_api.h"
 #include "prc_write_ablate.h"
+#include "prc_bit.h"
 
 static const char *PRC_PATH = "test_write_ablation_output.prc";
 
@@ -129,6 +130,51 @@ file_size(const char *path)
     n = ftell(f);
     fclose(f);
     return n;
+}
+
+/* A bit-length table whose compression the writer may choose
+   (has_comp_bit set), with a negative step: references 0, 9 and 14 need 2, 6
+   and 5 bits, so the deltas after the first are +4 and -1. With
+   PRC_DIAG_ABLATE_HUFFMAN the table is written plain, one 8-bit character per
+   value, and a negative delta must then be a whole signed char (-1 = 0xFF), as
+   in the short reference arrays (test_bitwrite's
+   test_short_indice_array_signed_char): Adobe Acrobat reads the 6-bit pattern
+   (-1 = 0x3F) as +63 and fails on the file. Without the switch the table is
+   Huffman-coded. Either way it must read back. */
+static void
+test_indice_array_plain_sign(prc_context *ctx, int huffman_off)
+{
+    static const int32_t data[3] = { 0, 9, 14 };
+    prc_bit_write_state w;
+    prc_bit_state r;
+    int32_t *out;
+    uint32_t out_size = 0, i;
+
+    printf("  sub-case: a flagged bit-length table with a negative step is %s\n",
+        huffman_off ? "written plain, -1 as 0xFF" : "Huffman-coded");
+    PRC_ASSERT_EQ(prc_bitwrite_init(ctx, &w, 16), 0);
+    PRC_ASSERT_EQ(prc_bitwrite_compressed_indice_array(ctx, &w, data, 3, 1, 0), 0);
+    PRC_ASSERT_EQ(w.error, 0);
+    PRC_ASSERT_EQ(prc_bitwrite_flush(ctx, &w), 0);
+
+    prc_init_bit_state(ctx, &r, w.buf, w.byte_pos);
+    PRC_ASSERT_EQ(prc_bitread_bit(ctx, &r), huffman_off ? 0 : 1);
+    if (huffman_off)
+    {
+        PRC_ASSERT_EQ(prc_bitread_uint32(ctx, &r), 3);
+        PRC_ASSERT_EQ(prc_bitread_uint8(ctx, &r), 2);
+        PRC_ASSERT_EQ(prc_bitread_uint8(ctx, &r), 4);
+        PRC_ASSERT_EQ(prc_bitread_uint8(ctx, &r), 0xFF);
+    }
+
+    prc_init_bit_state(ctx, &r, w.buf, w.byte_pos);
+    out = prc_bitread_compressed_indice_array(ctx, &r, &out_size, 1, 0);
+    PRC_ASSERT_NOT_NULL(out);
+    PRC_ASSERT_EQ(out_size, 3);
+    for (i = 0; i < 3; i++)
+        PRC_ASSERT_EQ(out[i], data[i]);
+    prc_free(ctx, out);
+    prc_bitwrite_release(ctx, &w);
 }
 
 int
@@ -244,6 +290,8 @@ main(void)
             PRC_ASSERT(file_size(PRC_PATH) > sum);
         }
     }
+
+    test_indice_array_plain_sign(ctx, env("PRC_DIAG_ABLATE_HUFFMAN"));
 
     remove(PRC_PATH);
     PRC_ASSERT_EQ(prc_api_release_context(ctx), 0);

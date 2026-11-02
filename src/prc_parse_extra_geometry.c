@@ -407,6 +407,7 @@ prc_parse_general_circle(prc_context *ctx, prc_bit_state *bit_state,
         return code;
     }
 
+    /* True if circle_angle is greater than PI */
     data->circle_angle = prc_bitread_bit(ctx, bit_state);
 
     return 0;
@@ -1709,18 +1710,12 @@ prc_parse_compressed_weights(prc_context *ctx, prc_bit_state *bit_state,
 /* Table 225 CompressedKnots */
 static int
 prc_parse_compressed_knots(prc_context *ctx, prc_bit_state *bit_state,
-    uint32_t num_knots, prc_compressed_knots *data)
+                           uint32_t num_knots, prc_compressed_knots *data)
 {
     int code;
     uint32_t i;
-
-    /* type_param can have one of the following values:
-        0 for uniform parameterization (in which case we would not be here).
-        1 for non-uniform parameterization (is_unknown_form is true).
-        2 for pseudo-uniform parameterization, meaning that the parameterization
-          is uniform except for extremities, mostly coming from a trim applied
-          uniformly. (is_pseudo_uniform is true) Then I think we just encode
-          two points */
+    uint32_t knots_to_read = 0;
+    double tolerance = 0.0;
 
     data->is_unknown_form = prc_bitread_bit(ctx, bit_state);
     if (!data->is_unknown_form)
@@ -1729,25 +1724,48 @@ prc_parse_compressed_knots(prc_context *ctx, prc_bit_state *bit_state,
 
         if (data->is_pseudo_uniform)
         {
-            num_knots = 2; /* Only two knots to read */
+            /* Force the parser to only consume the 2 stored extremity knots */
+            /* The file 3dpdf-Aero-LandingGear.pdf hits this multiple times */
+            knots_to_read = 2;
+
+            /* TODO: Log or flag this so we can examine the raw data later */
         }
     }
 
     data->number_bit_parameter = prc_bitread_uint_variable_bit(ctx, bit_state, 6);
 
-    if (!prc_bitread_count_fits(bit_state, (uint64_t)(num_knots)))
+    /* Assign knots_to_read for the standard general form if not already assigned */
+    if (!data->is_pseudo_uniform)
+    {
+        if (num_knots < 2)
+        {
+            prc_error(ctx, PRC_ERROR_PARSE, "Invalid knot count in prc_parse_compressed_knots\n");
+            return PRC_ERROR_PARSE;
+        }
+        knots_to_read = num_knots - 2;
+    }
+
+    if (!prc_bitread_count_fits(bit_state, (uint64_t)(knots_to_read)))
     {
         prc_error(ctx, PRC_ERROR_PARSE, "Count larger than the rest of the section in prc_parse_compressed_knots\n");
         return PRC_ERROR_PARSE;
     }
-    data->compressed_knots = (prc_compressed_knot *)prc_calloc(ctx, num_knots, sizeof(prc_compressed_knot));
+
+    data->compressed_knots = (prc_compressed_knot *)prc_calloc(ctx, knots_to_read,
+                                                               sizeof(prc_compressed_knot));
     if (!data->compressed_knots)
     {
         prc_error(ctx, PRC_ERROR_MEMORY, "Memory allocation failed in prc_parse_compressed_knots\n");
         return PRC_ERROR_MEMORY;
     }
 
-    for (i = 0; i < num_knots; i++)
+    /* Pre-compute the correct tolerance parameter scale */
+    if (data->number_bit_parameter <= 30 && data->number_bit_parameter > 0)
+    {
+        tolerance = 1.0 / (double)((1ULL) << (data->number_bit_parameter - 1));
+    }
+
+    for (i = 0; i < knots_to_read; i++)
     {
         if (data->number_bit_parameter > 30)
         {
@@ -1756,7 +1774,7 @@ prc_parse_compressed_knots(prc_context *ctx, prc_bit_state *bit_state,
         else
         {
             data->compressed_knots[i].knot = prc_bitread_double_with_variable_bit_number(ctx,
-                                                bit_state, data->number_bit_parameter + 1, 0.0);
+                bit_state, data->number_bit_parameter + 1, tolerance);
         }
     }
 
@@ -2052,20 +2070,19 @@ prc_parse_compressed_nurbs(prc_context *ctx, prc_bit_state *bit_state,
         return code;
     }
 
-    /* Confusing how described in text. Arrived at by trial and error */
-    number_knots_in_u = data->number_stored_knots_in_u - 2;
-    number_knots_in_v = data->number_stored_knots_in_v - 2;
-
-    code = prc_parse_compressed_knot_vector(ctx, bit_state, number_knots_in_u,
-        &data->knot_vector_u);
+    /* Clear and explicit mapping: pass the total distinct knot count.
+       The internal parser functions will compute the (-2) adjustment internally
+       for the un-stored interior elements. */
+    code = prc_parse_compressed_knot_vector(ctx, bit_state, data->number_stored_knots_in_u,
+                                            &data->knot_vector_u);
     if (code < 0)
     {
         prc_error(ctx, code, "Failed in prc_parse_compressed_knot_vector\n");
         return code;
     }
 
-    code = prc_parse_compressed_knot_vector(ctx, bit_state, number_knots_in_v,
-        &data->knot_vector_v);
+    code = prc_parse_compressed_knot_vector(ctx, bit_state, data->number_stored_knots_in_v,
+                                            &data->knot_vector_v);
     if (code < 0)
     {
         prc_error(ctx, code, "Failed in prc_parse_compressed_knot_vector\n");

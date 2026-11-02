@@ -89,6 +89,7 @@ int prc_vec_normalize(prc_vec3 *vec);
 int prc_vec_angle_between_vectors(prc_vec3 vec1, prc_vec3 vec2, double *angle);
 int prc_vec_vectors_are_equal(prc_vec3 vec1, prc_vec3 vec2, double epsilon);
 double prc_vec_length(prc_vec3 vec);
+double prc_vec_length_sqrt(prc_vec3 vec);
 void prc_vec_cross(prc_vec3 vec1, prc_vec3 vec2, prc_vec3 *output);
 double prc_vec_dot_product(prc_vec3 vec1, prc_vec3 vec2);
 void prc_vec_copy(prc_vec3 vec_in, prc_vec3 *vec_out, uint8_t negate);

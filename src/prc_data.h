@@ -4052,6 +4052,8 @@ void prc_release_nano_brep_ref_data(prc_context *ctx, prc_nano_brep_ref_data *da
    caller printing the stack after an overall success does not see complaints
    about an attempt that was abandoned on purpose. */
 void prc_error_pop(prc_context *ctx);
+
+/* Prototype for main entry point of exact geometry tessellation */
 int prc_approximate_objects_exact_geom(prc_context *ctx, prc_api_data data_in, uint32_t *num_tessellations);
 
 #endif

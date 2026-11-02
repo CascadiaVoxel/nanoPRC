@@ -103,6 +103,12 @@ set(PRC_CORE_SOURCES
 	"src/prc_decode_compressed_tess.c"
 	"src/prc_decode_markup_tess.c"
 	"src/prc_tessellation_exact_geom.c"
+	"src/prc_tessellation_exact_geom_curves.c"
+	"src/prc_tessellation_exact_geom_utils.c"
+    "src/prc_tessellation_exact_geom_ana_iso.c"
+	"src/prc_tessellation_exact_geom_core.c"
+	"src/prc_tessellation_exact_geom_surfaces.c"
+	"src/prc_tessellation_exact_geom_refs.c"
 	)
 
 add_library(nano_prc SHARED ${PRC_CORE_SOURCES})

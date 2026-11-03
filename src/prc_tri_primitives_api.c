@@ -2043,6 +2043,7 @@ prc_api_helper_get_material_from_style_index(prc_context *ctx, prc_api_data data
     prc_file_structure_header *header;
     int code;
     prc_graph_material prc_material;
+    uint8_t no_colour = 0;
     *had_defined_style = 0;
     *is_pure_color = 0;
 
@@ -2060,11 +2061,21 @@ prc_api_helper_get_material_from_style_index(prc_context *ctx, prc_api_data data
     style->face_style_file_index = file_index;
     style->face_style_index = style_index;
 
+    /* A style whose biased_color_index is 0 ("color_index + 1" with no index)
+       has no colour or material of its own, so it takes the default below. */
+    if (global_data->styles != NULL &&
+        style_index < global_data->style_count &&
+        global_data->styles[style_index].biased_color_index == 0)
+    {
+        no_colour = 1;
+    }
+
     if (global_data->styles == NULL ||
         file_index >= data->file_structure_count ||
-        style_index >= data->file_struct[file_index].globals->global_data.style_count)
+        style_index >= data->file_struct[file_index].globals->global_data.style_count ||
+        no_colour)
     {
-        /* No styles in global. Or error. Use a default
+        /* No styles in global, a style with no colour, or error. Use a default
            diffuse: 192, 192, 192
            specular: 192, 192, 192
            ambient: 30, 30, 30
@@ -2130,11 +2141,6 @@ prc_api_helper_get_material_from_style_index(prc_context *ctx, prc_api_data data
         else
         {
             alpha = 1.0;
-        }
-
-        if (global_data->styles[style_index].biased_color_index == 0)
-        {
-            return PRC_ERROR_PARSE;
         }
 
         int32_t color_index_unbiased = global_data->styles[style_index].biased_color_index - 1;

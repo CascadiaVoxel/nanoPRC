@@ -54,6 +54,7 @@ prc_init_huff_bit_state(prc_context *ctx, prc_bit_state *state, uint8_t* ptr, in
     state->bit_position = 0;
     state->overrun = 0;
     state->curr_name = NULL;
+    state->curr_name_size = 0;
 }
 
 void
@@ -65,6 +66,7 @@ prc_init_bit_state(prc_context *ctx, prc_bit_state *state, uint8_t *ptr, size_t 
     state->bit_position = 0;
     state->overrun = 0;
     state->curr_name = NULL;
+    state->curr_name_size = 0;
 
 #if 1
    // if (ctx->reset_graphics_state)

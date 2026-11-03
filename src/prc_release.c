@@ -34,10 +34,8 @@ prc_release_name(prc_context *ctx, prc_name *data)
     if (data == NULL)
         return;
 
-    if (!data->same)
-    {
-        prc_release_string(ctx, &data->name);
-    }
+    /* A name that is the same as the current name holds its own copy */
+    prc_release_string(ctx, &data->name);
 }
 
 static void

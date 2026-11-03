@@ -21,7 +21,7 @@
 #include <math.h>
 #include <string.h>
 
-int
+static int
 prc_apply_linear_math_transform(prc_context *ctx, prc_math_fct_3d_linear *linear,
     prc_vec3 base_point, prc_vec3 *output)
 {
@@ -40,7 +40,7 @@ prc_apply_linear_math_transform(prc_context *ctx, prc_math_fct_3d_linear *linear
     return 0;
 }
 
-int
+static int
 prc_apply_nonlinear_math_transform(prc_context *ctx, prc_math_fct_3d_nonlinear *nonlinear,
     prc_vec3 base_point, prc_vec3 *output)
 {

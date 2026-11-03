@@ -54,8 +54,8 @@ AGPL-3.0-or-later.
 
 ## Links
 
-- Source: https://github.com/mvrhel/nanoPRC
-- Issues: https://github.com/mvrhel/nanoPRC/issues
+- Source: https://github.com/CascadiaVoxel/nanoPRC
+- Issues: https://github.com/CascadiaVoxel/nanoPRC/issues
 
 ## Maintainer and Development Docs
 

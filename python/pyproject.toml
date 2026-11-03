@@ -23,9 +23,9 @@ classifiers = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/mvrhel/nanoPRC"
-Repository = "https://github.com/mvrhel/nanoPRC"
-Issues = "https://github.com/mvrhel/nanoPRC/issues"
+Homepage = "https://github.com/CascadiaVoxel/nanoPRC"
+Repository = "https://github.com/CascadiaVoxel/nanoPRC"
+Issues = "https://github.com/CascadiaVoxel/nanoPRC/issues"
 
 [tool.scikit-build]
 cmake.version = ">=3.20"

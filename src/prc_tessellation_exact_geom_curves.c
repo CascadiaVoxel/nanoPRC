@@ -21,7 +21,7 @@
 #include <math.h>
 #include <string.h>
 
-int
+static int
 prc_get_hcg_line_data(prc_context *ctx, prc_hcg_line *data,
     prc_vec3 *start, prc_vec3 *end, prc_nano_brep_compressed_data *compressed_data)
 {
@@ -1049,7 +1049,7 @@ prc_evaluate_composite(prc_context *ctx, void *params, double u)
     return output;
 }
 
-int
+static int
 prc_get_compressed_curve_sample_info(prc_context *ctx, prc_compressed_curve *curve,
     prc_curve_sampling_info *sample_info)
 {
@@ -1075,7 +1075,7 @@ prc_get_compressed_curve_sample_info(prc_context *ctx, prc_compressed_curve *cur
         if (!curve->hcg_circle.information_valid)
         {
             code = prc_get_hcg_circle_data(ctx, &curve->hcg_circle,
-                &curve->hcg_circle.circle_data, NULL);
+                &curve->hcg_circle.circle_data, ctx->internal.nano_compressed_brep_ref_data);
             if (code < 0)
             {
                 prc_error(ctx, PRC_ERROR_INTERNAL, "Failed in prc_get_hcg_circle_data\n");

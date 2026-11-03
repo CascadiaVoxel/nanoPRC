@@ -86,6 +86,7 @@ void prc_vec_sub(prc_vec3 vec1, prc_vec3 vec2, prc_vec3 *output);
 void prc_vec_add(prc_vec3 vec1, prc_vec3 vec2, prc_vec3 *output);
 int prc_vec_compute_normal_vector(prc_vec3 v0, prc_vec3 v1, prc_vec3 v2, double theta, double phi, prc_vec3 *normal);
 int prc_vec_normalize(prc_vec3 *vec);
+int prc_vec_normalize_sqrt(prc_vec3 *vec);
 int prc_vec_angle_between_vectors(prc_vec3 vec1, prc_vec3 vec2, double *angle);
 int prc_vec_vectors_are_equal(prc_vec3 vec1, prc_vec3 vec2, double epsilon);
 double prc_vec_length(prc_vec3 vec);

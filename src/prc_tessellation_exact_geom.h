@@ -212,8 +212,6 @@ int prc_sample_compressed_curve_store_in_body(prc_context *ctx, prc_data *data, 
 int prc_sample_curve(prc_context *ctx, prc_content_wire_edge *curve, prc_exact_geom_wire_data *wire_data);
 int prc_get_curve_eval_func(prc_context *ctx, prc_ptr_curve *curve, curve_func *eval_func, void **params, double *min_u, double *max_u);
 int prc_get_hcg_circle_data(prc_context *ctx, prc_hcg_circle *hcg_circle, prc_hcg_circle_information *info, prc_nano_brep_compressed_data *compressed_data);
-int prc_get_hcg_line_data(prc_context *ctx, prc_hcg_line *data, prc_vec3 *start, prc_vec3 *end, prc_nano_brep_compressed_data *compressed_data);
-int prc_get_compressed_curve_sample_info(prc_context *ctx, prc_compressed_curve *curve, prc_curve_sampling_info *sample_info);
 
 /* Ana-Iso prototypes */
 int prc_tessellate_compressed_face(prc_context *ctx, prc_data *data, uint32_t shell_index, uint32_t face_index, prc_compressed_face *topo_face, prc_nano_brep_compressed_data *compressed_data);
@@ -236,8 +234,6 @@ prc_vec3 prc_exact_geom_apply_transform(prc_context *ctx, const prc_exact_geom_t
 int prc_exact_geom_set_transform(prc_context *ctx, prc_exact_geom_transform *exact_geom_trans, const prc_trans_3d *prc_trans);
 int prc_invert_exact_transform(prc_context *ctx, prc_exact_geom_transform *transform_in, prc_exact_geom_transform *inverse_transform_out);
 int prc_apply_math_transform(prc_context *ctx, prc_math_fct_3d *function, prc_vec3 base_point, prc_vec3 *output);
-int prc_apply_nonlinear_math_transform(prc_context *ctx, prc_math_fct_3d_nonlinear *nonlinear, prc_vec3 base_point, prc_vec3 *output);
-int prc_apply_linear_math_transform(prc_context *ctx, prc_math_fct_3d_linear *linear, prc_vec3 base_point, prc_vec3 *output);
 void prc_bspline_basis_funs(uint32_t span, double u, uint32_t degree, const double *knots, double *N);
 
 #endif

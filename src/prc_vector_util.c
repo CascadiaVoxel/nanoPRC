@@ -128,6 +128,23 @@ prc_vec_normalize(prc_vec3 *vec)
         return PRC_VEC_ERROR;
 }
 
+/* Normalize but use sqrt length method */
+int
+prc_vec_normalize_sqrt(prc_vec3 *vec)
+{
+    double len = prc_vec_length_sqrt(*vec);
+
+    if (len >= FLT_EPSILON)
+    {
+        vec->x = vec->x / len;
+        vec->y = vec->y / len;
+        vec->z = vec->z / len;
+        return 0;
+    }
+    else
+        return PRC_VEC_ERROR;
+}
+
 /* Compute the angle between two vectors. A special version for dealing with theta1
    theta2 and theta3 which require much care in precision */
 int

@@ -499,10 +499,10 @@ prc_build_iso_torus_from_circle_data(prc_context *ctx,
 static int
 prc_convert_comp_curve_to_coedge(prc_context *ctx,
     prc_compressed_curve *comp_curve, prc_coedge_in_loop *coedge,
-    uint8_t coedge_orientation, prc_nano_brep_compressed_data *compressed_data)
+    uint8_t coedge_orientation, uint8_t curve_deduced,
+    prc_nano_brep_compressed_data *compressed_data)
 {
     int code;
-    prc_compressed_curve *curve = NULL;
     prc_topo_coedge *topo_coedge = NULL;
     prc_topo_single_wire_compress *topo_single_wire_compress = NULL;
 
@@ -547,7 +547,26 @@ prc_convert_comp_curve_to_coedge(prc_context *ctx,
     topo_single_wire_compress = topo_coedge->ptr_topology.topo->topo_single_wire_compress;
     topo_single_wire_compress->tag = PRC_TYPE_TOPO_SingleWireBodyCompress;
     topo_single_wire_compress->ref_or_compressed_curve.curve_is_not_already_stored = 1;
-    topo_single_wire_compress->ref_or_compressed_curve.compressed_curve = curve;
+
+    if (curve_deduced)
+    {
+        /* In this case the incoming curve was on the stack and we need to allocate
+           copy and then free later */
+        prc_compressed_curve *new_curve = (prc_compressed_curve *)prc_calloc(ctx, 1, sizeof(prc_compressed_curve));
+        if (new_curve == NULL)
+        {
+            prc_error(ctx, PRC_ERROR_MEMORY, "Failed to allocate memory for prc_compressed_curve\n");
+            return PRC_ERROR_MEMORY;
+        }
+        memcpy(new_curve, comp_curve, sizeof(prc_compressed_curve));
+        topo_single_wire_compress->ref_or_compressed_curve.compressed_curve = new_curve;
+        topo_single_wire_compress->ref_or_compressed_curve.is_deduced_curve = 1;
+    }
+    else
+    {
+        topo_single_wire_compress->ref_or_compressed_curve.compressed_curve = comp_curve;
+        topo_single_wire_compress->ref_or_compressed_curve.is_deduced_curve = 0;
+    }
     topo_single_wire_compress->ref_data = compressed_data;
 
     return 0;
@@ -630,7 +649,7 @@ prc_convert_compref_curve_to_coedge(prc_context *ctx,
 /* In the ISO surface case, add the four curves to a loop */
 static int
 prc_convert_iso_curves_to_std_loop(prc_context *ctx, prc_compressed_curve **curves,
-    prc_ptr_topology *synthetic_loop, uint8_t *coedge_orientation,
+    prc_ptr_topology *synthetic_loop, uint8_t *coedge_orientation, uint8_t *curve_deduced,
     prc_nano_brep_compressed_data *compressed_data)
 {
     int code;
@@ -664,7 +683,8 @@ prc_convert_iso_curves_to_std_loop(prc_context *ctx, prc_compressed_curve **curv
     for (j = 0; j < curve_count; ++j)
     {
         prc_coedge_in_loop *coedge = &synthetic_loop->topo->topo_loop->coedge[j];
-        code = prc_convert_comp_curve_to_coedge(ctx, curves[j], coedge, coedge_orientation[j], compressed_data);
+        code = prc_convert_comp_curve_to_coedge(ctx, curves[j], coedge,
+            coedge_orientation[j], curve_deduced[j], compressed_data);
         if (code < 0)
         {
             prc_error(ctx, code, "Failed to convert ana loop to std loop in prc_convert_comp_curve_to_coedge\n");
@@ -1473,6 +1493,7 @@ prc_construct_loop_from_iso_curves(prc_context *ctx, prc_content_compressed_face
     prc_vec3 torus_major_center = { 0 };
     prc_vec3 torus_major_normal = { 0 };
     prc_iso_torus_circle torus_data = { 0 };
+    uint8_t curve_deduced[4] = { 0 };
 
     code = prc_get_compressed_curve(ctx, &face->iso_face.first_trim_curve,
         &curve[0], compressed_data);
@@ -1632,6 +1653,11 @@ prc_construct_loop_from_iso_curves(prc_context *ctx, prc_content_compressed_face
         }
         coedge_orientation[2] = 1; /* These should be in the proper direction */
         coedge_orientation[3] = 1;
+
+        /* Mark curve3 and curve4 as deduced. It is from this that we will know
+           that we need to make an allocation, copy, and then free */
+        curve_deduced[2] = 1;
+        curve_deduced[3] = 1;
     }
     else
     {
@@ -1672,7 +1698,7 @@ prc_construct_loop_from_iso_curves(prc_context *ctx, prc_content_compressed_face
     coedge_orientation[0] = !reverse_curve0;
     coedge_orientation[1] = !reverse_curve1;
     code = prc_convert_iso_curves_to_std_loop(ctx, curve, synthetic_face->loops,
-        coedge_orientation, compressed_data);
+        coedge_orientation, curve_deduced, compressed_data);
     if (code < 0)
     {
         prc_error(ctx, code, "Failed to convert iso curves to std loop in prc_construct_loop_from_iso_curves\n");
@@ -1681,18 +1707,130 @@ prc_construct_loop_from_iso_curves(prc_context *ctx, prc_content_compressed_face
     return 0;
 }
 
+static prc_compressed_curve*
+prc_get_compressed_curve_from_iso_loop(prc_context *ctx, prc_ptr_topology *loop,
+    uint8_t index, uint8_t *is_reversed)
+{
+    prc_coedge_in_loop *coedge = &loop->topo->topo_loop->coedge[index];
+    prc_topo_coedge *topo_coedge = coedge->next_coedge.topo->topo_coedge;
+    prc_topo *topo = topo_coedge->ptr_topology.topo;
+    *is_reversed = !topo_coedge->coedge_orientation;
+    return topo->topo_single_wire_compress->ref_or_compressed_curve.compressed_curve;
+}
+
 /* From the iso curve data figure out the cylinder radius and the transform
    so that we can represent the ISO surface with the uncompressed one */
 static int
 prc_get_cylinder_data_from_iso_curves(prc_context *ctx, prc_ptr_topology *loop,
-    double *radius, prc_exact_geom_transform *exact_geom_transform,
-    uint8_t *has_transform)
+    double *radius, prc_trans_3d *transform, uint8_t *has_transform,
+    prc_nano_brep_compressed_data *compressed_data)
 {
     int code = 0;
+    prc_compressed_curve *curve1, *curve2;
+    uint8_t is_reversed1, is_reversed2;
+    prc_compressed_curve *line, *circle;
+    uint8_t is_line_reversed, is_circle_reversed;
+    uint8_t line_is_curve1 = 0;
+    prc_vec3 line_start, line_end, line_dir, temp_vec;
+    prc_hcg_circle_information circle_info;
 
     /* Lets dig in and get curve1 and curve2. One should be circle the other
        a line. */
+    curve1 = prc_get_compressed_curve_from_iso_loop(ctx, loop, 0, &is_reversed1);
+    curve2 = prc_get_compressed_curve_from_iso_loop(ctx, loop, 1, &is_reversed2);
 
+    /* One of these is a line and one is a circle */
+    if (curve1->curve_type == PRC_HCG_Circle)
+    {
+        circle = curve1;
+        line = curve2;
+        is_circle_reversed = is_reversed1;
+        is_line_reversed = is_reversed2;
+        line_is_curve1 = 0;
+    }
+    else
+    {
+        circle = curve2;
+        line = curve1;
+        is_circle_reversed = is_reversed2;
+        is_line_reversed = is_reversed1;
+    }
+
+    /* Get the normal of the cylinder */
+    prc_get_compressed_curve_start_end(ctx, line, &line_start, &line_end, NULL);
+    prc_vec_sub(line_end, line_start, &line_dir);
+    if (is_line_reversed)
+    {
+        prc_vec_negate(&line_dir);
+    }
+    code = prc_vec_normalize_sqrt(&line_dir);
+    if (code < 0)
+    {
+        prc_error(ctx, code, "Failed to normalize line direction in prc_get_cylinder_data_from_iso_curves\n");
+        return code;
+    }
+
+    /* Now get the center point of the circle as this will define the
+       center of the cylinder and get the radius of the circle */
+    code = prc_get_hcg_circle_data(ctx, &circle->hcg_circle, &circle_info, compressed_data);
+    if (code < 0)
+    {
+        prc_error(ctx, code, "Failed to get HCG circle data in prc_get_cylinder_data_from_iso_curves\n");
+        return code;
+    }
+
+    prc_vec_sub(circle_info.start_point, circle_info.center, &temp_vec);
+    *radius = prc_vec_length_sqrt(temp_vec);
+
+    /* Now we have the radius and the direction of the cylinder. We need to
+       create a transform that will take the cylinder from its default position
+       to the position defined by the line and circle. The default cylinder is
+       along the Z axis with center at origin. So we need to rotate it so that
+       Z axis aligns with line_dir and then translate it to circle_info.center. */
+    *transform = (prc_trans_3d){ 0 };
+
+    /* If direction is 0 0 1 and center is at 0 0 X then there is no transform */
+    if (line_dir.x == 0 && line_dir.y == 0 && line_dir.z == 1 &&
+        circle_info.center.x == 0 && circle_info.center.y == 0)
+    {
+        *has_transform = 0;
+    }
+    else
+    {
+        *has_transform = 1;
+        transform->behavior = PRC_TRANSFORMATION_Translate | PRC_TRANSFORMATION_Rotate;
+
+        /*  Set the translation directly to the circle's center */
+        transform->translation = circle_info.center;
+
+        /* Build the rotation frame where the new Z-axis is line_dir */
+        /* We need an arbitrary, non-parallel vector to seed the cross product.
+           If line_dir is mostly aligned with Z, we use X; otherwise, we use Z. */
+        prc_vec3 temp_axis = { 0.0, 0.0, 1.0 };
+        if (fabs(line_dir.x) < 0.1 && fabs(line_dir.y) < 0.1)
+        {
+            temp_axis.x = 1.0;
+            temp_axis.z = 0.0;
+        }
+
+        /* Generate the new X-axis (rotation[0]) perpendicular to line_dir */
+        prc_vec_cross(temp_axis, line_dir, &transform->rotation[0]);
+        code = prc_vec_normalize_sqrt(&transform->rotation[0]);
+        if (code < 0)
+        {
+            prc_error(ctx, code, "Failed in prc_vec_normalize_sqrt\n");
+            return code;
+        }
+
+        /* Generate the new Y-axis (rotation[1]) perpendicular to both X and Z */
+        prc_vec_cross(line_dir, transform->rotation[0], &transform->rotation[1]);
+        code = prc_vec_normalize_sqrt(&transform->rotation[1]);
+        if (code < 0)
+        {
+            prc_error(ctx, code, "Failed in prc_vec_normalize_sqrt\n");
+            return code;
+        }
+    }
     return 0;
 }
 
@@ -1701,7 +1839,7 @@ prc_tessellate_compressed_face(prc_context *ctx, prc_data *data, uint32_t shell_
     prc_compressed_face *topo_face, prc_nano_brep_compressed_data *compressed_data)
 {
     int code = 0;
-    uint8_t free_ana = 0;
+    uint8_t free_loops = 0;
     prc_topo_face synthetic_face = { 0 };
     prc_type_surf synthetic_surface = { 0 };
     prc_exact_geom_wire_data *wire_data;
@@ -1723,6 +1861,14 @@ prc_tessellate_compressed_face(prc_context *ctx, prc_data *data, uint32_t shell_
         prc_surf_cylinder cylinder = { 0 };
         prc_topo_face synthetic_face = { 0 };
         prc_type_surf synthetic_surface = { 0 };
+        uint8_t is_an_iso_face = face->is_an_iso_face;
+
+        free_loops = 1;
+        if (!is_an_iso_face)
+        {
+            prc_error(ctx, PRC_ERROR_PARSE, "ISO face is an Analytical face in prc_tessellate_compressed_face\n");
+            return PRC_ERROR_PARSE;
+        }
 
         synthetic_surface.surface_type = PRC_TYPE_SURF_Cylinder;
         cylinder.tag = PRC_TYPE_SURF_Cylinder;
@@ -1755,7 +1901,7 @@ prc_tessellate_compressed_face(prc_context *ctx, prc_data *data, uint32_t shell_
         /* From the loop we need to get the parameters of the cylinder so
            that we can determine the transformation as well the radius */
         code = prc_get_cylinder_data_from_iso_curves(ctx, synthetic_face.loops,
-            &cylinder.radius, &cylinder.exact_geom_transform, &cylinder.has_transform);
+            &cylinder.radius, &cylinder.transform, &cylinder.has_transform, compressed_data);
         if (code < 0)
         {
             prc_error(ctx, code, "Failed in prc_get_cylinder_data_from_loops for compressed ISO cylinder\n");
@@ -1984,7 +2130,7 @@ prc_tessellate_compressed_face(prc_context *ctx, prc_data *data, uint32_t shell_
         uint8_t is_an_iso_face = face->is_an_iso_face;
         prc_surf_plane plane = { 0 };
 
-        free_ana = 1;
+        free_loops = 1;
         if (is_an_iso_face)
         {
             prc_error(ctx, PRC_ERROR_PARSE, "Analytic plane face is an ISO face in prc_tessellate_compressed_face\n");
@@ -2030,7 +2176,7 @@ prc_tessellate_compressed_face(prc_context *ctx, prc_data *data, uint32_t shell_
             if (code < 0)
             {
                 prc_error(ctx, code, "Failed in prc_convert_ana_loops_to_std_loops\n");
-                goto free_ana;
+                goto free_loops;
             }
         }
 
@@ -2039,7 +2185,7 @@ prc_tessellate_compressed_face(prc_context *ctx, prc_data *data, uint32_t shell_
         if (code < 0)
         {
             prc_error(ctx, code, "Failed in prc_tessellate_surface for PRC_HCG_AnaPlane\n");
-            goto free_ana;
+            goto free_loops;
         }
         break;
     }
@@ -2054,7 +2200,7 @@ prc_tessellate_compressed_face(prc_context *ctx, prc_data *data, uint32_t shell_
         prc_surf_cylinder cylinder = { 0 };
         prc_vec3 curve_points[ANA_CURVE_SAMPLE];
 
-        free_ana = 1;
+        free_loops = 1;
         if (is_an_iso_face)
         {
             prc_error(ctx, PRC_ERROR_PARSE, "Analytic plane face is an ISO face in prc_tessellate_compressed_face\n");
@@ -2185,7 +2331,7 @@ prc_tessellate_compressed_face(prc_context *ctx, prc_data *data, uint32_t shell_
             if (code < 0)
             {
                 prc_error(ctx, code, "Failed in prc_convert_ana_loops_to_std_loops\n");
-                goto free_ana;
+                goto free_loops;
             }
             /* Take the data in wire_data, apply the transform to get us to
                our cylinder at the z-axis and then compute the mean of the
@@ -2226,7 +2372,7 @@ prc_tessellate_compressed_face(prc_context *ctx, prc_data *data, uint32_t shell_
         if (code < 0)
         {
             prc_error(ctx, code, "Failed in prc_tessellate_surface for PRC_HCG_AnaPlane\n");
-            goto free_ana;
+            goto free_loops;
         }
         break;
     }
@@ -2240,7 +2386,7 @@ prc_tessellate_compressed_face(prc_context *ctx, prc_data *data, uint32_t shell_
         uint8_t is_an_iso_face = face->is_an_iso_face;
         prc_surf_torus torus = { 0 };
 
-        free_ana = 1;
+        free_loops = 1;
         if (is_an_iso_face)
         {
             prc_error(ctx, PRC_ERROR_PARSE, "Analytic plane face is an ISO face in prc_tessellate_compressed_face\n");
@@ -2302,7 +2448,7 @@ prc_tessellate_compressed_face(prc_context *ctx, prc_data *data, uint32_t shell_
             if (code < 0)
             {
                 prc_error(ctx, code, "Failed in prc_convert_ana_loops_to_std_loops\n");
-                goto free_ana;
+                goto free_loops;
             }
         }
 
@@ -2311,7 +2457,7 @@ prc_tessellate_compressed_face(prc_context *ctx, prc_data *data, uint32_t shell_
         if (code < 0)
         {
             prc_error(ctx, code, "Failed in prc_tessellate_surface for PRC_HCG_AnaPlane\n");
-            goto free_ana;
+            goto free_loops;
         }
         break;
     }
@@ -2326,7 +2472,7 @@ prc_tessellate_compressed_face(prc_context *ctx, prc_data *data, uint32_t shell_
         prc_surf_sphere sphere = { 0 };
         prc_vec3 curve_points[ANA_CURVE_SAMPLE];
 
-        free_ana = 1;
+        free_loops = 1;
         if (is_an_iso_face)
         {
             prc_error(ctx, PRC_ERROR_PARSE, "Analytic face is an ISO face in prc_tessellate_compressed_face\n");
@@ -2396,7 +2542,7 @@ prc_tessellate_compressed_face(prc_context *ctx, prc_data *data, uint32_t shell_
                 }
                 prc_free(ctx, wire_data);
                 prc_error(ctx, code, "Failed in prc_convert_ana_loops_to_std_loops\n");
-                goto free_ana;
+                goto free_loops;
             }
 
             /* Just the first point to compute the radius */
@@ -2423,7 +2569,7 @@ prc_tessellate_compressed_face(prc_context *ctx, prc_data *data, uint32_t shell_
         if (code < 0)
         {
             prc_error(ctx, code, "Failed in prc_tessellate_surface for PRC_HCG_AnaPlane\n");
-            goto free_ana;
+            goto free_loops;
         }
         break;
     }
@@ -2438,7 +2584,7 @@ prc_tessellate_compressed_face(prc_context *ctx, prc_data *data, uint32_t shell_
         prc_surf_cone cone = { 0 };
         prc_vec3 curve_points[ANA_CURVE_SAMPLE];
 
-        free_ana = 1;
+        free_loops = 1;
         if (is_an_iso_face)
         {
             prc_error(ctx, PRC_ERROR_PARSE, "Analytic face is an ISO face in prc_tessellate_compressed_face\n");
@@ -2554,7 +2700,7 @@ prc_tessellate_compressed_face(prc_context *ctx, prc_data *data, uint32_t shell_
             if (code < 0)
             {
                 prc_error(ctx, code, "Failed in prc_convert_ana_loops_to_std_loops\n");
-                goto free_ana;
+                goto free_loops;
             }
 
             uint32_t loop_index = 0;
@@ -2632,7 +2778,7 @@ prc_tessellate_compressed_face(prc_context *ctx, prc_data *data, uint32_t shell_
         if (code < 0)
         {
             prc_error(ctx, code, "Failed in prc_tessellate_surface for PRC_HCG_AnaCone\n");
-            goto free_ana;
+            goto free_loops;
         }
         break;
     }
@@ -2682,7 +2828,7 @@ prc_tessellate_compressed_face(prc_context *ctx, prc_data *data, uint32_t shell_
         prc_vec3 curve_points[ANA_CURVE_SAMPLE];
         double nurbs_tolerance = compressed_data->tolerance / 5.0;
 
-        free_ana = 1;
+        free_loops = 1;
         if (is_an_iso_face)
         {
             prc_error(ctx, PRC_ERROR_PARSE, "Analytic face is an ISO face in prc_tessellate_compressed_face\n");
@@ -2699,7 +2845,7 @@ prc_tessellate_compressed_face(prc_context *ctx, prc_data *data, uint32_t shell_
         if (code < 0)
         {
             prc_error(ctx, code, "Failed in prc_create_nurbs_from_compressed_nurbs\n");
-            goto free_ana;
+            goto free_loops;
         }
 
         synthetic_face.has_tolerance = 0;
@@ -2765,8 +2911,8 @@ prc_tessellate_compressed_face(prc_context *ctx, prc_data *data, uint32_t shell_
         return PRC_ERROR_PARSE;
     }
 
-free_ana:
-    if (free_ana)
+free_loops:
+    if (free_loops)
     {
         if (synthetic_face.number_of_loops > 0 && synthetic_face.loops != NULL)
         {
@@ -2793,6 +2939,11 @@ free_ana:
                                         {
                                             if (next_coedge->topo->topo_coedge->ptr_topology.topo->topo_single_wire_compress != NULL)
                                             {
+                                                /* Check for deduced curve case (iso curve 3 and 4 only) */
+                                                if (next_coedge->topo->topo_coedge->ptr_topology.topo->topo_single_wire_compress->ref_or_compressed_curve.is_deduced_curve)
+                                                {
+                                                    prc_free(ctx, next_coedge->topo->topo_coedge->ptr_topology.topo->topo_single_wire_compress->ref_or_compressed_curve.compressed_curve);
+                                                }
                                                 prc_free(ctx, next_coedge->topo->topo_coedge->ptr_topology.topo->topo_single_wire_compress);
                                             }
                                             prc_free(ctx, next_coedge->topo->topo_coedge->ptr_topology.topo);

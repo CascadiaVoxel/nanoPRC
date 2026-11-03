@@ -150,7 +150,7 @@ prc_internal_api_get_normal_texture_position_index(uint32_t *index, int32_t *nor
         *normal_index = -1;
         /* Not sure about the texture indices though. For now, don't divide by three as
            they are not x,y,z locations */
-        for (uint32_t k = 0; k < number_of_texture_indices; k++)
+        for (uint32_t k = 0; k < number_of_texture_indices && k < MAX_NUM_TEXTURE_COORDS; k++)
         {
             texture_indices[k] = index[k];
         }
@@ -267,6 +267,12 @@ prc_internal_api_get_vertex_index(prc_context *ctx, size_t *vertex_index,
     uint32_t decode_color_offset;
     uint8_t has_pure_color = uncompressed_data->has_pure_color;
 
+    /* Only the first texture coordinate set is kept (see MAX_NUM_TEXTURE_COORDS),
+       and face_texture_indices holds one index per corner, so compare and
+       store just that one. */
+    if (num_text_indices > MAX_NUM_TEXTURE_COORDS)
+        num_text_indices = MAX_NUM_TEXTURE_COORDS;
+
     position_index = face_position_indices[indice_count];
     position_normal_pair = &lut->position_normal_pair[position_index];
 
@@ -312,11 +318,7 @@ prc_internal_api_get_vertex_index(prc_context *ctx, size_t *vertex_index,
             position_normal_pair->normal_set = PRC_INTERNAL_API_NORM_MUST_BE_COMPUTED;
         }
 
-        /* Set texture coordinates if present. Warning may be an issue here
-           if num_text_indices > 1 */
-        if (num_text_indices > 1)
-            return PRC_API_ERROR_PARSER;
-
+        /* Set texture coordinates if present */
         if (has_texture)
         {
             texture_index = face_texture_indices[indice_count];

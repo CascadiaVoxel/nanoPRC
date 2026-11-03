@@ -1075,7 +1075,7 @@ prc_get_compressed_curve_sample_info(prc_context *ctx, prc_compressed_curve *cur
         if (!curve->hcg_circle.information_valid)
         {
             code = prc_get_hcg_circle_data(ctx, &curve->hcg_circle,
-                &curve->hcg_circle.circle_data, NULL);
+                &curve->hcg_circle.circle_data, ctx->internal.nano_compressed_brep_ref_data);
             if (code < 0)
             {
                 prc_error(ctx, PRC_ERROR_INTERNAL, "Failed in prc_get_hcg_circle_data\n");

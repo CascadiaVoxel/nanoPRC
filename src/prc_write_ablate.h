@@ -45,11 +45,18 @@
                                weight, so the codes come out the same length
                                to within one bit. Where the format leaves the
                                choice to the writer, the array is written
-                               without Huffman coding at all. Where it does
-                               not (a character array of more than three
+                               without Huffman coding at all, which is also
+                               the default (see the next switch). Where it
+                               does not (a character array of more than three
                                known values), a Huffman block has to be
                                present, and the equal-length codes are the
                                nearest thing to none.
+     PRC_DIAG_HUFFMAN_WHERE_OPTIONAL
+                               Huffman-code the arrays whose compression the
+                               format leaves to the writer, as the writer did
+                               before plain became the default. For comparing
+                               the two forms; PRC_DIAG_ABLATE_HUFFMAN
+                               overrides it.
      PRC_DIAG_ABLATE_DEFLATE   Store every deflated stream (each file
                                section, and raw pictures) at zlib level 0:
                                still zlib format, so still readable, but not
@@ -61,7 +68,7 @@
                                process. For measuring entropy coders outside
                                nanoPRC.
 
-   Each of the first six is on when its variable is set to anything. When any
+   Each of the others is on when its variable is set to anything. When any
    is on, the writer says so on stderr once per file, so a measurement cannot
    be taken by mistake from an ablated file. */
 
@@ -76,6 +83,7 @@ typedef struct prc_write_ablation_s
     uint8_t textures;
     uint8_t tiny_textures;
     uint8_t huffman;
+    uint8_t huffman_where_optional;
     uint8_t deflate;
     const char *dump_dir;       /* NULL: no dump */
 } prc_write_ablation;

@@ -139,12 +139,16 @@ if(PRC_ENABLE_DIAG_ENV)
   add_test(NAME test_write_ablation_tiny_huffman COMMAND test_write_ablation)
   set_tests_properties(test_write_ablation_tiny_huffman PROPERTIES
     ENVIRONMENT "PRC_DIAG_ABLATE_TINY_TEXTURES=1;PRC_DIAG_ABLATE_HUFFMAN=1")
+  add_test(NAME test_write_ablation_huffman_optional COMMAND test_write_ablation)
+  set_tests_properties(test_write_ablation_huffman_optional PROPERTIES
+    ENVIRONMENT "PRC_DIAG_HUFFMAN_WHERE_OPTIONAL=1")
   add_test(NAME test_write_ablation_all COMMAND test_write_ablation)
   set_tests_properties(test_write_ablation_all PROPERTIES
     ENVIRONMENT "PRC_DIAG_ABLATE_NORMALS=1;PRC_DIAG_ABLATE_COLORS=1;PRC_DIAG_ABLATE_TEXTURES=1;PRC_DIAG_ABLATE_HUFFMAN=1;PRC_DIAG_ABLATE_DEFLATE=1;PRC_DIAG_ABLATE_DUMP_DIR=${PRC_ABLATION_DUMP_DIR}")
   # Each run writes and removes the same files.
   set_tests_properties(test_write_ablation test_write_ablation_normals
-    test_write_ablation_colors_deflate test_write_ablation_tiny_huffman test_write_ablation_all
+    test_write_ablation_colors_deflate test_write_ablation_tiny_huffman test_write_ablation_huffman_optional
+    test_write_ablation_all
     PROPERTIES RESOURCE_LOCK prc_write_ablation)
 endif()
 add_executable(test_schema_bounds tests/unit/test_schema_bounds.c)

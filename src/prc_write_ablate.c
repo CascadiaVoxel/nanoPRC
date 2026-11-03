@@ -32,6 +32,7 @@ prc_write_ablation_get(prc_write_ablation *a)
     a->textures = prc_diag_getenv("PRC_DIAG_ABLATE_TEXTURES") != NULL;
     a->tiny_textures = prc_diag_getenv("PRC_DIAG_ABLATE_TINY_TEXTURES") != NULL;
     a->huffman = prc_diag_getenv("PRC_DIAG_ABLATE_HUFFMAN") != NULL;
+    a->huffman_where_optional = prc_diag_getenv("PRC_DIAG_HUFFMAN_WHERE_OPTIONAL") != NULL;
     a->deflate = prc_diag_getenv("PRC_DIAG_ABLATE_DEFLATE") != NULL;
     a->dump_dir = prc_diag_getenv("PRC_DIAG_ABLATE_DUMP_DIR");
     if (a->dump_dir != NULL && a->dump_dir[0] == '\0')
@@ -42,18 +43,19 @@ int
 prc_write_ablation_any(const prc_write_ablation *a)
 {
     return a->normals || a->colors || a->textures || a->tiny_textures ||
-        a->huffman || a->deflate || a->dump_dir != NULL;
+        a->huffman || a->huffman_where_optional || a->deflate || a->dump_dir != NULL;
 }
 
 void
 prc_write_ablation_report(const prc_write_ablation *a)
 {
-    fprintf(stderr, "PRC_DIAG_ABLATE: writing with%s%s%s%s%s%s%s%s\n",
+    fprintf(stderr, "PRC_DIAG_ABLATE: writing with%s%s%s%s%s%s%s%s%s\n",
         a->normals ? " normals-off" : "",
         a->colors ? " colors-off" : "",
         a->textures ? " textures-off" : "",
         a->tiny_textures ? " tiny-textures" : "",
         a->huffman ? " huffman-flat" : "",
+        a->huffman_where_optional ? " huffman-where-optional" : "",
         a->deflate ? " deflate-stored" : "",
         a->dump_dir != NULL ? " sections-dumped-to " : "",
         a->dump_dir != NULL ? a->dump_dir : "");

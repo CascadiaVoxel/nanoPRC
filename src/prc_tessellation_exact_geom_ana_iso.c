@@ -1834,6 +1834,94 @@ prc_get_cylinder_data_from_iso_curves(prc_context *ctx, prc_ptr_topology *loop,
     return 0;
 }
 
+/* From the iso curve data figure out the sphere radius and the transform
+   so that we can represent the ISO surface with the uncompressed one */
+static int
+prc_get_sphere_data_from_iso_curves(prc_context *ctx, prc_ptr_topology *loop,
+    double *radius, prc_trans_3d *transform, uint8_t *has_transform,
+    prc_nano_brep_compressed_data *compressed_data)
+{
+    int code = 0;
+    prc_compressed_curve *curve1, *curve2;
+    uint8_t is_reversed1, is_reversed2;
+    prc_hcg_circle_information circle1_info, circle2_info;
+    prc_vec3 sphere_center = { 0 };
+
+    /* Lets dig in and get curve1 and curve2. They should both be circles */
+    curve1 = prc_get_compressed_curve_from_iso_loop(ctx, loop, 0, &is_reversed1);
+    curve2 = prc_get_compressed_curve_from_iso_loop(ctx, loop, 1, &is_reversed2);
+
+    /* Now get the circle information for each of the curves */
+    code = prc_get_hcg_circle_data(ctx, &curve1->hcg_circle, &circle1_info, compressed_data);
+    if (code < 0)
+    {
+        prc_error(ctx, code, "Failed to get HCG circle data in prc_get_sphere_data_from_iso_curves\n");
+        return code;
+    }
+    code = prc_get_hcg_circle_data(ctx, &curve2->hcg_circle, &circle2_info, compressed_data);
+    if (code < 0)
+    {
+        prc_error(ctx, code, "Failed to get HCG circle data in prc_get_sphere_data_from_iso_curves\n");
+        return code;
+    }
+
+    /* From the above circle information, we can determine the sphere center
+       and its radius */
+    /* Every iso curve on a sphere is a circle of latitude or longitude. The
+      center of the sphere is the intersection of the normals of these circles.
+      here curve1 and curve2 are never the parallel case since they must intersect */
+
+     /* 1. Calculate the sphere center by finding the intersection of the two normal axes:
+           L1 = C1 + t*N1  and  L2 = C2 + s*N2 */
+    prc_vec3 cross_normals;
+    prc_vec_cross(circle1_info.normal, circle2_info.normal, &cross_normals);
+
+    double cross_len_sq = (cross_normals.x * cross_normals.x) +
+        (cross_normals.y * cross_normals.y) +
+        (cross_normals.z * cross_normals.z);
+
+    prc_vec3 c2_minus_c1;
+    prc_vec_sub(circle2_info.center, circle1_info.center, &c2_minus_c1);
+
+    prc_vec3 c2_minus_c1_cross_n2;
+    prc_vec_cross(c2_minus_c1, circle2_info.normal, &c2_minus_c1_cross_n2);
+
+    /* Dot product of (C2-C1)xN2 and N1xN2 determines the scale factor 't' for Line 1 */
+    double dot_numerator;
+    dot_numerator = prc_vec_dot_product(c2_minus_c1_cross_n2, cross_normals);
+    double t = dot_numerator / cross_len_sq;
+
+    /* Sphere center = C1 + t * N1 */
+    sphere_center.x = circle1_info.center.x + (t * circle1_info.normal.x);
+    sphere_center.y = circle1_info.center.y + (t * circle1_info.normal.y);
+    sphere_center.z = circle1_info.center.z + (t * circle1_info.normal.z);
+
+    /* 2. Compute the sphere radius.
+          The radius is the direct 3D distance from the sphere center to the circle's perimeter. */
+    prc_vec3 radius_vec;
+    prc_vec_sub(circle1_info.start_point, sphere_center, &radius_vec);
+    *radius = prc_vec_length_sqrt(radius_vec);
+
+    /* Now that we have the center of the sphere. We need to
+       create a transform that will take the sphere from its default position
+       to the position defined by the sphere center */
+    *transform = (prc_trans_3d){ 0 };
+
+    if (sphere_center.x == 0 && sphere_center.y == 0 && sphere_center.z == 0)
+    {
+        *has_transform = 0;
+    }
+    else
+    {
+        *has_transform = 1;
+        transform->behavior = PRC_TRANSFORMATION_Translate;
+
+        /*  Set the translation directly to the circle's center */
+        transform->translation = sphere_center;
+    }
+    return 0;
+}
+
 int
 prc_tessellate_compressed_face(prc_context *ctx, prc_data *data, uint32_t shell_index, uint32_t face_index,
     prc_compressed_face *topo_face, prc_nano_brep_compressed_data *compressed_data)
@@ -1895,7 +1983,7 @@ prc_tessellate_compressed_face(prc_context *ctx, prc_data *data, uint32_t shell_
         if (code < 0)
         {
             prc_error(ctx, code, "Failed to construct loop in prc_tessellate_compressed_face\n");
-            return code;
+            goto free_loops;
         }
 
         /* From the loop we need to get the parameters of the cylinder so
@@ -1904,8 +1992,8 @@ prc_tessellate_compressed_face(prc_context *ctx, prc_data *data, uint32_t shell_
             &cylinder.radius, &cylinder.transform, &cylinder.has_transform, compressed_data);
         if (code < 0)
         {
-            prc_error(ctx, code, "Failed in prc_get_cylinder_data_from_loops for compressed ISO cylinder\n");
-            return code;
+            prc_error(ctx, code, "Failed in prc_get_cylinder_data_from_iso_curves for compressed ISO cylinder\n");
+            goto free_loops;
         }
 
         code = prc_tessellate_surface(ctx, data, shell_index, face_index, &synthetic_face,
@@ -1913,7 +2001,7 @@ prc_tessellate_compressed_face(prc_context *ctx, prc_data *data, uint32_t shell_
         if (code < 0)
         {
             prc_error(ctx, code, "Failed in prc_tessellate_surface for compressed ISO cylinder\n");
-            return code;
+            goto free_loops;
         }
 
         break;
@@ -2109,7 +2197,66 @@ prc_tessellate_compressed_face(prc_context *ctx, prc_data *data, uint32_t shell_
 
     case PRC_HCG_IsoSphere:
     {
-        prc_hcg_iso_sphere hcg_iso_sphere = topo_face->hcg_iso_sphere;
+        prc_hcg_iso_sphere *hcg_iso_sphere = &topo_face->hcg_iso_sphere;
+        prc_content_compressed_face *face = &hcg_iso_sphere->face;
+        prc_surf_sphere sphere = { 0 };
+        prc_topo_face synthetic_face = { 0 };
+        prc_type_surf synthetic_surface = { 0 };
+        uint8_t is_an_iso_face = face->is_an_iso_face;
+
+        free_loops = 1;
+        if (!is_an_iso_face)
+        {
+            prc_error(ctx, PRC_ERROR_PARSE, "ISO face is an Analytical face in prc_tessellate_compressed_face\n");
+            return PRC_ERROR_PARSE;
+        }
+
+        synthetic_surface.surface_type = PRC_TYPE_SURF_Sphere;
+        sphere.tag = PRC_TYPE_SURF_Sphere;
+        synthetic_surface.surf_sphere = &sphere;
+        synthetic_face.has_tolerance = 0;
+        synthetic_face.surface_geometry.is_referenced = 0;
+        synthetic_face.surface_geometry.surface = synthetic_surface;
+        synthetic_face.is_trimmed = 0;
+        synthetic_face.tag = PRC_TYPE_TOPO_Face;
+        synthetic_face.index_of_outer_loop = -1;
+        synthetic_face.number_of_loops = 1;
+        sphere.parameterization.u_param_coeff_a = 1;
+        sphere.parameterization.v_param_coeff_a = 1;
+        sphere.parameterization.u_param_coeff_b = 0;
+        sphere.parameterization.v_param_coeff_b = 0;
+        sphere.parameterization.swap_uv = 0;
+        sphere.parameterization.surface_domain.max_uv.x = 2 * PRC_PI;
+        sphere.parameterization.surface_domain.max_uv.y = PRC_PI / 2;
+        sphere.parameterization.surface_domain.min_uv.x = 0;
+        sphere.parameterization.surface_domain.min_uv.y = -PRC_PI / 2;
+
+        code = prc_construct_loop_from_iso_curves(ctx, face, &synthetic_face,
+            0, 0, compressed_data);
+        if (code < 0)
+        {
+            prc_error(ctx, code, "Failed to construct loop in prc_tessellate_compressed_face\n");
+            goto free_loops;
+        }
+
+        /* From the loop we need to get the parameters of the cylinder so
+            that we can determine the transformation as well the radius */
+        code = prc_get_sphere_data_from_iso_curves(ctx, synthetic_face.loops,
+            &sphere.radius, &sphere.transform, &sphere.has_transform, compressed_data);
+        if (code < 0)
+        {
+            prc_error(ctx, code, "Failed in prc_get_sphere_data_from_iso_curves for compressed ISO sphere\n");
+            goto free_loops;
+        }
+
+        code = prc_tessellate_surface(ctx, data, shell_index, face_index, &synthetic_face,
+            face->orientation_surface_with_shell, NULL, NULL);
+        if (code < 0)
+        {
+            prc_error(ctx, code, "Failed in prc_tessellate_surface for compressed ISO cylinder\n");
+            goto free_loops;
+        }
+
         break;
     }
 

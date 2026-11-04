@@ -134,13 +134,13 @@ file_size(const char *path)
 
 /* A bit-length table whose compression the writer may choose
    (has_comp_bit set), with a negative step: references 0, 9 and 14 need 2, 6
-   and 5 bits, so the deltas after the first are +4 and -1. With
-   PRC_DIAG_ABLATE_HUFFMAN the table is written plain, one 8-bit character per
-   value, and a negative delta must then be a whole signed char (-1 = 0xFF), as
-   in the short reference arrays (test_bitwrite's
-   test_short_indice_array_signed_char): Adobe Acrobat reads the 6-bit pattern
-   (-1 = 0x3F) as +63 and fails on the file. Without the switch the table is
-   Huffman-coded. Either way it must read back. */
+   and 5 bits, so the deltas after the first are +4 and -1. By default the
+   table is written plain, one 8-bit character per value, and a negative delta
+   must then be a whole signed char (-1 = 0xFF), as in the short reference
+   arrays (test_bitwrite's test_short_indice_array_signed_char): Adobe Acrobat
+   reads the 6-bit pattern (-1 = 0x3F) as +63 and fails on the file. With
+   PRC_DIAG_HUFFMAN_WHERE_OPTIONAL, and without PRC_DIAG_ABLATE_HUFFMAN, the
+   table is Huffman-coded. Either way it must read back. */
 static void
 test_indice_array_plain_sign(prc_context *ctx, int huffman_off)
 {
@@ -198,9 +198,10 @@ main(void)
     uint32_t k;
 
     PRC_TEST_BEGIN("test_write_ablation");
-    printf("  switches:%s%s%s%s%s%s%s\n", normals_off ? " normals" : "", colors_off ? " colors" : "",
+    printf("  switches:%s%s%s%s%s%s%s%s\n", normals_off ? " normals" : "", colors_off ? " colors" : "",
         textures_off ? " textures" : "", tiny ? " tiny-textures" : "",
-        env("PRC_DIAG_ABLATE_HUFFMAN") ? " huffman" : "", deflate_off ? " deflate" : "",
+        env("PRC_DIAG_ABLATE_HUFFMAN") ? " huffman" : "",
+        env("PRC_DIAG_HUFFMAN_WHERE_OPTIONAL") ? " huffman-where-optional" : "", deflate_off ? " deflate" : "",
         dump_dir != NULL ? " dump" : "");
 
     fill_inputs();
@@ -291,7 +292,8 @@ main(void)
         }
     }
 
-    test_indice_array_plain_sign(ctx, env("PRC_DIAG_ABLATE_HUFFMAN"));
+    test_indice_array_plain_sign(ctx,
+        !env("PRC_DIAG_HUFFMAN_WHERE_OPTIONAL") || env("PRC_DIAG_ABLATE_HUFFMAN"));
 
     remove(PRC_PATH);
     PRC_ASSERT_EQ(prc_api_release_context(ctx), 0);

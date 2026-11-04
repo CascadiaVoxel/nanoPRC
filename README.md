@@ -125,7 +125,8 @@ and the writer prints the switches in use on stderr.
 | `PRC_DIAG_ABLATE_COLORS` | Vertex colours dropped |
 | `PRC_DIAG_ABLATE_TEXTURES` | Texture coordinates, textures and texture layers dropped; materials kept |
 | `PRC_DIAG_ABLATE_TINY_TEXTURES` | Every texture image replaced by one 2 x 2 RGB image (red, green, blue, white); texture coordinates kept |
-| `PRC_DIAG_ABLATE_HUFFMAN` | Huffman codes built with every value weighted equally (equal-length codes); arrays the format lets the writer leave uncoded are written plain |
+| `PRC_DIAG_ABLATE_HUFFMAN` | Huffman codes built with every value weighted equally (equal-length codes); arrays the format lets the writer leave uncoded are written plain, as they are by default |
+| `PRC_DIAG_HUFFMAN_WHERE_OPTIONAL` | Arrays the format lets the writer leave uncoded are Huffman-coded, as the writer did before plain became the default |
 | `PRC_DIAG_ABLATE_DEFLATE` | Every deflated stream stored at zlib level 0 |
 | `PRC_DIAG_ABLATE_DUMP_DIR` | Each section's bytes before deflate also written to this directory, for entropy coders tried outside nanoPRC |
 

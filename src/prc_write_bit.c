@@ -1674,13 +1674,35 @@ prc_int32_bit_width_signed(int32_t v)
     return 1 + prc_spec_bits_for_unsigned(magnitude);
 }
 
+/* Whether an array whose compression flag this writer sets (has_comp_bit)
+   is Huffman-coded. By default it is not: the array is written plain, one
+   whole byte (character array) or two (short array) per value, and the
+   section's deflate does the entropy coding. Byte-aligned values keep
+   repeated runs visible to deflate's match finder, which a bit-packed
+   Huffman stream hides; over 244 meshes exported from the prc-db
+   collection this made the median file 11.5% smaller, and keeping the best
+   single array Huffman-coded, chosen per file, would have saved only 0.15%
+   more.
+   PRC_DIAG_HUFFMAN_WHERE_OPTIONAL (prc_write_ablate.h) restores Huffman
+   coding for these arrays, for comparison; PRC_DIAG_ABLATE_HUFFMAN and
+   PRC_DIAG_FORCE_UNCOMPRESSED_CHARARRAY keep them plain regardless. Arrays
+   without the flag are unaffected: a character array of more than three
+   known values is always Huffman-coded, as the format requires. */
+static int
+prc_bitwrite_huffman_where_optional(void)
+{
+    return prc_diag_getenv("PRC_DIAG_HUFFMAN_WHERE_OPTIONAL") != NULL &&
+        prc_diag_getenv("PRC_DIAG_ABLATE_HUFFMAN") == NULL &&
+        prc_diag_getenv("PRC_DIAG_FORCE_UNCOMPRESSED_CHARARRAY") == NULL;
+}
+
 /* Pairs with prc_bitread_character_array (prc_bit.c 896-1251, "10.6 Inverse
    of Writecharacterarray"). Compression is chosen the same way the reader
    determines it (has_comp_bit / num_known, prc_bit.c 910-945): when
-   has_comp_bit lets this writer choose, it always compresses (a real
-   Huffman encoder now exists -- see prc_bitwrite_huffman_block); otherwise
-   it mirrors the format-mandated rule -- Huffman is required once
-   num_known > 3, and forbidden otherwise. */
+   has_comp_bit lets this writer choose, it writes the array plain (see
+   prc_bitwrite_huffman_where_optional); otherwise it mirrors the
+   format-mandated rule -- Huffman is required once num_known > 3, and
+   forbidden otherwise. */
 int
 prc_bitwrite_character_array(prc_context *ctx, prc_bit_write_state *state,
     const uint8_t *data, uint32_t data_size, uint8_t num_bits, uint8_t has_comp_bit, uint32_t num_known)
@@ -1694,10 +1716,9 @@ prc_bitwrite_character_array(prc_context *ctx, prc_bit_write_state *state,
     /* matches: if (has_comp_bit) compressed = prc_bitread_bit(ctx, state);
        (prc_bit.c 911-912) -- when has_comp_bit is false, the reader instead
        derives `compressed` further down from num_known (prc_bit.c 922-934):
-       false when num_known <= 3, true (mandatory Huffman) otherwise. Since a
-       real Huffman encoder exists, this writer takes the compressed path
-       whenever it's free to choose (has_comp_bit), not just when forced. */
-    compressed = has_comp_bit ? 1 : ((num_known > 3) ? 1 : 0);
+       false when num_known <= 3, true (mandatory Huffman) otherwise. When
+       it's free to choose (has_comp_bit), this writer writes plain. */
+    compressed = has_comp_bit ? (uint8_t)prc_bitwrite_huffman_where_optional() : ((num_known > 3) ? 1 : 0);
     /* DIAGNOSTIC (2026-07-24, PRC_DIAG_FORCE_UNCOMPRESSED_CHARARRAY): forces
        compressed=0 even when has_comp_bit would otherwise mandate Huffman
        compression -- added to test whether Huffman-compressing a character
@@ -1707,9 +1728,6 @@ prc_bitwrite_character_array(prc_context *ctx, prc_bit_write_state *state,
        independent encoder's comparable file skips compression here
        entirely. Zero behavior change when unset. */
     if (compressed && prc_diag_getenv("PRC_DIAG_FORCE_UNCOMPRESSED_CHARARRAY") != NULL)
-        compressed = 0;
-    /* PRC_DIAG_ABLATE_HUFFMAN: plain wherever the writer has the choice. */
-    if (compressed && has_comp_bit && prc_diag_getenv("PRC_DIAG_ABLATE_HUFFMAN") != NULL)
         compressed = 0;
     if (has_comp_bit)
         if (prc_bitwrite_bit(ctx, state, compressed) != 0)
@@ -1772,8 +1790,9 @@ prc_bitwrite_character_array(prc_context *ctx, prc_bit_write_state *state,
    Writeshortarray"). Unlike character_array, compression is only ever
    possible when has_comp_bit is set -- the reader hard-codes compressed to
    false whenever has_comp_bit is false (prc_bit.c 1466-1470) -- so that's
-   the only case this writer can legally choose Huffman, and (per the
-   "always compress when the format lets us" rule) does. The plain branch
+   the only case this writer can legally choose Huffman, and by default it
+   writes plain there too (prc_bitwrite_huffman_where_optional), unless a
+   value does not fit the plain form (below). The plain branch
    reconstructs only a 16-bit unsigned value per element (temp1 + temp2<<8,
    prc_bit.c 1518-1520), so it writes the low 16 bits of each value; values
    outside that range are a pre-existing limitation of this branch of the
@@ -1798,10 +1817,10 @@ prc_bitwrite_short_array(prc_context *ctx, prc_bit_write_state *state,
        above (PRC_DIAG_FORCE_UNCOMPRESSED_CHARARRAY). */
     if (compressed && prc_diag_getenv("PRC_DIAG_FORCE_UNCOMPRESSED_CHARARRAY") != NULL)
         compressed = 0;
-    /* PRC_DIAG_ABLATE_HUFFMAN: plain, but only when every value survives the
-       plain form's 16 bits; otherwise the Huffman block, with equal-length
-       codes. */
-    if (compressed && prc_diag_getenv("PRC_DIAG_ABLATE_HUFFMAN") != NULL)
+    /* Plain, but only when every value survives the plain form's 16 bits;
+       otherwise the Huffman block (with equal-length codes under
+       PRC_DIAG_ABLATE_HUFFMAN). */
+    if (compressed && !prc_bitwrite_huffman_where_optional())
     {
         compressed = 0;
         for (k = 0; k < data_size; k++)
@@ -2199,13 +2218,10 @@ prc_bitwrite_compressed_indice_array(prc_context *ctx, prc_bit_write_state *stat
        in the public prc-db collection (88 in 16 files) is in the 8-bit
        form. delta must stay within [-32, 31] for the 6-bit form.
        plain has to match the choice prc_bitwrite_character_array makes,
-       diagnostic switches included: PRC_DIAG_ABLATE_HUFFMAN writes flagged
-       arrays plain, and leaving it out here wrote 0x3F into a plain table,
-       which Acrobat rejected ("3D parsing error") on a mesh with many faces. */
-    plain = has_comp_bit
-        ? (prc_diag_getenv("PRC_DIAG_FORCE_UNCOMPRESSED_CHARARRAY") != NULL ||
-           prc_diag_getenv("PRC_DIAG_ABLATE_HUFFMAN") != NULL)
-        : (num_known <= 3);
+       diagnostic switches included: a switch that wrote flagged arrays plain
+       without being counted here once wrote 0x3F into a plain table, which
+       Acrobat rejected ("3D parsing error") on a mesh with many faces. */
+    plain = has_comp_bit ? !prc_bitwrite_huffman_where_optional() : (num_known <= 3);
     for (k = 1; k < data_size; k++)
     {
         int64_t diff = (int64_t)data[k] - (int64_t)data[k - 1];

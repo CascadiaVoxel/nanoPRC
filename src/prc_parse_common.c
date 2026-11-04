@@ -16,6 +16,7 @@
 
 #include <stdlib.h>
 #include <stdio.h>
+#include <string.h>
 #include "prc_parse_common.h"
 #include "prc_schema.h"
 
@@ -642,6 +643,10 @@ prc_parse_name(prc_context *ctx, prc_bit_state *bit_state, prc_name *val)
     uint8_t same;
 
     same = prc_bitread_bit(ctx, bit_state);
+    val->same = same;
+    val->name.null_flag = 0;
+    val->name.size = 0;
+    val->name.string = NULL;
 
     if (!same)
     {
@@ -651,9 +656,26 @@ prc_parse_name(prc_context *ctx, prc_bit_state *bit_state, prc_name *val)
             prc_error(ctx, code, "Failed in prc_bitread_string\n");
             return code;
         }
-    }
 
-    val->same = same;
+        /* The current name is set to this name (clause 4.4), including a name
+           read inside a nested entity. */
+        bit_state->curr_name = val->name.string;
+        bit_state->curr_name_size = (val->name.string != NULL) ? val->name.size : 0;
+    }
+    else if (bit_state->curr_name != NULL)
+    {
+        /* Same as the current name: the entity keeps its own copy, so that it
+           owns its name like any other. */
+        val->name.string = (unsigned char *)prc_malloc(ctx, (size_t)bit_state->curr_name_size + 1);
+        if (val->name.string == NULL)
+        {
+            prc_error(ctx, PRC_ERROR_MEMORY, "Allocation error in prc_parse_name\n");
+            return PRC_ERROR_MEMORY;
+        }
+        memcpy(val->name.string, bit_state->curr_name, bit_state->curr_name_size);
+        val->name.string[bit_state->curr_name_size] = 0x0;
+        val->name.size = bit_state->curr_name_size;
+    }
 
     return code;
 }

@@ -36,7 +36,11 @@ struct prc_bit_state_s
     int64_t bit_position;
 	uint8_t overrun; /* set once a read is attempted past bit_count; callers should
 	                    treat the stream as invalid once this is set */
-	prc_name *curr_name;
+	/* The current name (clause 4.4): the string of the last name read in this
+	   section, NULL before the first name and after a null one. It points into
+	   that entity's own copy, which lives until the parsed data is released. */
+	const unsigned char *curr_name;
+	prc_unsigned_int curr_name_size;
 	prc_graphics_content graphics_content;
 };
 

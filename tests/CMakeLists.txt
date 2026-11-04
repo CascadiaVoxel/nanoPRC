@@ -14,6 +14,11 @@ target_link_libraries(test_bitwrite prc_static)
 target_include_directories(test_bitwrite PRIVATE tests)
 add_test(NAME test_bitwrite COMMAND test_bitwrite)
 
+add_executable(test_current_name tests/unit/test_current_name.c)
+target_link_libraries(test_current_name prc_static)
+target_include_directories(test_current_name PRIVATE tests)
+add_test(NAME test_current_name COMMAND test_current_name)
+
 add_executable(test_section_residue tests/unit/test_section_residue.c)
 target_link_libraries(test_section_residue prc_static)
 target_include_directories(test_section_residue PRIVATE tests)

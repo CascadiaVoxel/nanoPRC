@@ -109,9 +109,7 @@ pop_stack(prc_context *ctx, prc_triangle_stack *stack, prc_treated_details *deta
     return 0;
 }
 
-static double prc_taylor_sin(double x);
-
-static double
+double
 prc_taylor_cos(double x)
 {
     if (x > PRC_PI_OVER_4)
@@ -120,7 +118,7 @@ prc_taylor_cos(double x)
         return 1.0 - (x * x) / 2.0 + (x * x * x * x) / 24.0 - (x * x * x * x * x * x) / 720.0;
 }
 
-static double
+double
 prc_taylor_sin(double x)
 {
     if (x > PRC_PI_OVER_4)

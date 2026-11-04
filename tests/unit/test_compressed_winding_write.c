@@ -23,7 +23,13 @@
    positions, and its corners must come back in the same cyclic order: the
    input order or a rotation of it, never reversed. A writer that set the bit
    per chain rather than per triangle reversed every other triangle of a
-   strip, and fails here. */
+   strip, and fails here.
+
+   Written with normals, the file must keep them: the decoder then derives
+   each triangle's bit from the decoded normal at its first corner, and every
+   decoded corner normal must be the supplied one. A writer that decided the
+   bit from the supplied normal instead could disagree with the decoder, and
+   fell back to recalculated normals on the hard-edged cube. */
 
 #include <stdlib.h>
 #include <stdint.h>
@@ -103,13 +109,14 @@ same_position(const double *a, const double *b)
     return fabs(a[0] - b[0]) < 1e-4 && fabs(a[1] - b[1]) < 1e-4 && fabs(a[2] - b[2]) < 1e-4;
 }
 
-/* Reads the file back and checks every input triangle's winding. */
+/* Reads the file back and checks every input triangle's winding, and, when
+   normals were supplied, that they were stored and came back. */
 static void
-check_winding(prc_context *ctx, const test_mesh *m)
+check_decoded(prc_context *ctx, const test_mesh *m, int check_order)
 {
     prc_data *pd;
     prc_tess_3d_compressed *t;
-    uint32_t tri, c, d, k, num_decoded, reversed = 0;
+    uint32_t tri, c, d, k, num_decoded, reversed = 0, wrong_normal = 0;
 
     pd = (prc_data *)prc_api_open_contents(ctx, TEST_PRC_FILENAME);
     if (pd == NULL)
@@ -120,6 +127,8 @@ check_winding(prc_context *ctx, const test_mesh *m)
     PRC_ASSERT_NOT_NULL(t);
     num_decoded = t->triangle_face_array_size;
     PRC_ASSERT_EQ(num_decoded, m->num_triangles);
+    if (m->normals != NULL)
+        PRC_ASSERT_EQ(t->must_recalculate_normals, 0);
 
     for (tri = 0; tri < m->num_triangles; tri++)
     {
@@ -147,16 +156,40 @@ check_winding(prc_context *ctx, const test_mesh *m)
 
             found = 1;
             /* Same cyclic order: input corner c+1 follows input corner c. */
-            if ((matched[1] - matched[0] + 3) % 3 != 1 || (matched[2] - matched[1] + 3) % 3 != 1)
+            if (check_order &&
+                ((matched[1] - matched[0] + 3) % 3 != 1 || (matched[2] - matched[1] + 3) % 3 != 1))
                 reversed++;
+            if (m->normals != NULL)
+            {
+                for (c = 0; c < 3; c++)
+                {
+                    const double *want = &m->normals[(size_t)m->norm_indices[tri * 3 + c] * 3];
+                    uint32_t ni = t->normal_indices_prc_compressed_3d[d * 3 + (uint32_t)matched[c]];
+                    const double *got = &t->normals_prc_compressed_3d[(size_t)ni * 3];
+                    double len = sqrt(want[0] * want[0] + want[1] * want[1] + want[2] * want[2]);
+
+                    /* within 1 degree: the angles are stored in 10 bits */
+                    if ((want[0] * got[0] + want[1] * got[1] + want[2] * got[2]) / len < cos(1.0 * 3.14159265358979 / 180.0))
+                        wrong_normal++;
+                }
+            }
         }
         PRC_ASSERT(found);
     }
     if (reversed != 0)
         printf("    %u of %u triangles came back reversed\n", reversed, m->num_triangles);
     PRC_ASSERT_EQ(reversed, 0);
+    if (wrong_normal != 0)
+        printf("    %u of %u corner normals came back wrong\n", wrong_normal, m->num_triangles * 3);
+    PRC_ASSERT_EQ(wrong_normal, 0);
 
     prc_api_release_data(ctx, (prc_api_data)pd, NULL, 0, NULL, 0, NULL, 0, NULL);
+}
+
+static void
+check_winding(prc_context *ctx, const test_mesh *m)
+{
+    check_decoded(ctx, m, 1);
 }
 
 /* Unit cube, corner i at (i & 1, (i >> 1) & 1, (i >> 2) & 1), each face
@@ -260,7 +293,7 @@ test_strip(prc_context *ctx)
 static void
 test_grid(prc_context *ctx)
 {
-    double pos[36 * 3];
+    double pos[36 * 3], normals[36 * 3];
     uint32_t tris[50 * 3];
     uint32_t x, y, n = 0;
     test_mesh m;
@@ -269,9 +302,16 @@ test_grid(prc_context *ctx)
     for (y = 0; y < 6; y++)
         for (x = 0; x < 6; x++)
         {
+            double s = cos((double)(x + 2 * y));
+            double nl = sqrt(0.04 * s * s + 0.16 * s * s + 1.0);
+
             pos[(y * 6 + x) * 3 + 0] = (double)x;
             pos[(y * 6 + x) * 3 + 1] = (double)y;
             pos[(y * 6 + x) * 3 + 2] = 0.2 * sin((double)(x + 2 * y));
+            /* the surface's own normal: (-dz/dx, -dz/dy, 1), unitised */
+            normals[(y * 6 + x) * 3 + 0] = -0.2 * s / nl;
+            normals[(y * 6 + x) * 3 + 1] = -0.4 * s / nl;
+            normals[(y * 6 + x) * 3 + 2] = 1.0 / nl;
         }
     for (y = 0; y < 5; y++)
         for (x = 0; x < 5; x++)
@@ -285,6 +325,74 @@ test_grid(prc_context *ctx)
     m.tris = tris; m.num_triangles = n;
     PRC_ASSERT_EQ(write_mesh(ctx, &m), 0);
     check_winding(ctx, &m);
+
+    printf("  sub-case: the same grid, smooth normals supplied\n");
+    m.normals = normals; m.num_normals = 36; m.norm_indices = tris;
+    PRC_ASSERT_EQ(write_mesh(ctx, &m), 0);
+    check_winding(ctx, &m);
+}
+
+/* The flat strip again, with every corner's supplied normal lying almost in
+   the strip's plane, swept from just below it to just above. Here the
+   quantised normal the decoder rebuilds can fall on the other side of the
+   plane from the supplied one, so the bit derived from it differs. The
+   normals must still be stored and come back; the winding is whichever the
+   decoded normal gives, so it is not checked. */
+static void
+test_edge_on_normals(prc_context *ctx)
+{
+    double pos[18 * 3], normals[3];
+    uint32_t tris[16 * 3], nidx[16 * 3];
+    uint32_t i, n = 0, stored = 0, tried = 0;
+    int step;
+    test_mesh m;
+
+    for (i = 0; i < 9; i++)
+    {
+        pos[i * 3 + 0] = (double)i; pos[i * 3 + 1] = 0.0; pos[i * 3 + 2] = 0.0;
+        pos[(9 + i) * 3 + 0] = (double)i; pos[(9 + i) * 3 + 1] = 1.0; pos[(9 + i) * 3 + 2] = 0.0;
+    }
+    for (i = 0; i < 8; i++)
+    {
+        uint32_t a = i, b = i + 1, c = 9 + i + 1, d = 9 + i;
+        tris[n * 3 + 0] = a; tris[n * 3 + 1] = b; tris[n * 3 + 2] = c; n++;
+        tris[n * 3 + 0] = a; tris[n * 3 + 1] = c; tris[n * 3 + 2] = d; n++;
+    }
+    for (i = 0; i < n * 3; i++)
+        nidx[i] = 0;
+    memset(&m, 0, sizeof(m));
+    m.positions = pos; m.num_positions = 18;
+    m.tris = tris; m.num_triangles = n;
+    m.normals = normals; m.num_normals = 1; m.norm_indices = nidx;
+
+    printf("  sub-case: flat strip, normals within 0.1 degree of its plane\n");
+    for (step = -10; step <= 10; step++)
+    {
+        double e = (double)step * 0.01 * 3.14159265358979 / 180.0;
+        prc_data *pd;
+        prc_tess_3d_compressed *t;
+        int is_stored;
+
+        normals[0] = cos(e) * 0.6;
+        normals[1] = cos(e) * 0.8;
+        normals[2] = sin(e);
+        PRC_ASSERT_EQ(write_mesh(ctx, &m), 0);
+        pd = (prc_data *)prc_api_open_contents(ctx, TEST_PRC_FILENAME);
+        PRC_ASSERT_NOT_NULL(pd);
+        t = pd->file_struct[0].tessellation->tess[0].tess_3d_compressed;
+        PRC_ASSERT_NOT_NULL(t);
+        is_stored = !t->must_recalculate_normals;
+        prc_api_release_data(ctx, (prc_api_data)pd, NULL, 0, NULL, 0, NULL, 0, NULL);
+        tried++;
+        if (is_stored)
+        {
+            stored++;
+            check_decoded(ctx, &m, 0);
+        }
+        else
+            printf("    elevation %+.2f degrees: normals not stored\n", (double)step * 0.01);
+    }
+    PRC_ASSERT_EQ(stored, tried);
 }
 
 int
@@ -300,6 +408,7 @@ main(void)
     test_cube(ctx);
     test_strip(ctx);
     test_grid(ctx);
+    test_edge_on_normals(ctx);
 
     prc_release_context(ctx);
     remove(TEST_PRC_FILENAME);

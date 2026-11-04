@@ -2435,12 +2435,24 @@ prc_encode_edge_status(prc_encode_state *st, uint32_t tri,
     return 0;
 }
 
-int
-prc_encode_traversal(prc_context *ctx, const prc_encode_mesh *mesh,
+/* The stored-normal stream, defined with the normal encoding below; the
+   traversal builds it as it goes. */
+typedef struct prc_encode_normal_stream_s prc_encode_normal_stream;
+static int prc_encode_normal_stream_triangle(prc_encode_normal_stream *ns, uint32_t k,
+    uint32_t mesh_tri, const int32_t idx[3], const uint32_t mv[3], const prc_vec3 P[3],
+    int32_t face, prc_vec3 *corner0_out);
+static uint8_t prc_encode_decoder_reversed(prc_vec3 P0, prc_vec3 P1, prc_vec3 P2, prc_vec3 n0);
+
+/* ns: when not NULL, the stored normals are encoded into it triangle by
+   triangle as the traversal emits them, and each triangle's
+   normal_was_reversed is the one the decoder will derive from them. */
+static int
+prc_encode_traversal_ns(prc_context *ctx, const prc_encode_mesh *mesh,
     const uint32_t *face_indices, double tolerance_mm,
     prc_encode_traversal_result *out,
     prc_vertex_analysis **analysis_out, uint32_t *analysis_count_out,
-    const double *real_normals, uint8_t normals_are_proxy)
+    const double *real_normals, uint8_t normals_are_proxy,
+    prc_encode_normal_stream *ns)
 {
     prc_encode_state st;
     uint32_t i, num_tris, num_pos;
@@ -2945,7 +2957,29 @@ prc_encode_traversal(prc_context *ctx, const prc_encode_mesh *mesh,
            actually needs it to pick push order for descendants. See
            prc_encode_traversal's header comment for why this ordering (decide,
            then push, in one pass) is the whole point. */
-        if (st.real_normals != NULL)
+        if (ns != NULL)
+        {
+            /* Stored normals. Encode this triangle's normals now, and take
+               its bit from the normal the decoder will rebuild at corner 0,
+               by the decoder's own test. The decoder derives the bit that
+               way, so the two agree on every triangle, with or without
+               children. */
+            prc_vec3 P[3], n0;
+
+            P[0] = st.decoded_pos[idx[0]];
+            P[1] = st.decoded_pos[idx[1]];
+            P[2] = st.decoded_pos[idx[2]];
+            code = prc_encode_normal_stream_triangle(ns, emitted, cur, idx, mv, P,
+                face_indices != NULL ? (int32_t)face_indices[cur] : 0, &n0);
+            if (code < 0)
+            {
+                ret = code;
+                goto fail;
+            }
+            st.tri_reversed[cur] = prc_encode_decoder_reversed(P[0], P[1], P[2], n0);
+            out->triangle_reversed[emitted] = st.tri_reversed[cur];
+        }
+        else if (st.real_normals != NULL)
         {
             /* A growing (non-chain-start) triangle's normal_was_reversed is
                simply inherited from its parent, unchanged -- NOT an
@@ -3305,6 +3339,17 @@ cleanup:
     if (st.stack != NULL)
         prc_free(ctx, st.stack);
     return ret;
+}
+
+int
+prc_encode_traversal(prc_context *ctx, const prc_encode_mesh *mesh,
+    const uint32_t *face_indices, double tolerance_mm,
+    prc_encode_traversal_result *out,
+    prc_vertex_analysis **analysis_out, uint32_t *analysis_count_out,
+    const double *real_normals, uint8_t normals_are_proxy)
+{
+    return prc_encode_traversal_ns(ctx, mesh, face_indices, tolerance_mm, out,
+        analysis_out, analysis_count_out, real_normals, normals_are_proxy, NULL);
 }
 
 void
@@ -3764,17 +3809,20 @@ prc_encode_project_normal(prc_vec3 N, prc_vec3 X, prc_vec3 Y, prc_vec3 Z,
 
 /* The vector the decoder will actually store for this tuple, needed both to
    predict its normal_was_reversed decision and to know what a back-reference
-   would resolve to. */
+   would resolve to. The angle and the trigonometry are the decoder's own
+   (prc_decode_angles, prc_compute_vertex_normal): the reversal decision is a
+   sign taken from this vector, so it has to match to the last bit. */
 static void
 prc_encode_simulate_decoded_normal(prc_vec3 X, prc_vec3 Y, prc_vec3 Z,
     const prc_encode_normal_tuple *t, prc_vec3 *out)
 {
-    double scale = PRC_HALF_PI / (double)PRC_ENCODE_NORMAL_ANGLE_MAX;
-    double theta = (double)t->theta_q * scale;
-    double phi = (double)t->phi_q * scale;
-    double f1 = cos(theta) * cos(phi);
-    double f2 = sin(theta) * cos(phi);
-    double f3 = sin(phi);
+    double denom = (double)pow(2, PRC_ENCODE_NORMAL_ANGLE_BITS) - 1;
+    double theta = t->theta_q * (PRC_PI / 2.0) / denom;
+    double phi = t->phi_q * (PRC_PI / 2.0) / denom;
+    double cos_phi = prc_taylor_cos(phi);
+    double f1 = prc_taylor_cos(theta) * cos_phi;
+    double f2 = prc_taylor_sin(theta) * cos_phi;
+    double f3 = prc_taylor_sin(phi);
 
     if (t->tri_reversed)
     {
@@ -3918,6 +3966,402 @@ prc_encode_emit_vertex_normal(prc_context *ctx, prc_encode_point_norm *p,
     return 0;
 }
 
+/* The decoder's normal_was_reversed test where normals are stored
+   (prc_is_normal_reversed3 / prc_is_normal_reversed): the sign of
+   ((P2 - mid(P0, P1)) x (P1 - P0)) . N, strict, with N the normal decoded at
+   P0 for this triangle. Evaluated with the decoder's own operations, so an
+   exact zero, or a value within rounding of zero, comes out the same way on
+   both sides. */
+static uint8_t
+prc_encode_decoder_reversed(prc_vec3 P0, prc_vec3 P1, prc_vec3 P2, prc_vec3 n0)
+{
+    prc_vec3 mid, e1, e2, cross1;
+
+    prc_vec_avg(P0, P1, &mid);
+    prc_vec_sub(P1, P0, &e1);
+    prc_vec_sub(P2, mid, &e2);
+    prc_vec_cross(e2, e1, &cross1);
+    return (uint8_t)(prc_vec_dot_product(cross1, n0) < 0.0);
+}
+
+/* The stored-normal stream, built one triangle at a time in traversal order.
+
+   prc_encode_traversal calls this for each triangle as it is emitted, before
+   the triangle's edges are pushed, and takes the triangle's
+   normal_was_reversed from the normal it predicts the decoder will rebuild at
+   corner 0. The decoder derives that bit from the decoded normal, not from
+   the caller's, and the bit decides both the triangle's winding and which of
+   its edges is left and which right. Deciding it from the decoded normal, in
+   the decoder's own form, makes the two agree on every triangle, including
+   one with no children, where nothing else would catch a disagreement.
+
+   prc_encode_normals_c2 runs the same steps after a traversal, for callers
+   that encode the normals separately. */
+struct prc_encode_normal_stream_s
+{
+    prc_context *ctx;
+    const prc_encode_mesh *mesh;
+    prc_vec3 *corner_unit;          /* mesh order, 3 per triangle: input normals, unitised */
+    prc_encode_point_norm *pn;      /* one per mesh vertex; each point is one mesh vertex */
+    uint32_t face_count;
+    uint8_t *planar_eff;            /* face_count entries; NULL when no face is planar */
+    uint8_t *face_done;
+    prc_vec3 *face_assigned;
+    int32_t *angles;
+    uint32_t angle_count;
+    uint8_t *bin;
+    uint32_t bin_count;
+};
+
+static void
+prc_encode_normal_stream_free(prc_encode_normal_stream *ns)
+{
+    prc_context *ctx = ns->ctx;
+    uint32_t v;
+
+    if (ns->pn != NULL)
+    {
+        for (v = 0; v < ns->mesh->num_positions; v++)
+        {
+            if (ns->pn[v].slot_input != NULL)
+                prc_free(ctx, ns->pn[v].slot_input);
+            if (ns->pn[v].slot_decoded != NULL)
+                prc_free(ctx, ns->pn[v].slot_decoded);
+        }
+        prc_free(ctx, ns->pn);
+    }
+    if (ns->corner_unit != NULL)
+        prc_free(ctx, ns->corner_unit);
+    if (ns->planar_eff != NULL)
+        prc_free(ctx, ns->planar_eff);
+    if (ns->face_done != NULL)
+        prc_free(ctx, ns->face_done);
+    if (ns->face_assigned != NULL)
+        prc_free(ctx, ns->face_assigned);
+    if (ns->angles != NULL)
+        prc_free(ctx, ns->angles);
+    if (ns->bin != NULL)
+        prc_free(ctx, ns->bin);
+    memset(ns, 0, sizeof(*ns));
+}
+
+/* mesh_face: the face of each mesh triangle (mesh order), or NULL. Everything
+   decided here depends only on the mesh, never on the traversal order. */
+static int
+prc_encode_normal_stream_init(prc_encode_normal_stream *ns, prc_context *ctx,
+    const prc_encode_mesh *mesh, const double *corner_normals,
+    const uint32_t *mesh_face, const uint8_t *face_planar_candidate, uint32_t face_count)
+{
+    uint32_t num_tris, t, c, v;
+    uint8_t *face_has_ref = NULL;
+    prc_vec3 *face_ref_normal = NULL;
+
+    memset(ns, 0, sizeof(*ns));
+    ns->ctx = ctx;
+    ns->mesh = mesh;
+    if (corner_normals == NULL)
+    {
+        prc_error(ctx, PRC_ERROR_INTERNAL, "prc_encode_normals_c2: NULL corner normals\n");
+        return PRC_ERROR_INTERNAL;
+    }
+    num_tris = mesh->num_triangles;
+    if (num_tris == 0)
+        return 0;
+
+    ns->corner_unit = (prc_vec3 *)prc_malloc(ctx, (size_t)num_tris * 3 * sizeof(prc_vec3));
+    ns->pn = (prc_encode_point_norm *)prc_calloc(ctx,
+        mesh->num_positions > 0 ? mesh->num_positions : 1, sizeof(prc_encode_point_norm));
+    ns->angles = (int32_t *)prc_malloc(ctx, (size_t)num_tris * 6 * sizeof(int32_t));
+    /* Per-visit worst case: 4 fresh bits, or 1 reference bit plus at most 32
+       back-reference index bits. */
+    ns->bin = (uint8_t *)prc_malloc(ctx, (size_t)num_tris * 3 * 40 * sizeof(uint8_t));
+    if (ns->corner_unit == NULL || ns->pn == NULL || ns->angles == NULL || ns->bin == NULL)
+    {
+        prc_error(ctx, PRC_ERROR_MEMORY, "Allocation error in prc_encode_normals_c2\n");
+        prc_encode_normal_stream_free(ns);
+        return PRC_ERROR_MEMORY;
+    }
+
+    for (t = 0; t < num_tris; t++)
+    {
+        for (c = 0; c < 3; c++)
+        {
+            prc_vec3 n;
+
+            n.x = corner_normals[(size_t)t * 9 + (size_t)c * 3 + 0];
+            n.y = corner_normals[(size_t)t * 9 + (size_t)c * 3 + 1];
+            n.z = corner_normals[(size_t)t * 9 + (size_t)c * 3 + 2];
+            if (prc_vec_normalize(&n) < 0)
+            {
+                prc_error(ctx, PRC_ERROR_INTERNAL, "prc_encode_normals_c2: zero-length input normal\n");
+                prc_encode_normal_stream_free(ns);
+                return PRC_ERROR_INTERNAL;
+            }
+            ns->corner_unit[(size_t)t * 3 + c] = n;
+        }
+    }
+
+    /* has_multiple_normals must be fixed for a point's entire lifetime at its
+       first visit, so decide it up front: only if every incident visit wants
+       the same input normal can later visits legally consume zero bits. */
+    for (v = 0; v < mesh->num_positions; v++)
+        ns->pn[v].all_same = 1;
+    for (t = 0; t < num_tris; t++)
+    {
+        for (c = 0; c < 3; c++)
+        {
+            prc_encode_point_norm *p = &ns->pn[mesh->tri_indices[(size_t)t * 3 + c]];
+            prc_vec3 n = ns->corner_unit[(size_t)t * 3 + c];
+
+            if (!p->has_first)
+            {
+                p->first_normal = n;
+                p->has_first = 1;
+            }
+            else if (prc_vec_dot_product(p->first_normal, n) < 1.0 - 1.0e-9)
+            {
+                p->all_same = 0;
+            }
+        }
+    }
+
+    /* Effective planarity. A face may only be ENCODED as planar if it is both
+       geometrically planar (the caller's candidate, from
+       prc_encode_compute_face_planarity) AND every supplied normal across the
+       whole face agrees, because the format stores exactly one normal for a
+       planar face and the decoder assigns it to every vertex of that face.
+
+       Geometry alone is not sufficient: a flat face lying against curved
+       neighbours can legitimately carry smoothly-varying per-vertex normals,
+       and encoding it as planar would silently replace them all with one.
+       Filtering here rather than in the geometric detector keeps the flag and
+       the normal stream consistent by construction -- the caller writes the
+       array this produces, not the candidate it passed in. */
+    ns->face_count = face_count;
+    if (face_planar_candidate != NULL && face_count > 0 && mesh_face != NULL)
+    {
+        ns->planar_eff = (uint8_t *)prc_calloc(ctx, face_count, sizeof(uint8_t));
+        ns->face_done = (uint8_t *)prc_calloc(ctx, face_count, sizeof(uint8_t));
+        ns->face_assigned = (prc_vec3 *)prc_calloc(ctx, face_count, sizeof(prc_vec3));
+        face_ref_normal = (prc_vec3 *)prc_calloc(ctx, face_count, sizeof(prc_vec3));
+        face_has_ref = (uint8_t *)prc_calloc(ctx, face_count, sizeof(uint8_t));
+        if (ns->planar_eff == NULL || ns->face_done == NULL || ns->face_assigned == NULL ||
+            face_ref_normal == NULL || face_has_ref == NULL)
+        {
+            prc_error(ctx, PRC_ERROR_MEMORY, "Allocation error in prc_encode_normals_c2\n");
+            if (face_ref_normal != NULL)
+                prc_free(ctx, face_ref_normal);
+            if (face_has_ref != NULL)
+                prc_free(ctx, face_has_ref);
+            prc_encode_normal_stream_free(ns);
+            return PRC_ERROR_MEMORY;
+        }
+        for (v = 0; v < face_count; v++)
+            ns->planar_eff[v] = face_planar_candidate[v];
+
+        for (t = 0; t < num_tris; t++)
+        {
+            uint32_t f = mesh_face[t];
+
+            if (f >= face_count || !ns->planar_eff[f])
+                continue;
+            for (c = 0; c < 3; c++)
+            {
+                prc_vec3 n = ns->corner_unit[(size_t)t * 3 + c];
+
+                if (!face_has_ref[f])
+                {
+                    face_ref_normal[f] = n;
+                    face_has_ref[f] = 1;
+                }
+                else if (prc_vec_dot_product(face_ref_normal[f], n) < 1.0 - 1.0e-9)
+                {
+                    ns->planar_eff[f] = 0;
+                    break;
+                }
+            }
+        }
+        prc_free(ctx, face_ref_normal);
+        prc_free(ctx, face_has_ref);
+    }
+    return 0;
+}
+
+/* Emit the normals of one triangle, emitted k-th, whose corners in traversal
+   order are points idx[] = mesh vertices mv[] at decoded positions P[], and
+   return the normal the decoder will rebuild at corner 0. */
+static int
+prc_encode_normal_stream_triangle(prc_encode_normal_stream *ns, uint32_t k,
+    uint32_t mesh_tri, const int32_t idx[3], const uint32_t mv[3], const prc_vec3 P[3],
+    int32_t face, prc_vec3 *corner0_out)
+{
+    prc_context *ctx = ns->ctx;
+    const prc_encode_mesh *mesh = ns->mesh;
+    prc_vec3 bx, by, bz, corner0_decoded;
+    prc_encode_normal_tuple tuples[3];
+    prc_vec3 visit_normals[3];
+    uint8_t planar_here;
+    uint32_t c, j;
+    int code;
+
+    corner0_decoded.x = corner0_decoded.y = corner0_decoded.z = 0.0;
+
+    code = prc_encode_vertex_normal_basis(P[0], P[1], P[2], &bx, &by, &bz);
+    if (code < 0)
+    {
+        prc_error(ctx, PRC_ERROR_INTERNAL, "prc_encode_normals_c2: degenerate triangle basis\n");
+        return PRC_ERROR_INTERNAL;
+    }
+
+    for (c = 0; c < 3; c++)
+    {
+        uint32_t corner = 3;
+
+        for (j = 0; j < 3; j++)
+        {
+            if (mesh->tri_indices[(size_t)mesh_tri * 3 + j] == mv[c])
+                corner = j;
+        }
+        if (corner == 3)
+        {
+            prc_error(ctx, PRC_ERROR_INTERNAL, "prc_encode_normals_c2: traversal/mesh corner mismatch\n");
+            return PRC_ERROR_INTERNAL;
+        }
+        visit_normals[c] = ns->corner_unit[(size_t)mesh_tri * 3 + corner];
+        prc_encode_project_normal(visit_normals[c], bx, by, bz, &tuples[c]);
+    }
+
+    planar_here = (uint8_t)(ns->planar_eff != NULL && face >= 0 &&
+        (uint32_t)face < ns->face_count && ns->planar_eff[face]);
+
+    if (planar_here)
+    {
+        /* Trace-only bookkeeping: the branch taken for a planar face is
+           not otherwise visible, and it is the whole question in
+           pdf-issues #727. Captured before the emit because the emit
+           mutates the point's state. */
+        uint8_t was_first = (uint8_t)!ns->face_done[face];
+        uint8_t state_before = ns->pn[mv[0]].state;
+        uint32_t stored_before = ns->pn[mv[0]].num_stored;
+        uint32_t bin_before = ns->bin_count;
+        uint32_t ang_before = ns->angle_count;
+
+        /* One normal for the entire face, encoded at corner 0 of the
+           face's FIRST triangle; every other corner and triangle of the
+           face emits nothing. This mirrors the decoder's face_is_planar
+           branch, which consumes bits only when
+           face_normal_decoded[face] is still clear and looks only at
+           treated_index[0].
+
+           Note corners 1 and 2 are deliberately NOT registered in pn[]:
+           the decoder never touches multiple_normals for them either, so
+           a vertex first met at corner 1 of a planar face is still
+           NOT_ENCOUNTERED when a later non-planar face reaches it. */
+        if (ns->face_done[face])
+        {
+            corner0_decoded = ns->face_assigned[face];
+        }
+        else
+        {
+            code = prc_encode_emit_vertex_normal(ctx, &ns->pn[mv[0]], &tuples[0],
+                bx, by, bz, visit_normals[0], ns->bin, &ns->bin_count,
+                ns->angles, &ns->angle_count, &corner0_decoded);
+            if (code < 0)
+                return code;
+            ns->face_done[face] = 1;
+            ns->face_assigned[face] = corner0_decoded;
+        }
+        if (ctx->trace_normals)
+        {
+            uint32_t dbits = ns->bin_count - bin_before;
+            uint32_t dang = ns->angle_count - ang_before;
+            const char *sname =
+                (state_before == PRC_VERTEX_NORM_NOT_ENCOUNTERED) ? "NOT_ENCOUNTERED" :
+                (state_before == PRC_VERTEX_NORM_IS_NOT_MULTIPLE) ? "IS_NOT_MULTIPLE" :
+                                                                    "IS_MULTIPLE";
+            /* The cost names the branch unambiguously: a fresh record is
+               4 bits + 2 angles, a reference is 1 + index bits and NO
+               angles, and the zero-bit repeat is 0 + 0. */
+            const char *branch =
+                (!was_first)            ? "face-already-done" :
+                (dbits == 0)            ? "REPEAT_NOT_MULTIPLE(0 bits)" :
+                (dang == 0)             ? "IS_A_REFERENCE" :
+                                          "fresh-record";
+
+            fprintf(stderr, "ENCNORM k=%u PLANAR face=%d first=%u v0=%d "
+                "state=%s stored=%u bits=%u angles=%u branch=%s "
+                "assigned=(%.6f,%.6f,%.6f)%c",
+                k, face, (unsigned)was_first, (int)idx[0],
+                sname, stored_before, dbits, dang, branch,
+                corner0_decoded.x, corner0_decoded.y, corner0_decoded.z, 10);
+        }
+    }
+    else
+    {
+        for (c = 0; c < 3; c++)
+        {
+            const prc_encode_normal_tuple *t = &tuples[c];
+            prc_vec3 assigned;
+
+            code = prc_encode_emit_vertex_normal(ctx, &ns->pn[mv[c]], t,
+                bx, by, bz, visit_normals[c], ns->bin, &ns->bin_count,
+                ns->angles, &ns->angle_count, &assigned);
+            if (code < 0)
+                return code;
+            if (ctx->trace_normals)
+            {
+                fprintf(stderr, "ENCNORM k=%u c=%u pt=%d rev=%u xrev=%u yrev=%u theta=%d phi=%d input_normal=(%.6f,%.6f,%.6f) assigned=(%.6f,%.6f,%.6f) pos=(%.6f,%.6f,%.6f)%c",
+                    k, c, idx[c], t->tri_reversed, t->x_reversed, t->y_reversed, t->theta_q, t->phi_q,
+                    visit_normals[c].x, visit_normals[c].y, visit_normals[c].z,
+                    assigned.x, assigned.y, assigned.z, P[c].x, P[c].y, P[c].z, 10);
+            }
+            if (c == 0)
+                corner0_decoded = assigned;
+        }
+    }
+    *corner0_out = corner0_decoded;
+    return 0;
+}
+
+/* Hand the finished stream to the caller, who owns the arrays afterwards.
+   is_face_planar is the planarity actually encoded, not the candidate: the
+   caller must write THIS array, or the flag and the normal stream disagree. */
+static void
+prc_encode_normal_stream_take(prc_encode_normal_stream *ns,
+    uint8_t **face_planar_effective_out,
+    int32_t **normal_angle_array_out, uint32_t *normal_angle_count_out,
+    uint8_t **normal_binary_data_out, uint32_t *normal_binary_data_size_out)
+{
+    prc_context *ctx = ns->ctx;
+    uint32_t num_tris = ns->mesh->num_triangles;
+
+    if (ns->angle_count > 0 && (size_t)ns->angle_count < (size_t)num_tris * 6)
+    {
+        int32_t *shrunk = (int32_t *)prc_realloc(ctx, ns->angles, (size_t)ns->angle_count * sizeof(int32_t));
+
+        if (shrunk != NULL)
+            ns->angles = shrunk;
+    }
+    if (ns->bin_count > 0 && (size_t)ns->bin_count < (size_t)num_tris * 3 * 40)
+    {
+        uint8_t *shrunk = (uint8_t *)prc_realloc(ctx, ns->bin, (size_t)ns->bin_count * sizeof(uint8_t));
+
+        if (shrunk != NULL)
+            ns->bin = shrunk;
+    }
+    *normal_angle_array_out = ns->angles;
+    *normal_angle_count_out = ns->angle_count;
+    *normal_binary_data_out = ns->bin;
+    *normal_binary_data_size_out = ns->bin_count;
+    ns->angles = NULL;
+    ns->bin = NULL;
+    if (face_planar_effective_out != NULL)
+    {
+        *face_planar_effective_out = ns->planar_eff;
+        ns->planar_eff = NULL;
+    }
+}
+
 int
 prc_encode_normals_c2(prc_context *ctx, const prc_encode_mesh *mesh,
     const prc_encode_traversal_result *trav, const double *corner_normals,
@@ -3926,17 +4370,9 @@ prc_encode_normals_c2(prc_context *ctx, const prc_encode_mesh *mesh,
     int32_t **normal_angle_array_out, uint32_t *normal_angle_count_out,
     uint8_t **normal_binary_data_out, uint32_t *normal_binary_data_size_out)
 {
-    uint32_t num_tris, npts, k, c, v;
-    uint8_t *planar_eff = NULL, *face_done = NULL, *face_has_ref = NULL;
-    prc_vec3 *face_assigned = NULL, *face_ref_normal = NULL;
-    prc_vec3 *visit_normals = NULL;
-    prc_vec3 *bx = NULL, *by = NULL, *bz = NULL;
-    prc_encode_normal_tuple *tuples = NULL;
-    prc_encode_point_norm *pn = NULL;
-    int32_t *angles = NULL;
-    uint8_t *bin = NULL;
-    uint32_t angle_count = 0, bin_count = 0;
-    int ret = PRC_ERROR_INTERNAL;
+    prc_encode_normal_stream ns;
+    uint32_t *mesh_face = NULL;
+    uint32_t num_tris, k;
     int code;
 
     if (normal_angle_array_out == NULL || normal_angle_count_out == NULL ||
@@ -3963,428 +4399,86 @@ prc_encode_normals_c2(prc_context *ctx, const prc_encode_mesh *mesh,
         prc_error(ctx, PRC_ERROR_INTERNAL, "prc_encode_normals_c2: NULL corner normals\n");
         return PRC_ERROR_INTERNAL;
     }
-    npts = trav->num_decoded_points;
 
-    visit_normals = (prc_vec3 *)prc_malloc(ctx, (size_t)num_tris * 3 * sizeof(prc_vec3));
-    bx = (prc_vec3 *)prc_malloc(ctx, (size_t)num_tris * sizeof(prc_vec3));
-    by = (prc_vec3 *)prc_malloc(ctx, (size_t)num_tris * sizeof(prc_vec3));
-    bz = (prc_vec3 *)prc_malloc(ctx, (size_t)num_tris * sizeof(prc_vec3));
-    tuples = (prc_encode_normal_tuple *)prc_malloc(ctx, (size_t)num_tris * 3 * sizeof(prc_encode_normal_tuple));
-    pn = (prc_encode_point_norm *)prc_calloc(ctx, npts, sizeof(prc_encode_point_norm));
-    angles = (int32_t *)prc_malloc(ctx, (size_t)num_tris * 6 * sizeof(int32_t));
-    /* Per-visit worst case: 4 fresh bits, or 1 reference bit plus at most 32
-       back-reference index bits. */
-    bin = (uint8_t *)prc_malloc(ctx, (size_t)num_tris * 3 * 40 * sizeof(uint8_t));
-    if (visit_normals == NULL || bx == NULL || by == NULL || bz == NULL ||
-        tuples == NULL || pn == NULL || angles == NULL || bin == NULL)
+    /* The face of each mesh triangle, from the traversal-order face array. */
+    if (face_planar_candidate != NULL && face_count > 0 && trav->triangle_face_array != NULL)
     {
-        prc_error(ctx, PRC_ERROR_MEMORY, "Allocation error in prc_encode_normals_c2\n");
-        ret = PRC_ERROR_MEMORY;
-        goto fail;
-    }
-
-    for (k = 0; k < num_tris; k++)
-    {
-        const int32_t *idx = &trav->triangle_point_indices[(size_t)k * 3];
-        uint32_t mesh_tri = trav->triangle_mesh_order[k];
-
-        code = prc_encode_vertex_normal_basis(prc_encode_decoded_vec(trav, idx[0]),
-            prc_encode_decoded_vec(trav, idx[1]), prc_encode_decoded_vec(trav, idx[2]),
-            &bx[k], &by[k], &bz[k]);
-        if (code < 0)
-        {
-            prc_error(ctx, PRC_ERROR_INTERNAL, "prc_encode_normals_c2: degenerate triangle basis\n");
-            goto fail;
-        }
-
-        for (c = 0; c < 3; c++)
-        {
-            int32_t mv = trav->point_mesh_vertex[idx[c]];
-            uint32_t j, corner = 3;
-            prc_vec3 n;
-
-            for (j = 0; j < 3; j++)
-            {
-                if (mesh->tri_indices[(size_t)mesh_tri * 3 + j] == (uint32_t)mv)
-                    corner = j;
-            }
-            if (corner == 3)
-            {
-                prc_error(ctx, PRC_ERROR_INTERNAL, "prc_encode_normals_c2: traversal/mesh corner mismatch\n");
-                goto fail;
-            }
-            n.x = corner_normals[(size_t)mesh_tri * 9 + (size_t)corner * 3 + 0];
-            n.y = corner_normals[(size_t)mesh_tri * 9 + (size_t)corner * 3 + 1];
-            n.z = corner_normals[(size_t)mesh_tri * 9 + (size_t)corner * 3 + 2];
-            if (prc_vec_normalize(&n) < 0)
-            {
-                prc_error(ctx, PRC_ERROR_INTERNAL, "prc_encode_normals_c2: zero-length input normal\n");
-                goto fail;
-            }
-            visit_normals[(size_t)k * 3 + c] = n;
-            prc_encode_project_normal(n, bx[k], by[k], bz[k], &tuples[(size_t)k * 3 + c]);
-        }
-    }
-
-    /* has_multiple_normals must be fixed for a point's entire lifetime at its
-       first visit, so decide it up front: only if every incident visit wants
-       the same input normal can later visits legally consume zero bits. */
-    for (v = 0; v < npts; v++)
-        pn[v].all_same = 1;
-    for (k = 0; k < num_tris * 3; k++)
-    {
-        int32_t pt = trav->triangle_point_indices[k];
-
-        if (!pn[pt].has_first)
-        {
-            pn[pt].first_normal = visit_normals[k];
-            pn[pt].has_first = 1;
-        }
-        else if (prc_vec_dot_product(pn[pt].first_normal, visit_normals[k]) < 1.0 - 1.0e-9)
-        {
-            pn[pt].all_same = 0;
-        }
-    }
-
-    /* Effective planarity. A face may only be ENCODED as planar if it is both
-       geometrically planar (the caller's candidate, from
-       prc_encode_compute_face_planarity) AND every supplied normal across the
-       whole face agrees, because the format stores exactly one normal for a
-       planar face and the decoder assigns it to every vertex of that face.
-
-       Geometry alone is not sufficient: a flat face lying against curved
-       neighbours can legitimately carry smoothly-varying per-vertex normals,
-       and encoding it as planar would silently replace them all with one.
-       Filtering here rather than in the geometric detector keeps the flag and
-       the normal stream consistent by construction -- the caller writes the
-       array this function returns, not the candidate it passed in. */
-    if (face_planar_candidate != NULL && face_count > 0 &&
-        trav->triangle_face_array != NULL)
-    {
-        planar_eff = (uint8_t *)prc_calloc(ctx, face_count, sizeof(uint8_t));
-        face_done = (uint8_t *)prc_calloc(ctx, face_count, sizeof(uint8_t));
-        face_assigned = (prc_vec3 *)prc_calloc(ctx, face_count, sizeof(prc_vec3));
-        face_ref_normal = (prc_vec3 *)prc_calloc(ctx, face_count, sizeof(prc_vec3));
-        face_has_ref = (uint8_t *)prc_calloc(ctx, face_count, sizeof(uint8_t));
-        if (planar_eff == NULL || face_done == NULL || face_assigned == NULL ||
-            face_ref_normal == NULL || face_has_ref == NULL)
+        mesh_face = (uint32_t *)prc_malloc(ctx, (size_t)mesh->num_triangles * sizeof(uint32_t));
+        if (mesh_face == NULL)
         {
             prc_error(ctx, PRC_ERROR_MEMORY, "Allocation error in prc_encode_normals_c2\n");
-            ret = PRC_ERROR_MEMORY;
-            goto fail;
+            return PRC_ERROR_MEMORY;
         }
-        for (v = 0; v < face_count; v++)
-            planar_eff[v] = face_planar_candidate[v];
-
+        for (k = 0; k < mesh->num_triangles; k++)
+            mesh_face[k] = UINT32_MAX;
         for (k = 0; k < num_tris && k < trav->triangle_face_array_size; k++)
         {
             int32_t f = trav->triangle_face_array[k];
 
-            if (f < 0 || (uint32_t)f >= face_count || !planar_eff[f])
-                continue;
-            for (c = 0; c < 3; c++)
-            {
-                prc_vec3 n = visit_normals[(size_t)k * 3 + c];
-
-                if (!face_has_ref[f])
-                {
-                    face_ref_normal[f] = n;
-                    face_has_ref[f] = 1;
-                }
-                else if (prc_vec_dot_product(face_ref_normal[f], n) < 1.0 - 1.0e-9)
-                {
-                    planar_eff[f] = 0;
-                    break;
-                }
-            }
+            mesh_face[trav->triangle_mesh_order[k]] = f >= 0 ? (uint32_t)f : UINT32_MAX;
         }
     }
+
+    code = prc_encode_normal_stream_init(&ns, ctx, mesh, corner_normals,
+        mesh_face, face_planar_candidate, face_count);
+    if (mesh_face != NULL)
+        prc_free(ctx, mesh_face);
+    if (code < 0)
+        return code;
 
     for (k = 0; k < num_tris; k++)
     {
         const int32_t *idx = &trav->triangle_point_indices[(size_t)k * 3];
-        prc_vec3 corner0_decoded;
+        uint32_t mv[3], c;
+        prc_vec3 P[3], corner0_decoded;
         int32_t face = -1;
-        uint8_t planar_here = 0;
+        uint8_t derived_reversed;
 
-        corner0_decoded.x = corner0_decoded.y = corner0_decoded.z = 0.0;
-
-        if (planar_eff != NULL && k < trav->triangle_face_array_size)
+        for (c = 0; c < 3; c++)
         {
+            mv[c] = (uint32_t)trav->point_mesh_vertex[idx[c]];
+            P[c] = prc_encode_decoded_vec(trav, idx[c]);
+        }
+        if (k < trav->triangle_face_array_size && trav->triangle_face_array != NULL)
             face = trav->triangle_face_array[k];
-            if (face >= 0 && (uint32_t)face < face_count && planar_eff[face])
-                planar_here = 1;
+
+        code = prc_encode_normal_stream_triangle(&ns, k, trav->triangle_mesh_order[k],
+            idx, mv, P, face, &corner0_decoded);
+        if (code < 0)
+        {
+            prc_encode_normal_stream_free(&ns);
+            return code;
         }
 
-        if (planar_here)
+        /* This pass runs after a traversal that did not see the normals
+           being encoded, so the reversal bit the traversal used may not be
+           the one the decoder will derive from the decoded corner-0 normal.
+           On a triangle with children that would send the decoder down the
+           other edge first: refuse, and let the caller fall back to
+           recalculated normals. (prc_write_compress_tess_entry does not
+           take this path: its traversal encodes the normals as it goes and
+           decides each bit from them.) */
+        derived_reversed = prc_encode_decoder_reversed(P[0], P[1], P[2], corner0_decoded);
+        if (trav->triangle_reversed != NULL &&
+            derived_reversed != trav->triangle_reversed[k] &&
+            trav->edge_status_array[k] != 0)
         {
-            /* Trace-only bookkeeping: the branch taken for a planar face is
-               not otherwise visible, and it is the whole question in
-               pdf-issues #727. Captured before the emit because the emit
-               mutates the point's state. */
-            uint8_t was_first = (uint8_t)!face_done[face];
-            uint8_t state_before = pn[idx[0]].state;
-            uint32_t stored_before = pn[idx[0]].num_stored;
-            uint32_t bin_before = bin_count;
-            uint32_t ang_before = angle_count;
-
-            /* One normal for the entire face, encoded at corner 0 of the
-               face's FIRST triangle; every other corner and triangle of the
-               face emits nothing. This mirrors the decoder's face_is_planar
-               branch, which consumes bits only when
-               face_normal_decoded[face] is still clear and looks only at
-               treated_index[0].
-
-               Note corners 1 and 2 are deliberately NOT registered in pn[]:
-               the decoder never touches multiple_normals for them either, so
-               a vertex first met at corner 1 of a planar face is still
-               NOT_ENCOUNTERED when a later non-planar face reaches it. */
-            if (face_done[face])
-            {
-                corner0_decoded = face_assigned[face];
-            }
-            else
-            {
-                code = prc_encode_emit_vertex_normal(ctx, &pn[idx[0]],
-                    &tuples[(size_t)k * 3], bx[k], by[k], bz[k],
-                    visit_normals[(size_t)k * 3], bin, &bin_count,
-                    angles, &angle_count, &corner0_decoded);
-                if (code < 0)
-                {
-                    ret = code;
-                    goto fail;
-                }
-                face_done[face] = 1;
-                face_assigned[face] = corner0_decoded;
-            }
             if (ctx->trace_normals)
-            {
-                uint32_t dbits = bin_count - bin_before;
-                uint32_t dang = angle_count - ang_before;
-                const char *sname =
-                    (state_before == PRC_VERTEX_NORM_NOT_ENCOUNTERED) ? "NOT_ENCOUNTERED" :
-                    (state_before == PRC_VERTEX_NORM_IS_NOT_MULTIPLE) ? "IS_NOT_MULTIPLE" :
-                                                                        "IS_MULTIPLE";
-                /* The cost names the branch unambiguously: a fresh record is
-                   4 bits + 2 angles, a reference is 1 + index bits and NO
-                   angles, and the zero-bit repeat is 0 + 0. */
-                const char *branch =
-                    (!was_first)            ? "face-already-done" :
-                    (dbits == 0)            ? "REPEAT_NOT_MULTIPLE(0 bits)" :
-                    (dang == 0)             ? "IS_A_REFERENCE" :
-                                              "fresh-record";
-
-                fprintf(stderr, "ENCNORM k=%u PLANAR face=%d first=%u v0=%d "
-                    "state=%s stored=%u bits=%u angles=%u branch=%s "
-                    "assigned=(%.6f,%.6f,%.6f)%c",
-                    k, face, (unsigned)was_first, (int)idx[0],
-                    sname, stored_before, dbits, dang, branch,
-                    corner0_decoded.x, corner0_decoded.y, corner0_decoded.z, 10);
-            }
-        }
-        else
-        {
-            for (c = 0; c < 3; c++)
-            {
-                uint32_t visit = k * 3 + c;
-                const prc_encode_normal_tuple *t = &tuples[visit];
-                prc_vec3 assigned;
-
-                code = prc_encode_emit_vertex_normal(ctx, &pn[idx[c]], t,
-                    bx[k], by[k], bz[k], visit_normals[visit], bin, &bin_count,
-                    angles, &angle_count, &assigned);
-                if (code < 0)
-                {
-                    ret = code;
-                    goto fail;
-                }
-                if (ctx->trace_normals)
-                {
-                    prc_vec3 pos = prc_encode_decoded_vec(trav, idx[c]);
-                    fprintf(stderr, "ENCNORM k=%u c=%u pt=%d rev=%u xrev=%u yrev=%u theta=%d phi=%d input_normal=(%.6f,%.6f,%.6f) assigned=(%.6f,%.6f,%.6f) pos=(%.6f,%.6f,%.6f)%c",
-                        k, c, idx[c], t->tri_reversed, t->x_reversed, t->y_reversed, t->theta_q, t->phi_q,
-                        visit_normals[visit].x, visit_normals[visit].y, visit_normals[visit].z,
-                        assigned.x, assigned.y, assigned.z, pos.x, pos.y, pos.z, 10);
-                }
-                if (c == 0)
-                    corner0_decoded = assigned;
-            }
-        }
-
-        /* The decoder derives normal_was_reversed from the corner-0 normal
-           (prc_is_normal_reversed_single_normal) and, when set, swaps its
-           left/right edge handling for this triangle's grow pushes.
-           prc_encode_traversal now decides each triangle's normal_was_reversed
-           bit inline (prc_encode_decide_reversed, using TRAVERSAL corner 0's
-           specific real supplied normal from real_normals/corner_normals --
-           the same corner-0-specific convention this check uses) in the SAME
-           pass that builds edge_status_array/push order, and prc_encode_edge_status
-           already applied the matching left/right swap for growing triangles
-           -- reversed=1 on a growing triangle is now a fully supported,
-           already-correctly-handled case, NOT something to reject outright
-           (an earlier version of this check predated that support and
-           rejected unconditionally, which is why it rejected on essentially
-           every real mesh's first growing triangle).
-
-           What actually needs checking is DISAGREEMENT: did the traversal's
-           decision (from the RAW real corner-0 normal) come out different
-           from what this test derives (from the round-tripped DECODED
-           corner-0 normal, after the Taylor-angle quantize/reconstruct
-           simulation above)? Those two normally agree exactly, but
-           quantization noise could in principle flip the sign for a
-           triangle whose real normal is very close to perpendicular to its
-           own face -- kept as a canary for that case, not deleted. A hit
-           here means the decoder will walk this triangle's left/right
-           edges opposite to what the wire format's topology arrays assume,
-           a real desync -- surface it, don't just log it and continue,
-           until this has been confirmed never to fire on real meshes. */
-        {
-            prc_vec3 P0 = prc_encode_decoded_vec(trav, idx[0]);
-            prc_vec3 P1 = prc_encode_decoded_vec(trav, idx[1]);
-            prc_vec3 P2 = prc_encode_decoded_vec(trav, idx[2]);
-            prc_vec3 mid, e1, e2, cross1;
-            uint8_t derived_reversed;
-
-            prc_vec_avg(P0, P1, &mid);
-            prc_vec_sub(P1, P0, &e1);
-            prc_vec_sub(P2, mid, &e2);
-            prc_vec_cross(e2, e1, &cross1);
-            derived_reversed = (uint8_t)(prc_vec_dot_product(cross1, corner0_decoded) < 0.0);
-            /* WHY THIS FIRES, AND WHY IT MUST STAY (investigated 2026-08-31).
-               This is the single reason C2 falls back to C1 on hard-edged
-               meshes, and therefore the reason is_face_planar -- a C2-only
-               field -- cannot currently reach the stream. It is a real check,
-               not a false alarm, and suppressing it corrupts files.
-
-               Two different decisions produce this triangle's reversed bit,
-               and they can disagree:
-
-                 - trav->triangle_reversed[k] is what gets WRITTEN. For a
-                   GROWING triangle prc_encode_traversal does not decide it
-                   geometrically at all -- it inherits the parent's value (the
-                   2026-08-10 winding fix, 42.4% -> 1.9% wrong-normal rate).
-                 - t->tri_reversed inside each normal tuple, which is what the
-                   ENCODED NORMAL is projected against, is decided per corner
-                   and purely geometrically by prc_encode_project_normal
-                   (`t->tri_reversed = (nz < 0.0)`).
-
-               So on a grown triangle whose own winding differs from its
-               parent's, the normal is encoded in one frame and the written bit
-               claims the other. corner0_decoded is reconstructed from the
-               tuple, so comparing it against the written bit detects exactly
-               that inconsistency.
-
-               Measured both ways. Suppressing this check for growing
-               triangles: a flat two-face plate (uniform +Z normals) then
-               encodes and round-trips correctly, and is_face_planar reaches
-               the stream -- but a hard-edged cube with per-face normals
-               produces a file its own decoder CANNOT READ
-               ("Failed in prc_handle_normal_calculation"). The C1 fallback
-               this triggers is a safety net, and removing it turns a
-               correct-but-unoptimised file into a corrupt one.
-
-               A NOTE ON WHAT THE FIX IS NOT. An earlier version of this
-               comment proposed making prc_encode_project_normal use the
-               traversal's already-decided bit instead of deriving its own.
-               That is wrong: t->tri_reversed selects the spherical frame the
-               normal is ENCODED in (it is handed to prc_decode_normal
-               alongside theta/phi), not the winding. Overwriting it would
-               corrupt the reconstructed normal, not reconcile anything.
-
-               The conflict is between the traversal's inherited bit and the
-               winding the decoder DERIVES from the decoded corner-0 normal
-               (prc_is_normal_reversed_single_normal). Note where the
-               inheritance rule came from: it exists because on the C1 path
-               the traversal is fed SMOOTHED PROXY normals, and per-triangle
-               geometric decisions taken from an approximation are noisy --
-               see prc_encode_grow_op's comment. On the C2 path the traversal
-               is fed the caller's REAL per-corner normals, and the decoder
-               derives its winding from those same normals, so the noise
-               argument does not apply and inheriting is the thing that
-               creates the disagreement. Deciding geometrically when the
-               normals are real is the candidate fix; it needs measuring
-               against the files the inheritance rule was built for before it
-               is adopted. Until then the fallback is the correct behaviour. */
-            if (derived_reversed != trav->triangle_reversed[k] &&
-                trav->edge_status_array[k] != 0)
-            {
-                fprintf(stderr, "prc_encode_normals_c2: WARNING corner-0 DECODED normal's reversed-bit "
-                    "(%u) disagrees with the traversal's own inline decision (%u, from the RAW real "
-                    "normal) on growing triangle %u -- canary check, see comment above\n",
+                fprintf(stderr, "prc_encode_normals_c2: decoded corner-0 normal gives reversed=%u, "
+                    "traversal used %u, on growing triangle %u\n",
                     derived_reversed, trav->triangle_reversed[k], k);
-                prc_error(ctx, PRC_ERROR_INTERNAL,
-                    "prc_encode_normals_c2: normals reverse a growing triangle (unsupported)\n");
-                goto fail;
-            }
+            prc_error(ctx, PRC_ERROR_INTERNAL,
+                "prc_encode_normals_c2: normals reverse a growing triangle (unsupported)\n");
+            prc_encode_normal_stream_free(&ns);
+            return PRC_ERROR_INTERNAL;
         }
     }
 
-    if (angle_count > 0 && (size_t)angle_count < (size_t)num_tris * 6)
-    {
-        int32_t *shrunk = (int32_t *)prc_realloc(ctx, angles, (size_t)angle_count * sizeof(int32_t));
-
-        if (shrunk != NULL)
-            angles = shrunk;
-    }
-    if (bin_count > 0 && (size_t)bin_count < (size_t)num_tris * 3 * 40)
-    {
-        uint8_t *shrunk = (uint8_t *)prc_realloc(ctx, bin, (size_t)bin_count * sizeof(uint8_t));
-
-        if (shrunk != NULL)
-            bin = shrunk;
-    }
-    *normal_angle_array_out = angles;
-    *normal_angle_count_out = angle_count;
-    *normal_binary_data_out = bin;
-    *normal_binary_data_size_out = bin_count;
-    angles = NULL;
-    bin = NULL;
-    /* Hand back the planarity actually encoded, not the candidate: the caller
-       must write THIS array, or the flag and the normal stream disagree. */
-    if (face_planar_effective_out != NULL)
-    {
-        *face_planar_effective_out = planar_eff;
-        planar_eff = NULL;
-    }
-    ret = 0;
-
-fail:
-    if (angles != NULL)
-        prc_free(ctx, angles);
-    if (bin != NULL)
-        prc_free(ctx, bin);
-    if (planar_eff != NULL)
-        prc_free(ctx, planar_eff);
-    if (face_done != NULL)
-        prc_free(ctx, face_done);
-    if (face_assigned != NULL)
-        prc_free(ctx, face_assigned);
-    if (face_ref_normal != NULL)
-        prc_free(ctx, face_ref_normal);
-    if (face_has_ref != NULL)
-        prc_free(ctx, face_has_ref);
-    if (visit_normals != NULL)
-        prc_free(ctx, visit_normals);
-    if (bx != NULL)
-        prc_free(ctx, bx);
-    if (by != NULL)
-        prc_free(ctx, by);
-    if (bz != NULL)
-        prc_free(ctx, bz);
-    if (tuples != NULL)
-        prc_free(ctx, tuples);
-    if (pn != NULL)
-    {
-        for (v = 0; v < npts; v++)
-        {
-            if (pn[v].slot_input != NULL)
-                prc_free(ctx, pn[v].slot_input);
-            if (pn[v].slot_decoded != NULL)
-                prc_free(ctx, pn[v].slot_decoded);
-        }
-        prc_free(ctx, pn);
-    }
-    return ret;
+    prc_encode_normal_stream_take(&ns, face_planar_effective_out,
+        normal_angle_array_out, normal_angle_count_out,
+        normal_binary_data_out, normal_binary_data_size_out);
+    prc_encode_normal_stream_free(&ns);
+    return 0;
 }
 
 /* ---- Step E: bitstream assembly ---------------------------------------- */
@@ -5548,6 +5642,8 @@ prc_write_compress_tess_entry(prc_context *ctx, prc_bit_write_state *s,
     must_recalculate_normals = (normals == NULL) ? 1u : 0u;
     if (!must_recalculate_normals)
     {
+        prc_encode_normal_stream ns;
+
         corner_normals = (double *)prc_malloc(ctx, (size_t)mesh.num_triangles * 9 * sizeof(double));
         if (corner_normals == NULL)
         {
@@ -5566,32 +5662,65 @@ prc_write_compress_tess_entry(prc_context *ctx, prc_bit_write_state *s,
             }
         }
 
+        /* Candidate planarity from geometry; the normal stream narrows it to
+           faces whose supplied normals also agree, and hands back the array
+           it actually encoded. */
+        if (face_indices_post != NULL && num_faces > 0)
+        {
+            code = prc_encode_compute_face_planarity(ctx, &mesh, face_indices_post,
+                num_faces, &face_planar_candidate);
+            if (code < 0)
+            {
+                ret = code;
+                goto cleanup;
+            }
+        }
+
+        /* The traversal encodes the stored normals as it emits each triangle
+           and takes each triangle's normal_was_reversed from the normal the
+           decoder will rebuild at its corner 0 (see prc_encode_normal_stream_s),
+           so the bit, the winding and the left/right order agree with the
+           decoder on every triangle. */
+        code = prc_encode_normal_stream_init(&ns, ctx, &mesh, corner_normals,
+            face_indices_post, face_planar_candidate, num_faces);
+        if (code == 0)
+        {
+            code = prc_encode_traversal_ns(ctx, &mesh, face_indices_post, mesh.tolerance_mm,
+                &trav, NULL, NULL, corner_normals, 0, &ns);
+            if (code == 0)
+            {
+                trav_ready = 1;
+                prc_encode_normal_stream_take(&ns, &is_face_planar,
+                    &angles, &acount, &bin, &bsize);
+            }
+            prc_encode_normal_stream_free(&ns);
+        }
+        if (prc_diag_getenv("PRC_DIAG_C2_FALLBACK") != NULL)
+            printf("PRC_DIAG_C2_FALLBACK: stored-normal encoding code=%d (0=succeeded, nonzero=fell back to C1)\n", code);
+        if (code == PRC_ERROR_MEMORY)
+        {
+            ret = code;
+            goto cleanup;
+        }
+        if (code != 0)
+        {
+            /* The stored normals cannot be encoded: a zero-length supplied
+               normal, or a triangle whose decoded corners give no normal
+               frame. Write the tessellation with recalculated normals
+               instead; every real mesh has SOME valid encoding, and
+               reconstructed-but-rendered beats exact-but-rejected. */
+            prc_free(ctx, corner_normals);
+            corner_normals = NULL;
+            must_recalculate_normals = 1u;
+        }
     }
-    /* When normals must be recalculated (no per-vertex normals supplied),
-       compute a smooth per-mesh-vertex proxy normal (equal-weighted average
-       of adjacent MESH-order face normals) and feed it into
-       prc_encode_traversal's real_normals parameter so
-       prc_encode_decide_reversed makes a real, traversal-consistent
-       reversed-bit decision for EVERY triangle (including growing ones),
-       instead of leaving trav.triangle_reversed all-zero (the previous
-       behavior, via prc_encode_normals_c1's must-recalculate path, which
-       unconditionally forced growing triangles' reversed bit to 0 even when
-       geometrically wrong -- see prc_encode_normals_c1's own long comment
-       on that gap). This was originally an opt-in diagnostic
-       (PRC_DIAG_USE_PROXY_NORMALS) added to test whether matching a real
-       encoder's non-zero reversed-bit pattern (see the RG cross-check in
-       the mixed_chains investigation writeup) fixes Acrobat rendering --
-       promoted to permanent default behavior after verifying it's lossless
-       (nano_prc_stl_import --verify passes on UK_original.stl/
-       beetle_1000000.stl) and regression-free (full ctest suite), and
-       matches an independently-produced encoder's reversed-bit/
-       edge_status_array output exactly on the fan8 synthetic case. It did
-       NOT resolve the specific Acrobat blank-tree bug those two real files
-       exhibit (still open), but is a genuine, standalone correctness fix
-       (previously 100% of growing triangles got the wrong reversed-normal
-       bit whenever normals had to be recalculated) worth keeping on its
-       own merits -- also produces smaller output (more internally
-       consistent data compresses better). */
+
+    /* When normals must be recalculated (none supplied, or the stored ones
+       could not be encoded), compute a smooth per-mesh-vertex proxy normal
+       (equal-weighted average of adjacent MESH-order face normals) for
+       prc_encode_traversal's real_normals parameter. With normals_are_proxy
+       set, the traversal sets each triangle's normal_is_reversed bit from
+       the triangle's own winding, which is what the decoder reads it as. */
     if (must_recalculate_normals)
     {
         double *vertex_normal = (double *)prc_calloc(ctx, (size_t)mesh.num_positions * 3, sizeof(double));
@@ -5635,82 +5764,12 @@ prc_write_compress_tess_entry(prc_context *ctx, prc_bit_write_state *s,
             }
         }
         prc_free(ctx, vertex_normal);
-    }
 
-    /* corner_normals (mesh order, 9 doubles/triangle -- NULL when
-       must_recalculate_normals) is passed straight through as
-       prc_encode_traversal's real_normals: the inline reversed-bit decision
-       needs TRAVERSAL corner 0's specific real normal, not a blurred
-       per-position average, to agree with prc_encode_normals_c2's own
-       corner-0-specific rejection check below (see prc_encode_decide_reversed's
-       comment) -- see prc_encode_traversal's header comment for why a
-       precomputed baseline (the old two-pass design) can't decide this
-       correctly at all: reversing a triangle changes push order for
-       everything downstream of it in the traversal, invalidating a
-       baseline's assumptions for those triangles. Measured on turbine tess
-       902: 49% of triangles diverged between a baseline-computed value and
-       reality, confirming this isn't a rare edge case. */
-    code = prc_encode_traversal(ctx, &mesh, face_indices_post, mesh.tolerance_mm, &trav, NULL, NULL,
-                                corner_normals, must_recalculate_normals);
-    if (code != 0) goto cleanup;
-    trav_ready = 1;
+        code = prc_encode_traversal(ctx, &mesh, face_indices_post, mesh.tolerance_mm, &trav, NULL, NULL,
+                                    corner_normals, 1);
+        if (code != 0) goto cleanup;
+        trav_ready = 1;
 
-    if (!must_recalculate_normals)
-    {
-        /* Candidate planarity from geometry; prc_encode_normals_c2 narrows it
-           to faces whose supplied normals also agree, and hands back the array
-           it actually encoded. */
-        if (face_indices_post != NULL && num_faces > 0)
-        {
-            code = prc_encode_compute_face_planarity(ctx, &mesh, face_indices_post,
-                num_faces, &face_planar_candidate);
-            if (code < 0)
-            {
-                ret = code;
-                goto cleanup;
-            }
-        }
-        code = prc_encode_normals_c2(ctx, &mesh, &trav, corner_normals,
-            face_planar_candidate, num_faces, &is_face_planar,
-            &angles, &acount, &bin, &bsize);
-        if (prc_diag_getenv("PRC_DIAG_C2_FALLBACK") != NULL)
-            printf("PRC_DIAG_C2_FALLBACK: prc_encode_normals_c2 code=%d (0=succeeded, nonzero=fell back to C1)\n", code);
-        if (code != 0)
-        {
-            /* Supplied per-corner normals can legitimately conflict with the
-               decoder's canonical traversal winding for a "growing" (non-
-               leaf) triangle -- a real geometric constraint of the C2 path,
-               not a bug (see prc_encode_normals_c2's own error message).
-               Rather than fail the whole entry over it, fall back to C1
-               (decoder-reconstructed normals from geometry): every real
-               mesh has SOME valid encoding, and reconstructed-but-rendered
-               beats exact-but-rejected.
-
-               The traversal above already decided each triangle's
-               normal_was_reversed bit consistently (using corner_normals, in
-               the same single pass that built the topology), so recovering
-               rev[] is just reading it back -- no second traversal needed. */
-            prc_free(ctx, corner_normals);
-            corner_normals = NULL;
-            must_recalculate_normals = 1u;
-
-            rev = (uint8_t *)prc_malloc(ctx, (size_t)trav.edge_status_array_size * sizeof(uint8_t));
-            if (rev == NULL)
-            {
-                prc_error(ctx, PRC_ERROR_MEMORY, "Allocation error in prc_write_compress_tess_entry\n");
-                ret = PRC_ERROR_MEMORY;
-                goto cleanup;
-            }
-            memcpy(rev, trav.triangle_reversed, (size_t)trav.edge_status_array_size * sizeof(uint8_t));
-            code = 0;
-        }
-    }
-    else
-    {
-        /* Proxy normals were fed to prc_encode_traversal above, so
-           trav.triangle_reversed already holds a real, traversal-consistent
-           decision for every triangle (see prc_encode_decide_reversed) --
-           just copy it, same as the C2-fallback path above does. */
         rev = (uint8_t *)prc_malloc(ctx, (size_t)trav.edge_status_array_size * sizeof(uint8_t));
         if (rev == NULL)
         {
@@ -5721,9 +5780,8 @@ prc_write_compress_tess_entry(prc_context *ctx, prc_bit_write_state *s,
         memcpy(rev, trav.triangle_reversed, (size_t)trav.edge_status_array_size * sizeof(uint8_t));
         code = 0;
     }
-    if (code != 0) goto cleanup;
 
-    /* is_face_planar is whatever prc_encode_normals_c2 actually encoded --
+    /* is_face_planar is whatever the normal stream actually encoded --
        never the geometric candidate, and NULL on the C1 path where the
        field does not exist in the stream at all. */
     if (tex_coords != NULL)

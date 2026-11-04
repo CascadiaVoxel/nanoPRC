@@ -1834,6 +1834,165 @@ prc_get_cylinder_data_from_iso_curves(prc_context *ctx, prc_ptr_topology *loop,
     return 0;
 }
 
+/* From the iso curve data figure out the cone radius, semi_angle, and the transform
+   so that we can represent the ISO surface with the uncompressed one. It is
+   easier to make use of all the curves in this method */
+static int
+prc_get_cone_data_from_iso_curves(prc_context *ctx, prc_ptr_topology *loop,
+    double *radius, double *semi_angle, prc_trans_3d *transform, uint8_t *has_transform,
+    prc_nano_brep_compressed_data *compressed_data)
+{
+    int code = 0;
+    prc_compressed_curve *curve1, *curve2, *curve3, *curve4;
+    uint8_t is_reversed1, is_reversed2, is_reversed3, is_reversed4;
+    prc_compressed_curve *line1, *circle1, *line2, *circle2;
+    uint8_t is_line_reversed, is_circle_reversed;
+    prc_vec3 line_start, line_end, line_dir, temp_vec;
+    prc_hcg_circle_information circle_info1, circle_info2;
+    double radius1, radius2;
+
+    /* Lets dig in and get curve1 and curve2. One should be circle the other a line. */
+    curve1 = prc_get_compressed_curve_from_iso_loop(ctx, loop, 0, &is_reversed1);
+    curve2 = prc_get_compressed_curve_from_iso_loop(ctx, loop, 1, &is_reversed2);
+    curve3 = prc_get_compressed_curve_from_iso_loop(ctx, loop, 2, &is_reversed3);
+    curve4 = prc_get_compressed_curve_from_iso_loop(ctx, loop, 3, &is_reversed4);
+
+    /* One of these is a line and one is a circle */
+    if (curve1->curve_type == PRC_HCG_Circle)
+    {
+        circle1 = curve1;
+        line1 = curve2;
+        circle2 = curve3;
+        line2 = curve4;
+    }
+    else
+    {
+        circle1 = curve2;
+        line1 = curve1;
+        circle2 = curve4;
+        line2 = curve3;
+    }
+
+    /* Figure out which of the circles is the smaller radius. Note that one
+       of these could even be the apex (zero radius) */
+    code = prc_get_hcg_circle_data(ctx, &circle1->hcg_circle, &circle_info1, compressed_data);
+    if (code < 0)
+    {
+        prc_error(ctx, code, "Failed to get HCG circle data in prc_get_cone_data_from_iso_curves\n");
+        return code;
+    }
+    code = prc_get_hcg_circle_data(ctx, &circle2->hcg_circle, &circle_info2, compressed_data);
+    if (code < 0)
+    {
+        prc_error(ctx, code, "Failed to get HCG circle data in prc_get_cone_data_from_iso_curves\n");
+        return code;
+    }
+
+    prc_vec_sub(circle_info1.start_point, circle_info1.center, &temp_vec);
+    radius1 = prc_vec_length_sqrt(temp_vec);
+    prc_vec_sub(circle_info2.start_point, circle_info2.center, &temp_vec);
+    radius2 = prc_vec_length_sqrt(temp_vec);
+
+    /* The base cone has its radius defined at z = 0 and then goes up from
+       there towards its apex. Lets create a cone that is like this and
+       then we will transform via translation and rotation to what we have
+       defined with these curves.  Use the larger radius as the z = 0 base */
+
+    /* Figure out which circle is the base (larger radius) and which is the top (smaller radius) */
+    prc_hcg_circle_information *base_circle, *top_circle;
+    double r_base, r_top;
+
+    if (radius1 >= radius2)
+    {
+        base_circle = &circle_info1;
+        top_circle = &circle_info2;
+        r_base = radius1;
+        r_top = radius2;
+    }
+    else
+    {
+        base_circle = &circle_info2;
+        top_circle = &circle_info1;
+        r_base = radius2;
+        r_top = radius1;
+    }
+
+    /* 1. Calculate the central axis direction vector (Z-axis of the cone)
+          It points from the base circle center toward the top circle center */
+    prc_vec_sub(top_circle->center, base_circle->center, &line_dir);
+    double delta_v = prc_vec_length_sqrt(line_dir);
+
+    if (delta_v > 1e-12)
+    {
+        code = prc_vec_normalize_sqrt(&line_dir);
+        if (code < 0) return code;
+
+        /* 2. Compute the semi-angle
+              As v increases by delta_v, the radius shrinks from r_base to r_top */
+        *semi_angle = atan((r_top - r_base) / delta_v);
+    }
+    else
+    {
+        *semi_angle = 0.0; /* Degenerate case */
+    }
+
+    /* 3. Assign the bottom radius at z = 0 */
+    *radius = r_base;
+
+    /* 4. Construct the 3D local coordinate transform matrix */
+    *transform = (prc_trans_3d){ 0 };
+    transform->behavior = PRC_TRANSFORMATION_Translate | PRC_TRANSFORMATION_Rotate;
+    transform->translation = base_circle->center;
+
+    /* X-Axis (rotation[0]) must line up with the u = 0 starting point of the boundary.
+       We project the base circle's start point onto the circle's plane to get the true X-axis. */
+    prc_vec3 radial_vec;
+    prc_vec_sub(base_circle->start_point, base_circle->center, &radial_vec);
+
+    /* Remove any component along line_dir to ensure it is perfectly orthogonal */
+    double dot_proj = prc_vec_dot_product(radial_vec, line_dir);
+    transform->rotation[0].x = radial_vec.x - (dot_proj * line_dir.x);
+    transform->rotation[0].y = radial_vec.y - (dot_proj * line_dir.y);
+    transform->rotation[0].z = radial_vec.z - (dot_proj * line_dir.z);
+
+    code = prc_vec_normalize_sqrt(&transform->rotation[0]);
+    if (code < 0)
+    {
+        prc_error(ctx, code, "Failed to get normalize vector in prc_get_cone_data_from_iso_curves\n");
+        return code;
+    }
+
+    /* Y-Axis (rotation[1]) is determined using the cross product of the Z and X axes */
+    prc_vec_cross(line_dir, transform->rotation[0], &transform->rotation[1]);
+    code = prc_vec_normalize_sqrt(&transform->rotation[1]);
+    if (code < 0)
+    {
+        prc_error(ctx, code, "Failed to get normalize vector in prc_get_cone_data_from_iso_curves\n");
+        return code;
+    }
+
+    const double eps = 1e-12;
+    if (fabs(base_circle->center.x) < eps &&
+        fabs(base_circle->center.y) < eps &&
+        fabs(base_circle->center.z) < eps &&
+        fabs(line_dir.x) < eps &&
+        fabs(line_dir.y) < eps &&
+        fabs(line_dir.z - 1.0) < eps &&
+        fabs(transform->rotation[0].x - 1.0) < eps &&
+        fabs(transform->rotation[0].y) < eps &&
+        fabs(transform->rotation[0].z) < eps)
+    {
+            /* Complete geometry matches canonical alignment exactly; no transform needed */
+            *transform = (prc_trans_3d){ 0 };
+            *has_transform = 0;
+    }
+    else
+    {
+        *has_transform = 1;
+    }
+    return 0;
+}
+
 /* From the iso curve data figure out the sphere radius and the transform
    so that we can represent the ISO surface with the uncompressed one */
 static int
@@ -2239,7 +2398,7 @@ prc_tessellate_compressed_face(prc_context *ctx, prc_data *data, uint32_t shell_
             goto free_loops;
         }
 
-        /* From the loop we need to get the parameters of the cylinder so
+        /* From the loop we need to get the parameters of the sphere so
             that we can determine the transformation as well the radius */
         code = prc_get_sphere_data_from_iso_curves(ctx, synthetic_face.loops,
             &sphere.radius, &sphere.transform, &sphere.has_transform, compressed_data);
@@ -2262,7 +2421,66 @@ prc_tessellate_compressed_face(prc_context *ctx, prc_data *data, uint32_t shell_
 
     case PRC_HCG_IsoCone:
     {
-        prc_hcg_iso_cone hcg_iso_cone = topo_face->hcg_iso_cone;
+        prc_hcg_iso_cone *hcg_iso_cone = &topo_face->hcg_iso_cone;
+        prc_content_compressed_face *face = &hcg_iso_cone->face;
+        prc_surf_cone cone = { 0 };
+        prc_topo_face synthetic_face = { 0 };
+        prc_type_surf synthetic_surface = { 0 };
+        uint8_t is_an_iso_face = face->is_an_iso_face;
+
+        free_loops = 1;
+        if (!is_an_iso_face)
+        {
+            prc_error(ctx, PRC_ERROR_PARSE, "ISO face is an Analytical face in prc_tessellate_compressed_face\n");
+            return PRC_ERROR_PARSE;
+        }
+
+        synthetic_surface.surface_type = PRC_TYPE_SURF_Cone;
+        cone.tag = PRC_TYPE_SURF_Cone;
+        synthetic_surface.surf_cone = &cone;
+        synthetic_face.has_tolerance = 0;
+        synthetic_face.surface_geometry.is_referenced = 0;
+        synthetic_face.surface_geometry.surface = synthetic_surface;
+        synthetic_face.is_trimmed = 0;
+        synthetic_face.tag = PRC_TYPE_TOPO_Face;
+        synthetic_face.index_of_outer_loop = -1;
+        synthetic_face.number_of_loops = 1;
+        cone.parameterization.u_param_coeff_a = 1;
+        cone.parameterization.v_param_coeff_a = 1;
+        cone.parameterization.u_param_coeff_b = 0;
+        cone.parameterization.v_param_coeff_b = 0;
+        cone.parameterization.swap_uv = 0;
+        cone.parameterization.surface_domain.max_uv.x = 2 * PRC_PI;
+        cone.parameterization.surface_domain.max_uv.y = 12345;
+        cone.parameterization.surface_domain.min_uv.x = 0;
+        cone.parameterization.surface_domain.min_uv.y = -12345;
+
+        code = prc_construct_loop_from_iso_curves(ctx, face, &synthetic_face,
+            0, 0, compressed_data);
+        if (code < 0)
+        {
+            prc_error(ctx, code, "Failed to construct loop in prc_tessellate_compressed_face\n");
+            goto free_loops;
+        }
+
+        /* From the loop we need to get the parameters of the cone so
+            that we can determine the transformation as well the radius and semi-angle */
+        code = prc_get_cone_data_from_iso_curves(ctx, synthetic_face.loops,
+            &cone.radius, &cone.semi_angle, &cone.transform, &cone.has_transform,
+            compressed_data);
+        if (code < 0)
+        {
+            prc_error(ctx, code, "Failed in prc_get_cone_data_from_iso_curves for compressed ISO cone\n");
+            goto free_loops;
+        }
+
+        code = prc_tessellate_surface(ctx, data, shell_index, face_index, &synthetic_face,
+            face->orientation_surface_with_shell, NULL, NULL);
+        if (code < 0)
+        {
+            prc_error(ctx, code, "Failed in prc_tessellate_surface for compressed ISO cylinder\n");
+            goto free_loops;
+        }
         break;
     }
 

@@ -29,7 +29,10 @@
    each triangle's bit from the decoded normal at its first corner, and every
    decoded corner normal must be the supplied one. A writer that decided the
    bit from the supplied normal instead could disagree with the decoder, and
-   fell back to recalculated normals on the hard-edged cube. */
+   fell back to recalculated normals on the hard-edged cube.
+
+   The meshes run from a 12-triangle cube to a 4,096-triangle torus, whose
+   triangles mostly sit far from the start of their chain. */
 
 #include <stdlib.h>
 #include <stdint.h>
@@ -395,6 +398,61 @@ test_edge_on_normals(prc_context *ctx)
     PRC_ASSERT_EQ(stored, tried);
 }
 
+/* A closed torus, 64 x 32 quads, 4,096 triangles, written as one chain:
+   most triangles sit hundreds or thousands of steps from its start, which
+   the small meshes above never reach. Normals recalculated, then the
+   surface's own smooth normals supplied. */
+#define TORUS_U 64
+#define TORUS_V 32
+
+static void
+test_torus(prc_context *ctx)
+{
+    static double pos[TORUS_U * TORUS_V * 3], normals[TORUS_U * TORUS_V * 3];
+    static uint32_t tris[TORUS_U * TORUS_V * 2 * 3];
+    uint32_t u, v, n = 0;
+    test_mesh m;
+
+    for (u = 0; u < TORUS_U; u++)
+        for (v = 0; v < TORUS_V; v++)
+        {
+            double a = 2.0 * 3.14159265358979 * (double)u / TORUS_U;
+            double b = 2.0 * 3.14159265358979 * (double)v / TORUS_V;
+            uint32_t k = (u * TORUS_V + v) * 3;
+
+            pos[k + 0] = (3.0 + cos(b)) * cos(a);
+            pos[k + 1] = (3.0 + cos(b)) * sin(a);
+            pos[k + 2] = sin(b);
+            normals[k + 0] = cos(b) * cos(a);
+            normals[k + 1] = cos(b) * sin(a);
+            normals[k + 2] = sin(b);
+        }
+    for (u = 0; u < TORUS_U; u++)
+        for (v = 0; v < TORUS_V; v++)
+        {
+            /* counter-clockwise seen from outside */
+            uint32_t a = u * TORUS_V + v;
+            uint32_t b = ((u + 1) % TORUS_U) * TORUS_V + v;
+            uint32_t c = ((u + 1) % TORUS_U) * TORUS_V + (v + 1) % TORUS_V;
+            uint32_t d = u * TORUS_V + (v + 1) % TORUS_V;
+
+            tris[n * 3 + 0] = a; tris[n * 3 + 1] = b; tris[n * 3 + 2] = c; n++;
+            tris[n * 3 + 0] = a; tris[n * 3 + 1] = c; tris[n * 3 + 2] = d; n++;
+        }
+    memset(&m, 0, sizeof(m));
+    m.positions = pos; m.num_positions = TORUS_U * TORUS_V;
+    m.tris = tris; m.num_triangles = n;
+
+    printf("  sub-case: torus, 4096 triangles, normals recalculated\n");
+    PRC_ASSERT_EQ(write_mesh(ctx, &m), 0);
+    check_winding(ctx, &m);
+
+    printf("  sub-case: the same torus, smooth normals supplied\n");
+    m.normals = normals; m.num_normals = TORUS_U * TORUS_V; m.norm_indices = tris;
+    PRC_ASSERT_EQ(write_mesh(ctx, &m), 0);
+    check_winding(ctx, &m);
+}
+
 int
 main(void)
 {
@@ -409,6 +467,7 @@ main(void)
     test_strip(ctx);
     test_grid(ctx);
     test_edge_on_normals(ctx);
+    test_torus(ctx);
 
     prc_release_context(ctx);
     remove(TEST_PRC_FILENAME);

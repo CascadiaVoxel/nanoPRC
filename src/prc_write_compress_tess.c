@@ -1289,15 +1289,6 @@ typedef struct
     int32_t index0, index1;   /* decoder point indices of the edge, index0 < index1 */
     uint32_t mesh_v0, mesh_v1; /* mesh vertex ids aligned with index0/index1 */
     uint32_t target_tri;      /* mesh triangle to grow across this edge */
-    /* This child's inherited tri_reversed value -- the parent's own value,
-       unchanged, for both right- and left-grown children alike. See the
-       long comment at this field's write site (prc_encode_edge_status) for
-       why: normal_was_reversed is constant along an unbroken growth chain,
-       confirmed empirically 2026-08-10. Used directly as the child's own
-       tri_reversed when it's later popped (prc_encode_traversal's main
-       loop) -- no independent per-triangle geometric decision for growing
-       triangles anymore. */
-    uint8_t inherited_reversed;
 } prc_encode_grow_op;
 
 typedef struct
@@ -2384,43 +2375,13 @@ prc_encode_edge_status(prc_encode_state *st, uint32_t tri,
                 op.mesh_v0 = ma[e];
                 op.mesh_v1 = mb[e];
                 op.target_tri = (uint32_t)nb;
-                /* A growing (non-chain-start) triangle inherits its parent's
-                   own tri_reversed value UNCHANGED, for both the right- and
-                   left-grown child alike -- normal_was_reversed is constant
-                   along an unbroken growth chain, not independently re-
-                   decided per triangle. Confirmed empirically (2026-08-10):
-                   swept 4 candidate propagation rules (right-flips/left-
-                   preserves, the reverse, both-flip, both-preserve) against
-                   PRC_DIAG_MESH_QUALITY's alltri_tilt_max ground-truth check
-                   (tilt=1.0-dot(true_n,rec_n), true_n from the ORIGINAL mesh
-                   geometry) on real prc-db files -- only "both preserve"
-                   (this one) collapses tilt from a perfect 2.0 (fully
-                   inverted reconstructed normal) down to ordinary
-                   quantization-level noise (~1e-5) on every file tested,
-                   across every chain-depth bucket. This is what
-                   prc_encode_decide_reversed's independent per-triangle
-                   geometric decision (comparing against a SMOOTHED PROXY
-                   normal, necessarily only a local approximation) was
-                   getting wrong for a meaningful fraction of growing
-                   triangles -- proxy-normal noise occasionally disagrees
-                   with the single correct chain-wide value, especially
-                   deep in long chains where more triangles have a chance to
-                   hit a locally-ambiguous proxy comparison. Chain STARTS
-                   still call prc_encode_decide_reversed (no parent to
-                   inherit from) -- a real geometric decision is unavoidable
-                   there, and is the only remaining source of incorrect
-                   reversed-bit values after this fix (see the file with
-                   many small parts in the same investigation, where a
-                   residual issue was traced to a chain-start decision
-                   specifically, not fixed by this change). */
-                op.inherited_reversed = (uint8_t)(st->tri_reversed != NULL && st->tri_reversed[tri]);
                 {
                     const char *trace_push_env = prc_diag_getenv("PRC_DIAG_TRACE_PUSH");
                     if (trace_push_env != NULL && nb == (int32_t)strtoul(trace_push_env, NULL, 10))
-                        fprintf(stderr, "PUSH: parent_tri=%u e=%u(%s) parent_tri_reversed=%u -> child=%u inherited=%u\n",
+                        fprintf(stderr, "PUSH: parent_tri=%u e=%u(%s) parent_tri_reversed=%u -> child=%u\n",
                             tri, e, e == 0 ? "right" : "left",
                             st->tri_reversed != NULL ? st->tri_reversed[tri] : 0,
-                            nb, op.inherited_reversed);
+                            nb);
                 }
                 code = prc_encode_stack_push(st, &op);
                 if (code < 0)
@@ -2736,8 +2697,6 @@ prc_encode_traversal_ns(prc_context *ctx, const prc_encode_mesh *mesh,
         int32_t idx[3];
         uint32_t mv[3];
         uint32_t cur;
-        uint8_t is_growing = 0;
-        uint8_t entering_reversed = 0;
 
         if (st.stack_size > 0)
         {
@@ -2745,13 +2704,11 @@ prc_encode_traversal_ns(prc_context *ctx, const prc_encode_mesh *mesh,
 
             st.stack_size--;
             op = st.stack[st.stack_size];
-            is_growing = 1;
-            entering_reversed = op.inherited_reversed;
             {
                 const char *trace_pop_env = prc_diag_getenv("PRC_DIAG_TRACE_PUSH");
                 if (trace_pop_env != NULL && op.target_tri == (uint32_t)strtoul(trace_pop_env, NULL, 10))
-                    fprintf(stderr, "POP: cur=%u entering_reversed=%u index0=%d index1=%d mesh_v0=%u mesh_v1=%u\n",
-                        op.target_tri, entering_reversed, op.index0, op.index1, op.mesh_v0, op.mesh_v1);
+                    fprintf(stderr, "POP: cur=%u index0=%d index1=%d mesh_v0=%u mesh_v1=%u\n",
+                        op.target_tri, op.index0, op.index1, op.mesh_v0, op.mesh_v1);
             }
             if (st.visited[op.target_tri])
             {
@@ -2833,13 +2790,77 @@ prc_encode_traversal_ns(prc_context *ctx, const prc_encode_mesh *mesh,
         if (st.seed_measure)
             st.chain_of[cur] = st.current_chain;
 
+        /* Decide normal_was_reversed for THIS triangle now, using idx[]/mv[]
+           as just finalized above -- i.e. the triangle's true final vertex
+           order for this traversal, not a precomputed baseline's -- and feed
+           it into the SAME-iteration edge_status call below, which is what
+           actually needs it to pick push order for descendants. See
+           prc_encode_traversal's header comment for why this ordering (decide,
+           then push, in one pass) is the whole point. */
+        if (ns != NULL)
+        {
+            /* Stored normals. Encode this triangle's normals now, and take
+               its bit from the normal the decoder will rebuild at corner 0,
+               by the decoder's own test. The decoder derives the bit that
+               way, so the two agree on every triangle, with or without
+               children. */
+            prc_vec3 P[3], n0;
+
+            P[0] = st.decoded_pos[idx[0]];
+            P[1] = st.decoded_pos[idx[1]];
+            P[2] = st.decoded_pos[idx[2]];
+            code = prc_encode_normal_stream_triangle(ns, emitted, cur, idx, mv, P,
+                face_indices != NULL ? (int32_t)face_indices[cur] : 0, &n0);
+            if (code < 0)
+            {
+                ret = code;
+                goto fail;
+            }
+            st.tri_reversed[cur] = prc_encode_decoder_reversed(P[0], P[1], P[2], n0);
+            out->triangle_reversed[emitted] = st.tri_reversed[cur];
+        }
+        else if (st.real_normals != NULL)
+        {
+            /* No normal stream. PRC_DIAG_FORCE_UNREVERSED, a diagnostic,
+               sets every bit to 0 for comparison. */
+            if (prc_diag_getenv("PRC_DIAG_FORCE_UNREVERSED") != NULL)
+                st.tri_reversed[cur] = 0;
+            /* When normals are recalculated (the normals here are only
+               smoothed proxies), the decoder reads this bit as the triangle's
+               winding, so set it from the winding itself, for chain starts
+               and growing triangles alike.
+
+               This replaces inheriting the parent's value along a chain
+               (2026-08-10), which was chosen against a proxy-normal error
+               measure and reversed the winding of every other triangle of a
+               strip: written without normals and read back, a 16-triangle
+               flat strip had all 15 of its shared edges inconsistently
+               wound, the unit cube 9 of 18. Independently written files
+               decoded the same way have consistent winding (prc-db,
+               3D-PDF-Example_CFD_Cooling: 0 of 620,898 edges), and set
+               this bit per triangle rather than per chain.
+
+               A caller that passes real per-corner normals without a normal
+               stream gets a geometric decision against those normals;
+               prc_encode_normals_c2 checks it once the normals are encoded. */
+            else if (normals_are_proxy)
+                st.tri_reversed[cur] = prc_encode_winding_reversed_bit(&st, cur, mv);
+            else
+                st.tri_reversed[cur] = prc_encode_decide_reversed(&st, cur, idx, mv);
+            out->triangle_reversed[emitted] = st.tri_reversed[cur];
+        }
+
         /* PROBE (2026-08-06): see alltri_tilt_max's own comment on prc_encode_state.
            Computed for EVERY triangle (chain-start or grow), not just chain-starts. */
         if (prc_diag_getenv("PRC_DIAG_MESH_QUALITY") != NULL)
         {
-            const double *p0 = mesh->positions + (size_t)mv[0] * 3;
-            const double *p1 = mesh->positions + (size_t)mv[1] * 3;
-            const double *p2 = mesh->positions + (size_t)mv[2] * 3;
+            /* The true normal is taken in the triangle's own stored corner
+               order, not the traversal's (mv[]), so that it states the
+               winding the decoded triangle should have. */
+            const uint32_t *tv = &mesh->tri_indices[(size_t)cur * 3];
+            const double *p0 = mesh->positions + (size_t)tv[0] * 3;
+            const double *p1 = mesh->positions + (size_t)tv[1] * 3;
+            const double *p2 = mesh->positions + (size_t)tv[2] * 3;
             prc_vec3 tp0, tp1, tp2, e1, e2, true_n, r_e1, r_e2, rec_n;
             /* PROBE (2026-08-08): a real reader renders this triangle's
                vertex order as idx[0],idx[1],idx[2] UNCHANGED when
@@ -2849,24 +2870,10 @@ prc_encode_traversal_ns(prc_context *ctx, const prc_encode_mesh *mesh,
                Found via a 213-file corpus sweep: without this swap, every
                triangle whose reversed decision is false gets an artificially
                EXACT-INVERTED (tilt=2.0) rec_n here -- comparing against the
-               wrong winding, not a real reconstruction defect. Uses the same
-               pure decision function called again below for the real
-               encoding purpose (idx[]/mv[] are already finalized at this
-               point in the loop either way, so no ordering dependency).
-               MUST mirror the real call site's own st->real_normals != NULL
-               guard: when real_normals is unavailable, st->tri_reversed[cur]
-               is never explicitly set and stays at its calloc'd default of
-               0, so the WRITTEN normal_is_reversed bit is 0/false, which is
-               exactly the "swap" case at decode time -- default to that,
-               not to calling prc_encode_decide_reversed unguarded (it reads
-               st->real_normals[...] with no null check of its own). */
-            uint8_t tilt_scan_reversed;
-            if (st.real_normals == NULL)
-                tilt_scan_reversed = 0;
-            else if (is_growing)
-                tilt_scan_reversed = entering_reversed;
-            else
-                tilt_scan_reversed = prc_encode_decide_reversed(&st, cur, idx, mv);
+               wrong winding, not a real reconstruction defect. Uses the
+               bit decided above for this triangle, the one written (0, the
+               "swap" case, when there are no normals at all). */
+            uint8_t tilt_scan_reversed = st.tri_reversed[cur];
             int32_t ridx1 = tilt_scan_reversed ? idx[1] : idx[2];
             int32_t ridx2 = tilt_scan_reversed ? idx[2] : idx[1];
 
@@ -2948,75 +2955,6 @@ prc_encode_traversal_ns(prc_context *ctx, const prc_encode_mesh *mesh,
                     st.alltri_tilt_max_offset = offset;
                 }
             }
-        }
-
-        /* Decide normal_was_reversed for THIS triangle now, using idx[]/mv[]
-           as just finalized above -- i.e. the triangle's true final vertex
-           order for this traversal, not a precomputed baseline's -- and feed
-           it into the SAME-iteration edge_status call below, which is what
-           actually needs it to pick push order for descendants. See
-           prc_encode_traversal's header comment for why this ordering (decide,
-           then push, in one pass) is the whole point. */
-        if (ns != NULL)
-        {
-            /* Stored normals. Encode this triangle's normals now, and take
-               its bit from the normal the decoder will rebuild at corner 0,
-               by the decoder's own test. The decoder derives the bit that
-               way, so the two agree on every triangle, with or without
-               children. */
-            prc_vec3 P[3], n0;
-
-            P[0] = st.decoded_pos[idx[0]];
-            P[1] = st.decoded_pos[idx[1]];
-            P[2] = st.decoded_pos[idx[2]];
-            code = prc_encode_normal_stream_triangle(ns, emitted, cur, idx, mv, P,
-                face_indices != NULL ? (int32_t)face_indices[cur] : 0, &n0);
-            if (code < 0)
-            {
-                ret = code;
-                goto fail;
-            }
-            st.tri_reversed[cur] = prc_encode_decoder_reversed(P[0], P[1], P[2], n0);
-            out->triangle_reversed[emitted] = st.tri_reversed[cur];
-        }
-        else if (st.real_normals != NULL)
-        {
-            /* A growing (non-chain-start) triangle's normal_was_reversed is
-               simply inherited from its parent, unchanged -- NOT an
-               independent per-triangle geometric decision. See
-               prc_encode_grow_op's own comment (where the inherited value is
-               computed, in prc_encode_edge_status) for the full rationale
-               and the empirical evidence behind this (2026-08-10). Chain
-               starts have no parent to inherit from, so they still make a
-               real geometric decision via prc_encode_decide_reversed.
-               PRC_DIAG_FORCE_UNREVERSED (pre-existing diagnostic) still
-               overrides both cases to 0, for comparison/regression testing. */
-            if (prc_diag_getenv("PRC_DIAG_FORCE_UNREVERSED") != NULL)
-                st.tri_reversed[cur] = 0;
-            /* When normals are recalculated (the normals here are only
-               smoothed proxies), the decoder reads this bit as the triangle's
-               winding, so set it from the winding itself, for chain starts
-               and growing triangles alike.
-
-               This replaces inheriting the parent's value along a chain
-               (2026-08-10), which was chosen against a proxy-normal error
-               measure and reversed the winding of every other triangle of a
-               strip: written without normals and read back, a 16-triangle
-               flat strip had all 15 of its shared edges inconsistently
-               wound, the unit cube 9 of 18. Independently written files
-               decoded the same way have consistent winding (prc-db,
-               3D-PDF-Example_CFD_Cooling: 0 of 620,898 edges), and set
-               this bit per triangle rather than per chain.
-
-               When the caller supplied REAL per-corner normals, the decoder
-               derives each triangle's winding from the decoded corner-0
-               normal (prc_is_normal_reversed_single_normal) instead, so the
-               geometric decision below is what makes the two agree. */
-            else if (normals_are_proxy)
-                st.tri_reversed[cur] = prc_encode_winding_reversed_bit(&st, cur, mv);
-            else
-                st.tri_reversed[cur] = prc_encode_decide_reversed(&st, cur, idx, mv);
-            out->triangle_reversed[emitted] = st.tri_reversed[cur];
         }
 
         code = prc_encode_edge_status(&st, cur, idx, mv, &out->edge_status_array[emitted]);

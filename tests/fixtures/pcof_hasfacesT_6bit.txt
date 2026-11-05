@@ -1,0 +1,12 @@
+pcof_hasfacesT_6bit.prc
+
+A unit cube as one PRC_TYPE_TESS_3D_Compressed: 12 triangles in 6 faces (two
+triangles each), normals recalculated by the reader, point colours with one flat
+colour per face (-z yellow, +z blue, -y magenta, +y green, -x cyan, +x red).
+
+Stores has_faces TRUE and one is_point_color_on_face bit per face (6 bits, all
+1), then the point_color_array (180 characters, 5 per triangle corner). This is
+what nanoPRC's compressed writer produces. Adobe Acrobat and PDF-XChange Editor
+draw it with all six colours (November 2026).
+
+Used by tests/unit/test_point_color_on_face.c.

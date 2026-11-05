@@ -1083,6 +1083,8 @@ prc_parse_tess_3d_compressed(prc_context *ctx, prc_bit_state *bit_state, prc_tes
     int code;
     int has_left_right_data = 0;
     uint32_t number_ref_points = 0;
+    uint8_t has_faces_as_stored;
+    uint32_t point_color_on_face_count;
 
     data = *data_in = (prc_tess_3d_compressed *)prc_calloc(ctx, 1, sizeof(prc_tess_3d_compressed));
     if (data == NULL)
@@ -1096,6 +1098,7 @@ prc_parse_tess_3d_compressed(prc_context *ctx, prc_bit_state *bit_state, prc_tes
 
     data->is_calculated = prc_bitread_bit(ctx, bit_state);
     data->has_faces = prc_bitread_bit(ctx, bit_state);
+    has_faces_as_stored = (uint8_t)data->has_faces;
     data->tolerance = prc_bitread_double(ctx, bit_state);
 
     data->origin_array.x = prc_bitread_float(ctx, bit_state);
@@ -1379,8 +1382,20 @@ prc_parse_tess_3d_compressed(prc_context *ctx, prc_bit_state *bit_state, prc_tes
 #endif
     if (data->is_point_color)
     {
-        /* Spec not clear on the size of this array */
-        if (!prc_bitread_count_fits(bit_state, (uint64_t)(data->face_number)))
+        /* One entry per face when the file's has_faces is TRUE, but a single
+           entry, standing for every face, when it is FALSE. has_faces is taken
+           as stored, not as set to 1 above for the normal data. Measured
+           (November 2026) on a six-face cube written both ways: Adobe Acrobat
+           and PDF-XChange Editor draw its colours only under this rule, and
+           prc-db's Castle_of_Bouvignes_Belgium_landscape (65,804 faces,
+           has_faces FALSE) reads to its end only with a single entry.
+           is_face_planar does not follow it: prc-db entities with has_faces
+           FALSE need face_number entries there. */
+        if (has_faces_as_stored || data->face_number == 0)
+            point_color_on_face_count = data->face_number;
+        else
+            point_color_on_face_count = 1;
+        if (!prc_bitread_count_fits(bit_state, (uint64_t)point_color_on_face_count))
         {
             prc_error(ctx, PRC_ERROR_PARSE, "Count larger than the rest of the section in prc_parse_tess_3d_compressed\n");
             return PRC_ERROR_PARSE;
@@ -1392,9 +1407,13 @@ prc_parse_tess_3d_compressed(prc_context *ctx, prc_bit_state *bit_state, prc_tes
             return PRC_ERROR_MEMORY;
         }
 
-        for (k = 0; k < data->face_number; k++)
+        for (k = 0; k < point_color_on_face_count; k++)
         {
             data->is_point_color_on_face[k] = prc_bitread_bit(ctx, bit_state);
+        }
+        for (; k < data->face_number; k++)
+        {
+            data->is_point_color_on_face[k] = data->is_point_color_on_face[0];
         }
 
         data->point_color_array = prc_bitread_character_array(ctx, bit_state,

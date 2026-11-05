@@ -486,9 +486,9 @@ prc_parse_ri(prc_context *ctx, prc_bit_state *bit_state, prc_ri *data, int depth
     return 0;
 }
 
-/* Table 128  This is really a PRC_TYPE_MISC_ReferenceOnPRCBase (Table 80 in updated spec) */
+/* Table 80 */
 static int
-prc_parse_reference_unique_identifier(prc_context *ctx, prc_bit_state *bit_state, prc_misc_reference_on_prcbase *data)
+prc_parse_misc_reference_on_prcbase(prc_context *ctx, prc_bit_state *bit_state, prc_misc_reference_on_prcbase *data)
 {
     int schema_code;
     int code = 0;
@@ -540,10 +540,10 @@ prc_parse_mkp_leader(prc_context *ctx, prc_bit_state *bit_state, prc_mkp_leader 
 
     if (data->is_first_linked_item)
     {
-        code = prc_parse_reference_unique_identifier(ctx, bit_state, &data->first_linked_item);
+        code = prc_parse_misc_reference_on_prcbase(ctx, bit_state, &data->first_linked_item);
         if (code < 0)
         {
-            prc_error(ctx, code, "Failed in prc_parse_reference_unique_identifier\n");
+            prc_error(ctx, code, "Failed in prc_parse_misc_reference_on_prcbase\n");
             return code;
         }
     }
@@ -551,10 +551,10 @@ prc_parse_mkp_leader(prc_context *ctx, prc_bit_state *bit_state, prc_mkp_leader 
     data->is_second_linked_item = prc_bitread_bit(ctx, bit_state);
     if (data->is_second_linked_item)
     {
-        code = prc_parse_reference_unique_identifier(ctx, bit_state, &data->second_linked_item);
+        code = prc_parse_misc_reference_on_prcbase(ctx, bit_state, &data->second_linked_item);
         if (code < 0)
         {
-            prc_error(ctx, code, "Failed in prc_parse_reference_unique_identifier\n");
+            prc_error(ctx, code, "Failed in prc_parse_misc_reference_on_prcbase\n");
             return code;
         }
     }
@@ -781,10 +781,10 @@ prc_parse_mkp_annotation_item_notag(prc_context *ctx, prc_bit_state *bit_state, 
         return PRC_ERROR_PARSE;
     }
 
-    code = prc_parse_reference_unique_identifier(ctx, bit_state, &data->unique_id);
+    code = prc_parse_misc_reference_on_prcbase(ctx, bit_state, &data->unique_id);
     if (code < 0)
     {
-        prc_error(ctx, PRC_ERROR_PARSE, "Parsing error in prc_parse_reference_unique_identifier\n");
+        prc_error(ctx, PRC_ERROR_PARSE, "Parsing error in prc_parse_misc_reference_on_prcbase\n");
         return PRC_ERROR_PARSE;
     }
 
@@ -828,10 +828,10 @@ prc_parse_mkp_annotation_ref_notag(prc_context *ctx, prc_bit_state *bit_state, p
 
         for (k = 0; k < data->number_of_linked_items; k++)
         {
-            code = prc_parse_reference_unique_identifier(ctx, bit_state, &data->linked_items[k]);
+            code = prc_parse_misc_reference_on_prcbase(ctx, bit_state, &data->linked_items[k]);
             if (code < 0)
             {
-                prc_error(ctx, PRC_ERROR_PARSE, "Parsing error in prc_parse_reference_unique_identifier\n");
+                prc_error(ctx, PRC_ERROR_PARSE, "Parsing error in prc_parse_misc_reference_on_prcbase\n");
                 return PRC_ERROR_PARSE;
             }
         }
@@ -974,10 +974,10 @@ prc_parse_mkp_markups(prc_context *ctx, prc_bit_state *bit_state, prc_mkp_markup
 
         for (k = 0; k < data->number_of_linked_items; k++)
         {
-            code = prc_parse_reference_unique_identifier(ctx, bit_state, &data->linked_items[k]);
+            code = prc_parse_misc_reference_on_prcbase(ctx, bit_state, &data->linked_items[k]);
             if (code < 0)
             {
-                prc_error(ctx, code, "Failed in prc_parse_reference_unique_identifiers\n");
+                prc_error(ctx, code, "Failed in prc_parse_misc_reference_on_prcbase\n");
                 return code;
             }
         }
@@ -1000,10 +1000,10 @@ prc_parse_mkp_markups(prc_context *ctx, prc_bit_state *bit_state, prc_mkp_markup
 
         for (k = 0; k < data->number_of_leaders; k++)
         {
-            code = prc_parse_reference_unique_identifier(ctx, bit_state, &data->leaders[k]);
+            code = prc_parse_misc_reference_on_prcbase(ctx, bit_state, &data->leaders[k]);
             if (code < 0)
             {
-                prc_error(ctx, code, "Failed in prc_parse_reference_unique_identifiers\n");
+                prc_error(ctx, code, "Failed in prc_parse_misc_reference_on_prcbase\n");
                 return code;
             }
         }
@@ -1616,10 +1616,10 @@ prc_parse_mkp_view(prc_context *ctx, prc_bit_state *bit_state, prc_mkp_view *dat
 
         for (k = 0; k < data->number_of_annotations; k++)
         {
-            code = prc_parse_reference_unique_identifier(ctx, bit_state, &data->annotations[k]);
+            code = prc_parse_misc_reference_on_prcbase(ctx, bit_state, &data->annotations[k]);
             if (code < 0)
             {
-                prc_error(ctx, code, "Failed in prc_parse_reference_unique_identifier\n");
+                prc_error(ctx, code, "Failed in prc_parse_misc_reference_on_prcbase\n");
                 return code;
             }
         }
@@ -1674,10 +1674,10 @@ prc_parse_mkp_view(prc_context *ctx, prc_bit_state *bit_state, prc_mkp_view *dat
 
             for (k = 0; k < data->number_of_linked_items; k++)
             {
-                code = prc_parse_reference_unique_identifier(ctx, bit_state, &data->linked_items[k]);
+                code = prc_parse_misc_reference_on_prcbase(ctx, bit_state, &data->linked_items[k]);
                 if (code < 0)
                 {
-                    prc_error(ctx, code, "Failed in prc_parse_reference_unique_identifier\n");
+                    prc_error(ctx, code, "Failed in prc_parse_misc_reference_on_prcbase\n");
                     return code;
                 }
             }

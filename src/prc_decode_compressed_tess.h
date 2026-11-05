@@ -219,6 +219,12 @@ int prc_decode_compressed_tess(prc_context *ctx, prc_tess_3d_compressed *data, u
 int prc_compressed_tess_apply_crease_angle(prc_context *ctx, prc_tess_3d_compressed *data);
 int prc_compute_edges_compressed_tess(prc_context *ctx, prc_tess_3d_compressed *data);
 
+/* The trigonometry a decoded normal is built with. The encoder predicts the
+   decoder's normals with these same functions, so the two never differ in
+   the last bit. */
+double prc_taylor_cos(double x);
+double prc_taylor_sin(double x);
+
 typedef struct norms_and_edge_indices_s norms_and_edge_indices;
 struct norms_and_edge_indices_s
 {

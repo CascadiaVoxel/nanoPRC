@@ -1618,7 +1618,7 @@ prc_construct_loop_from_iso_curves(prc_context *ctx, prc_content_compressed_face
                 }
 
                 /* And now curve 3 (minor) */
-                curve[3] = &curve3_deduced;
+                curve[2] = &curve3_deduced;
                 torus_data.type = PRC_MINOR_ISO_TORUS_CIRCLE;
                 code = prc_create_deduced_curve(ctx, curve[0], reverse_curve0,
                     &torus_data, curve[2], start_curve2, end_curve2, compressed_data);
@@ -1993,6 +1993,160 @@ prc_get_cone_data_from_iso_curves(prc_context *ctx, prc_ptr_topology *loop,
     return 0;
 }
 
+/* From the iso curve data figure out the torus major/minor radius and the transform
+   so that we can represent the ISO surface with the uncompressed one */
+static int
+prc_get_torus_data_from_iso_curves(prc_context *ctx, prc_ptr_topology *loop,
+    uint8_t first_curve_is_major, double *major_radius, double *minor_radius,
+    prc_trans_3d *transform, uint8_t *has_transform,
+    prc_nano_brep_compressed_data *compressed_data)
+{
+    int code = 0;
+    prc_compressed_curve *curve1, *curve2, *curve3, *curve4;
+    uint8_t is_reversed1, is_reversed2, is_reversed3, is_reversed4;
+    prc_compressed_curve *c_maj1, *c_maj2, *c_min1, *c_min2;
+    prc_hcg_circle_information maj_info1, maj_info2, min_info1, min_info2;
+    prc_vec3 axis_dir, mid_minor, w_vec, torus_center, radial_vec;
+    double t_param, r_min1, r_min2;
+
+    /* 1. Extract the 4 compressed curves from the ISO loop */
+    curve1 = prc_get_compressed_curve_from_iso_loop(ctx, loop, 0, &is_reversed1);
+    curve2 = prc_get_compressed_curve_from_iso_loop(ctx, loop, 1, &is_reversed2);
+    curve3 = prc_get_compressed_curve_from_iso_loop(ctx, loop, 2, &is_reversed3);
+    curve4 = prc_get_compressed_curve_from_iso_loop(ctx, loop, 3, &is_reversed4);
+
+    /* Categorize into major and minor pairs depending on first_curve_is_major flag */
+    if (first_curve_is_major)
+    {
+        c_maj1 = curve1;
+        c_min1 = curve2;
+        c_maj2 = curve3;
+        c_min2 = curve4;
+    }
+    else
+    {
+        c_min1 = curve1;
+        c_maj1 = curve2;
+        c_min2 = curve3;
+        c_maj2 = curve4;
+    }
+
+    /* 2. Unpack geometry info for all 4 circles */
+    code = prc_get_hcg_circle_data(ctx, &c_maj1->hcg_circle, &maj_info1, compressed_data);
+    if (code < 0)
+    {
+        prc_error(ctx, code, "Failed in prc_get_hcg_circle_data\n");
+        return code;
+    }
+    code = prc_get_hcg_circle_data(ctx, &c_maj2->hcg_circle, &maj_info2, compressed_data);
+    if (code < 0)
+    {
+        prc_error(ctx, code, "Failed in prc_get_hcg_circle_data\n");
+        return code;
+    }
+    code = prc_get_hcg_circle_data(ctx, &c_min1->hcg_circle, &min_info1, compressed_data);
+    if (code < 0)
+    {
+        prc_error(ctx, code, "Failed in prc_get_hcg_circle_data\n");
+        return code;
+    }
+    code = prc_get_hcg_circle_data(ctx, &c_min2->hcg_circle, &min_info2, compressed_data);
+    if (code < 0)
+    {
+        prc_error(ctx, code, "Failed in prc_get_hcg_circle_data\n");
+        return code;
+    }
+
+    /* 3. Determine the central axis direction vector (Z-axis of the torus) */
+    prc_vec_sub(maj_info2.center, maj_info1.center, &axis_dir);
+    code = prc_vec_normalize_sqrt(&axis_dir);
+    if (code < 0)
+    {
+        prc_error(ctx, code, "Failed to normalize torus axis direction\n");
+        return code;
+    }
+
+    /* 4. Find Torus Center using Line-Plane intersection
+          The line passes through maj_info1.center with direction axis_dir.
+          The plane passes through the midpoint of the minor circle centers. */
+    mid_minor.x = 0.5 * (min_info1.center.x + min_info2.center.x);
+    mid_minor.y = 0.5 * (min_info1.center.y + min_info2.center.y);
+    mid_minor.z = 0.5 * (min_info1.center.z + min_info2.center.z);
+
+    prc_vec_sub(mid_minor, maj_info1.center, &w_vec);
+    t_param = prc_vec_dot_product(w_vec, axis_dir);
+
+    torus_center.x = maj_info1.center.x + (t_param * axis_dir.x);
+    torus_center.y = maj_info1.center.y + (t_param * axis_dir.x);
+    torus_center.z = maj_info1.center.z + (t_param * axis_dir.z);
+
+    // Correcting component extraction for safety:
+    torus_center.y = maj_info1.center.y + (t_param * axis_dir.y);
+
+    /* 5. Compute Radii
+          Minor radius is the radius of the minor circles */
+    prc_vec_sub(min_info1.start_point, min_info1.center, &w_vec);
+    r_min1 = prc_vec_length_sqrt(w_vec);
+    prc_vec_sub(min_info2.start_point, min_info2.center, &w_vec);
+    r_min2 = prc_vec_length_sqrt(w_vec);
+    *minor_radius = 0.5 * (r_min1 + r_min2);
+
+    /* Major radius is the distance from the torus center to a minor circle center */
+    prc_vec_sub(min_info1.center, torus_center, &w_vec);
+    *major_radius = prc_vec_length_sqrt(w_vec);
+
+    /* 6. Construct the 3D Coordinate Transform Matrix */
+    *transform = (prc_trans_3d){ 0 };
+    transform->behavior = PRC_TRANSFORMATION_Translate | PRC_TRANSFORMATION_Rotate;
+    transform->translation = torus_center;
+
+    /* X-Axis: We can define the local X-axis by projecting the vector from
+       the torus center to the first minor circle center onto the equatorial plane */
+    prc_vec_sub(min_info1.center, torus_center, &radial_vec);
+    double dot_proj = prc_vec_dot_product(radial_vec, axis_dir);
+    transform->rotation[0].x = radial_vec.x - (dot_proj * axis_dir.x);
+    transform->rotation[0].y = radial_vec.y - (dot_proj * axis_dir.y);
+    transform->rotation[0].z = radial_vec.z - (dot_proj * axis_dir.z);
+
+    code = prc_vec_normalize_sqrt(&transform->rotation[0]);
+    if (code < 0)
+    {
+        prc_error(ctx, code, "Failed to normalize local X-axis for torus transform\n");
+        return code;
+    }
+
+    /* Y-Axis: Computed via the cross product of the Z-axis (axis_dir) and local X-axis */
+    prc_vec_cross(axis_dir, transform->rotation[0], &transform->rotation[1]);
+    code = prc_vec_normalize_sqrt(&transform->rotation[1]);
+    if (code < 0)
+    {
+        prc_error(ctx, code, "Failed to normalize local Y-axis for torus transform\n");
+        return code;
+    }
+
+    /* Check if the canonical geometry aligns exactly with standard global orientation */
+    const double eps = 1e-12;
+    if (fabs(torus_center.x) < eps &&
+        fabs(torus_center.y) < eps &&
+        fabs(torus_center.z) < eps &&
+        fabs(axis_dir.x) < eps &&
+        fabs(axis_dir.y) < eps &&
+        fabs(axis_dir.z - 1.0) < eps &&
+        fabs(transform->rotation[0].x - 1.0) < eps &&
+        fabs(transform->rotation[0].y) < eps &&
+        fabs(transform->rotation[0].z) < eps)
+    {
+        *transform = (prc_trans_3d){ 0 };
+        *has_transform = 0;
+    }
+    else
+    {
+        *has_transform = 1;
+    }
+
+    return 0;
+}
+
 /* From the iso curve data figure out the sphere radius and the transform
    so that we can represent the ISO surface with the uncompressed one */
 static int
@@ -2171,186 +2325,70 @@ prc_tessellate_compressed_face(prc_context *ctx, prc_data *data, uint32_t shell_
         /* is_major_radius TRUE indicates if the first serialized circle defines
            the major radius. */
         prc_hcg_iso_torus *hcg_iso_torus = &topo_face->hcg_iso_torus;
-        uint8_t is_major_radius = hcg_iso_torus->is_major_radius;
         prc_content_compressed_face *face = &hcg_iso_torus->face;
-        prc_compressed_curve *first_trim_curve = NULL;
-        prc_compressed_curve *second_trim_curve = NULL;
-        prc_compressed_curve *third_trim_curve = NULL;
-        prc_compressed_curve *fourth_trim_curve = NULL;
-        prc_compressed_curve *major_radius_curve = first_trim_curve;
-        prc_compressed_curve *minor_radius_curve = second_trim_curve;
-        prc_vec3 common_vertex;
-        prc_hcg_circle_information minor_radius_circle_info;
-        prc_hcg_circle_information major_radius_circle_info;
         prc_surf_torus torus = { 0 };
         prc_topo_face synthetic_face = { 0 };
         prc_type_surf synthetic_surface = { 0 };
+        uint8_t is_an_iso_face = face->is_an_iso_face;
 
-        code = prc_get_compressed_curve(ctx, &face->iso_face.first_trim_curve,
-            &first_trim_curve, compressed_data);
-        if (code < 0)
+        free_loops = 1;
+        if (!is_an_iso_face)
         {
-            prc_error(ctx, code, "Failed to get second trim curve by id in prc_tessellate_compressed_face\n");
-            return code;
-        }
-
-        code = prc_get_compressed_curve(ctx, &face->iso_face.second_trim_curve,
-            &second_trim_curve, compressed_data);
-        if (code < 0)
-        {
-            prc_error(ctx, code, "Failed to get second trim curve by id in prc_tessellate_compressed_face\n");
-            return code;
-        }
-
-        if (is_major_radius)
-        {
-            major_radius_curve = first_trim_curve;
-            minor_radius_curve = second_trim_curve;
-        }
-        else
-        {
-            major_radius_curve = second_trim_curve;
-            minor_radius_curve = first_trim_curve;
-        }
-
-        code = prc_get_compressed_vertex(ctx, &face->iso_face.common_third_fourth_vertex,
-            &common_vertex, compressed_data);
-        if (code < 0)
-        {
-            prc_error(ctx, code, "Failed to reconstruct torus from compressed circle data\n");
-            return code;
-        }
-
-        if (minor_radius_curve->curve_type != PRC_HCG_Circle || major_radius_curve->curve_type != PRC_HCG_Circle)
-        {
-            prc_error(ctx, PRC_ERROR_PARSE, "Invalid curve type for torus in prc_tessellate_compressed_face\n");
+            prc_error(ctx, PRC_ERROR_PARSE, "ISO face is an Analytical face in prc_tessellate_compressed_face\n");
             return PRC_ERROR_PARSE;
         }
 
-        prc_get_hcg_circle_data(ctx, &minor_radius_curve->hcg_circle, &minor_radius_circle_info, compressed_data);
-        prc_get_hcg_circle_data(ctx, &major_radius_curve->hcg_circle, &major_radius_circle_info, compressed_data);
-
-        code = prc_build_iso_torus_from_circle_data(ctx,
-            &major_radius_circle_info, &minor_radius_circle_info,
-            &common_vertex, &torus);
-        if (code < 0)
-        {
-            prc_error(ctx, code, "Failed to reconstruct torus from compressed circle data\n");
-            return code;
-        }
-
-        /* We have to construct the deduced curves in case they are later
-           referenced. These are the implicit right/top boundaries of the
-           torus patch and must remain in the same torus parameter space as the
-           supplied trim curves. */
-        {
-            prc_vec3 torus_axis;
-            prc_vec3 major_dir = torus.transform.rotation[0];
-            prc_vec3 minor_dir = torus.transform.rotation[1];
-            const double u_min = torus.parameterization.surface_domain.min_uv.x;
-            const double u_max = torus.parameterization.surface_domain.max_uv.x;
-            const double v_min = torus.parameterization.surface_domain.min_uv.y;
-            const double v_max = torus.parameterization.surface_domain.max_uv.y;
-
-            prc_vec_cross(major_dir, minor_dir, &torus_axis);
-            code = prc_vec_normalize(&torus_axis);
-            if (code < 0)
-            {
-                prc_error(ctx, code, "Degenerate torus axis while constructing implied trim curves\n");
-                return code;
-            }
-
-            /* This curve *could* be referencing another curve, in which case,
-               we don't do the implied creation */
-            if (face->iso_face.third_trim_curve_is_not_yet_saved)
-            {
-                /* Curve 3: fixed u = u_max, sweep v = v_min..v_max. */
-                code = prc_get_compressed_curve(ctx, &face->iso_face.third_trim_curve,
-                    &third_trim_curve, compressed_data);
-                if (code < 0)
-                {
-                    prc_error(ctx, code, "Failed to get third trim curve by id in prc_tessellate_compressed_face\n");
-                    return code;
-                }
-
-                memset(&third_trim_curve->hcg_circle, 0, sizeof(third_trim_curve->hcg_circle));
-                third_trim_curve->curve_type = PRC_HCG_Circle;
-                third_trim_curve->hcg_circle.type = PRC_HCG_Circle;
-                third_trim_curve->hcg_circle.is_particular_circle = 1;
-                third_trim_curve->hcg_circle.particular_circle.full_circle = 0;
-                third_trim_curve->hcg_circle.particular_circle.compressed_iso_spline = 0;
-                third_trim_curve->hcg_circle.particular_circle.start_end_data.is_vertex = 0;
-                third_trim_curve->hcg_circle.particular_circle.start_end_data.start_point.point =
-                    prc_evaluate_surf_torus(ctx, &torus, u_max, v_min);
-                third_trim_curve->hcg_circle.particular_circle.start_end_data.end_point.point =
-                    prc_evaluate_surf_torus(ctx, &torus, u_max, v_max);
-                third_trim_curve->hcg_circle.particular_circle.center.point =
-                    torus.transform.translation;
-                {
-                    prc_vec3 offset = major_dir;
-                    prc_vec_scale(torus.major_radius * cos(u_max), &offset);
-                    {
-                        prc_vec3 offset2 = minor_dir;
-                        prc_vec_scale(torus.major_radius * sin(u_max), &offset2);
-                        prc_vec_add(offset, offset2, &offset);
-                    }
-                    prc_vec_add(third_trim_curve->hcg_circle.particular_circle.center.point, offset,
-                        &third_trim_curve->hcg_circle.particular_circle.center.point);
-                }
-                third_trim_curve->hcg_circle.particular_circle.normal_plane.point = torus_axis;
-                third_trim_curve->hcg_circle.particular_circle.middle_of_arc.point =
-                    prc_evaluate_surf_torus(ctx, &torus, u_max, 0.5 * (v_min + v_max));
-            }
-
-            /* Only do this creation if we have not referenced it */
-            if (face->iso_face.fourth_trim_curve_is_not_yet_saved)
-            {
-                /* Curve 4: fixed v = v_max, sweep u = u_min..u_max. */
-                code = prc_get_compressed_curve(ctx, &face->iso_face.fourth_trim_curve,
-                    &fourth_trim_curve, compressed_data);
-                if (code < 0)
-                {
-                    prc_error(ctx, code, "Failed to get fourth trim curve by id in prc_tessellate_compressed_face\n");
-                    return code;
-                }
-
-                memset(&fourth_trim_curve->hcg_circle, 0, sizeof(fourth_trim_curve->hcg_circle));
-                fourth_trim_curve->curve_type = PRC_HCG_Circle;
-                fourth_trim_curve->hcg_circle.type = PRC_HCG_Circle;
-                fourth_trim_curve->hcg_circle.is_particular_circle = 1;
-                fourth_trim_curve->hcg_circle.particular_circle.full_circle = 0;
-                fourth_trim_curve->hcg_circle.particular_circle.compressed_iso_spline = 0;
-                fourth_trim_curve->hcg_circle.particular_circle.start_end_data.is_vertex = 0;
-                fourth_trim_curve->hcg_circle.particular_circle.start_end_data.start_point.point =
-                    prc_evaluate_surf_torus(ctx, &torus, u_min, v_max);
-                fourth_trim_curve->hcg_circle.particular_circle.start_end_data.end_point.point =
-                    prc_evaluate_surf_torus(ctx, &torus, u_max, v_max);
-                fourth_trim_curve->hcg_circle.particular_circle.center.point = torus.transform.translation;
-                {
-                    prc_vec3 offset = torus_axis;
-                    prc_vec_scale(torus.minor_radius * sin(v_max), &offset);
-                    prc_vec_add(fourth_trim_curve->hcg_circle.particular_circle.center.point, offset,
-                        &fourth_trim_curve->hcg_circle.particular_circle.center.point);
-                }
-                fourth_trim_curve->hcg_circle.particular_circle.normal_plane.point = torus_axis;
-                fourth_trim_curve->hcg_circle.particular_circle.middle_of_arc.point =
-                    prc_evaluate_surf_torus(ctx, &torus, 0.5 * (u_min + u_max), v_max);
-            }
-        }
-
         synthetic_surface.surface_type = PRC_TYPE_SURF_Torus;
+        torus.tag = PRC_TYPE_SURF_Torus;
         synthetic_surface.surf_torus = &torus;
+        synthetic_face.has_tolerance = 0;
         synthetic_face.surface_geometry.is_referenced = 0;
         synthetic_face.surface_geometry.surface = synthetic_surface;
+        synthetic_face.is_trimmed = 0;
+        synthetic_face.tag = PRC_TYPE_TOPO_Face;
+        synthetic_face.index_of_outer_loop = -1;
+        synthetic_face.number_of_loops = 1;
+        torus.parameterization.u_param_coeff_a = 1;
+        torus.parameterization.v_param_coeff_a = 1;
+        torus.parameterization.u_param_coeff_b = 0;
+        torus.parameterization.v_param_coeff_b = 0;
+        torus.parameterization.swap_uv = 0;
+        torus.parameterization.surface_domain.max_uv.x = 2 * PRC_PI;
+        torus.parameterization.surface_domain.max_uv.y = 2 * PRC_PI;
+        torus.parameterization.surface_domain.min_uv.x = 0;
+        torus.parameterization.surface_domain.min_uv.y = 0;
+
+        /* hcg_iso_torus->is_major_radius is true if first curve is the major
+           radius */
+        code = prc_construct_loop_from_iso_curves(ctx, face, &synthetic_face,
+                                                  1, hcg_iso_torus->is_major_radius,
+                                                  compressed_data);
+        if (code < 0)
+        {
+            prc_error(ctx, code, "Failed to construct loop in prc_tessellate_compressed_face\n");
+            goto free_loops;
+        }
+
+        /* From the loop we need to get the parameters of the torus so
+            that we can determine the transformation as well the major and minor
+            radius */
+        code = prc_get_torus_data_from_iso_curves(ctx, synthetic_face.loops,
+            hcg_iso_torus->is_major_radius, &torus.major_radius,
+            &torus.minor_radius, &torus.transform, &torus.has_transform,
+            compressed_data);
+        if (code < 0)
+        {
+            prc_error(ctx, code, "Failed in prc_get_torus_data_from_iso_curves for compressed ISO torus\n");
+            goto free_loops;
+        }
 
         code = prc_tessellate_surface(ctx, data, shell_index, face_index, &synthetic_face,
             face->orientation_surface_with_shell, NULL, NULL);
         if (code < 0)
         {
             prc_error(ctx, code, "Failed in prc_tessellate_surface for compressed ISO torus\n");
-            return code;
+            goto free_loops;
         }
-
         break;
     }
 
@@ -2412,7 +2450,7 @@ prc_tessellate_compressed_face(prc_context *ctx, prc_data *data, uint32_t shell_
             face->orientation_surface_with_shell, NULL, NULL);
         if (code < 0)
         {
-            prc_error(ctx, code, "Failed in prc_tessellate_surface for compressed ISO cylinder\n");
+            prc_error(ctx, code, "Failed in prc_tessellate_surface for compressed ISO sphere\n");
             goto free_loops;
         }
 
@@ -2478,7 +2516,7 @@ prc_tessellate_compressed_face(prc_context *ctx, prc_data *data, uint32_t shell_
             face->orientation_surface_with_shell, NULL, NULL);
         if (code < 0)
         {
-            prc_error(ctx, code, "Failed in prc_tessellate_surface for compressed ISO cylinder\n");
+            prc_error(ctx, code, "Failed in prc_tessellate_surface for compressed ISO cone\n");
             goto free_loops;
         }
         break;

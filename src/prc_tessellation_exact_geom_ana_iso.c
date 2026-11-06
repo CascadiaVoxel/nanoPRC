@@ -2929,7 +2929,7 @@ prc_tessellate_compressed_face(prc_context *ctx, prc_data *data, uint32_t shell_
         if (ana_face->is_trimmed)
         {
             wire_data = (prc_exact_geom_wire_data *)prc_calloc(ctx,
-                ana_face->trim_loop_count, sizeof(prc_exact_geom_wire_data *));
+                ana_face->trim_loop_count, sizeof(prc_exact_geom_wire_data));
             if (wire_data == NULL)
             {
                 prc_error(ctx, PRC_ERROR_MEMORY, "Failed to allocate memory for wire_data in prc_tessellate_compressed_face\n");

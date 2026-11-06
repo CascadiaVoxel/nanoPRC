@@ -2553,9 +2553,6 @@ prc_tessellate_compressed_face(prc_context *ctx, prc_data *data, uint32_t shell_
         plane.domain.min_uv.x = -1245;
         plane.domain.min_uv.y = -1245;
 
-        plane.transform.behavior = 0;
-        plane.exact_geom_transform.is_identity = 1;
-
         plane.tag = PRC_TYPE_SURF_Plane;
 
         plane.u_parameter_coeff_a = 1.0;
@@ -2571,17 +2568,89 @@ prc_tessellate_compressed_face(prc_context *ctx, prc_data *data, uint32_t shell_
         synthetic_face.index_of_outer_loop = -1;
         synthetic_face.number_of_loops = ana_face->trim_loop_count;
 
-        /* Now the trimming data */
-        if (ana_face->is_trimmed)
+        /* The plane is stored as its unit normal alone; its origin is the
+           first vertex of the loop (ISO 14739-1, PRC_HCG_AnaPlane), so the
+           loops are read first. Without this the plane lay through the
+           origin with normal +z whatever the file said: a face at z = -5
+           was drawn at z = 0, and a tilted face flat in the xy plane. */
+        if (!ana_face->is_trimmed || ana_face->trim_loop_count == 0)
         {
-            code = prc_convert_ana_loops_to_std_loops(ctx, &synthetic_face,
-                ana_face, compressed_data, NULL);
-            if (code < 0)
-            {
-                prc_error(ctx, code, "Failed in prc_convert_ana_loops_to_std_loops\n");
-                goto free_loops;
-            }
+            prc_error(ctx, PRC_ERROR_PARSE, "Analytic plane face has no loop to place it in prc_tessellate_compressed_face\n");
+            return PRC_ERROR_PARSE;
         }
+        wire_data = (prc_exact_geom_wire_data *)prc_calloc(ctx,
+            ana_face->trim_loop_count, sizeof(prc_exact_geom_wire_data));
+        if (wire_data == NULL)
+        {
+            prc_error(ctx, PRC_ERROR_MEMORY, "Failed to allocate memory for wire_data in prc_tessellate_compressed_face\n");
+            return PRC_ERROR_MEMORY;
+        }
+        code = prc_convert_ana_loops_to_std_loops(ctx, &synthetic_face,
+            ana_face, compressed_data, wire_data);
+        if (code < 0 || wire_data[0].number_of_points == 0)
+        {
+            if (code >= 0)
+            {
+                code = PRC_ERROR_PARSE;
+                prc_error(ctx, code, "Analytic plane face loop has no vertex in prc_tessellate_compressed_face\n");
+            }
+            else
+                prc_error(ctx, code, "Failed in prc_convert_ana_loops_to_std_loops\n");
+            for (uint32_t i = 0; i < ana_face->trim_loop_count; ++i)
+                prc_free(ctx, wire_data[i].points);
+            prc_free(ctx, wire_data);
+            goto free_loops;
+        }
+        {
+            prc_vec3 origin = wire_data[0].points[0];
+            prc_vec3 z_basis, x_basis, y_basis;
+            prc_vec3 arb_vec = { 1.0, 0.0, 0.0 };
+            double zz = 1.0 - x_unit_plane_normal * x_unit_plane_normal - y_unit_plane_normal * y_unit_plane_normal;
+            double len;
+
+            z_basis.x = x_unit_plane_normal;
+            z_basis.y = y_unit_plane_normal;
+            z_basis.z = zz > 0.0 ? sqrt(zz) : 0.0;
+            if (!positive_z)
+                z_basis.z = -z_basis.z;
+            len = sqrt(z_basis.x * z_basis.x + z_basis.y * z_basis.y + z_basis.z * z_basis.z);
+            if (len > 1e-9)
+            {
+                z_basis.x /= len;
+                z_basis.y /= len;
+                z_basis.z /= len;
+            }
+            else
+            {
+                z_basis.x = 0.0;
+                z_basis.y = 0.0;
+                z_basis.z = 1.0;
+            }
+
+            /* Any x and y that complete a right-handed frame: the plane's
+               own parameterization has no preferred direction in the file. */
+            if (fabs(z_basis.x) > 0.9)
+            {
+                arb_vec.x = 0.0;
+                arb_vec.y = 1.0;
+            }
+            prc_vec_cross(arb_vec, z_basis, &x_basis);
+            len = sqrt(x_basis.x * x_basis.x + x_basis.y * x_basis.y + x_basis.z * x_basis.z);
+            x_basis.x /= len;
+            x_basis.y /= len;
+            x_basis.z /= len;
+            prc_vec_cross(z_basis, x_basis, &y_basis);
+
+            plane.transform.behavior = PRC_TRANSFORMATION_Translate | PRC_TRANSFORMATION_Rotate;
+            plane.transform.translation = origin;
+            plane.transform.rotation[0] = x_basis;
+            plane.transform.rotation[1] = y_basis;
+            plane.transform.scale = 1.0;
+        }
+        for (uint32_t i = 0; i < ana_face->trim_loop_count; ++i)
+            prc_free(ctx, wire_data[i].points);
+        prc_free(ctx, wire_data);
+        wire_data = NULL;
 
         code = prc_tessellate_surface(ctx, data, shell_index, face_index, &synthetic_face,
             face->orientation_surface_with_shell, NULL, NULL);
@@ -2712,8 +2781,8 @@ prc_tessellate_compressed_face(prc_context *ctx, prc_data *data, uint32_t shell_
 
         // 2. Inverse Translation: T_inv = -R^T * point_on_axis
         inv_transform.translation.x = -(point_on_axis.x * x_basis.x + point_on_axis.y * x_basis.y + point_on_axis.z * x_basis.z);
-        inv_transform.translation.y = -(point_on_axis.x * x_basis.y + point_on_axis.y * y_basis.y + point_on_axis.z * y_basis.z);
-        inv_transform.translation.z = -(point_on_axis.x * x_basis.z + point_on_axis.y * y_basis.z + point_on_axis.z * z_basis.z);
+        inv_transform.translation.y = -(point_on_axis.x * y_basis.x + point_on_axis.y * y_basis.y + point_on_axis.z * y_basis.z);
+        inv_transform.translation.z = -(point_on_axis.x * z_basis.x + point_on_axis.y * z_basis.y + point_on_axis.z * z_basis.z);
 
         // 3. Generate the 4x4 inverse matrix
         prc_exact_geom_transform inv_geom_matrix;
@@ -3080,8 +3149,8 @@ prc_tessellate_compressed_face(prc_context *ctx, prc_data *data, uint32_t shell_
         inv_transform.rotation[1].z = z_basis.y;
 
         inv_transform.translation.x = -(axis_point.x * x_basis.x + axis_point.y * x_basis.y + axis_point.z * x_basis.z);
-        inv_transform.translation.y = -(axis_point.x * x_basis.y + axis_point.y * y_basis.y + axis_point.z * y_basis.z);
-        inv_transform.translation.z = -(axis_point.x * x_basis.z + axis_point.y * y_basis.z + axis_point.z * z_basis.z);
+        inv_transform.translation.y = -(axis_point.x * y_basis.x + axis_point.y * y_basis.y + axis_point.z * y_basis.z);
+        inv_transform.translation.z = -(axis_point.x * z_basis.x + axis_point.y * z_basis.y + axis_point.z * z_basis.z);
 
         prc_exact_geom_transform inv_geom_matrix;
         prc_exact_geom_set_transform(ctx, &inv_geom_matrix, &inv_transform);

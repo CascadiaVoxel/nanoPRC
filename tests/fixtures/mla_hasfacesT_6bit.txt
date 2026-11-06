@@ -1,0 +1,15 @@
+mla_hasfacesT_6bit.prc
+
+Two unit cubes, each its own compressed tessellation of 12 triangles in 6
+faces, normals recalculated, one flat colour per face, the second cube at
+x + 2. Written by a nanoPRC writer changed for this purpose in one place:
+is_multiple_line_attribute is stored TRUE, followed by one
+is_multiple_line_attribute_on_face entry per face, each 0 (a single line
+attribute on the face). has_faces is TRUE and is_point_color_on_face has one
+entry per face, as the writer stores them.
+
+Two cubes, so that a reader that takes the wrong number of
+is_multiple_line_attribute_on_face entries in the first reads the second out
+of step.
+
+Used by tests/unit/test_multiple_line_attribute_on_face.c.

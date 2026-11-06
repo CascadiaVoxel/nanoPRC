@@ -1,0 +1,11 @@
+mla_hasfacesT_1bit.prc
+
+Malformed on purpose. The same two cubes as mla_hasfacesT_6bit.prc, written
+by a nanoPRC writer changed so that each cube stores has_faces TRUE but a
+single is_multiple_line_attribute_on_face entry, where has_faces TRUE calls
+for one per face. A reader takes six entries, reads the rest of the first cube
+out of step, and is then asked for more line_attribute_array entries than the
+entity stores.
+
+Used by tests/unit/test_line_attribute_bounds.c, which checks that the file is
+refused with an error rather than read past the end of the array.

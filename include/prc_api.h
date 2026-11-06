@@ -659,6 +659,12 @@ PRC_EXPORT int prc_api_get_number_tessellations(prc_context *ctx, prc_api_data d
 /**
  * @brief Return number of faces for a tessellation.
  *
+ * For a PRC_API_TESS_3D_Compressed tessellation this is still the file's
+ * face count, but every face_index gives the whole mesh: the compressed
+ * format does not keep each face's triangles apart, so the face only selects
+ * a style. Walk face 0 alone to collect the mesh once; walking every face
+ * repeats it once per face.
+ *
  * @param ctx Active API context.
  * @param data Data handle.
  * @param tess_index Tessellation index.
@@ -712,6 +718,11 @@ PRC_EXPORT int prc_api_get_line_tessellation_vertices(prc_context *ctx, prc_api_
 /**
  * @brief Build tessellation vertices/primitives for one tessellation face.
  *
+ * For a PRC_API_TESS_3D_Compressed tessellation, every face_index gives
+ * the whole mesh: the compressed format does not keep each face's triangles
+ * apart, so the face only selects a style. Walk face 0 alone to collect the
+ * mesh once; walking every face repeats it once per face.
+ *
  * @param ctx Active API context.
  * @param data_in Data handle.
  * @param tess_index Tessellation index.
@@ -752,6 +763,11 @@ PRC_EXPORT void prc_api_release_exact_geometry_tessellation(prc_context *ctx, pr
 
 /**
  * @brief Get one graphics primitive descriptor by index.
+ *
+ * For a PRC_API_TESS_3D_Compressed tessellation, every face_index gives
+ * the whole mesh: the compressed format does not keep each face's triangles
+ * apart, so the face only selects a style. Walk face 0 alone to collect the
+ * mesh once; walking every face repeats it once per face.
  *
  * @param ctx Active API context.
  * @param data Data handle.
@@ -855,6 +871,11 @@ PRC_EXPORT uint8_t prc_api_vertices_have_material(prc_context *ctx, const prc_ap
 
 /**
  * @brief Get expanded face vertices for a tessellation face.
+ *
+ * For a PRC_API_TESS_3D_Compressed tessellation, every face_index gives
+ * the whole mesh: the compressed format does not keep each face's triangles
+ * apart, so the face only selects a style. Walk face 0 alone to collect the
+ * mesh once; walking every face repeats it once per face.
  *
  * @param ctx Active API context.
  * @param tess Tessellation object.

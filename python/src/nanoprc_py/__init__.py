@@ -101,6 +101,13 @@ PRC_API_WRITE_RI_WIRE = getattr(_core_mod, "PRC_API_WRITE_RI_WIRE", 1)
 PRC_API_WRITE_TESS_KIND_TRIANGLES = getattr(_core_mod, "PRC_API_WRITE_TESS_KIND_TRIANGLES", 0)
 PRC_API_WRITE_TESS_KIND_WIRE = getattr(_core_mod, "PRC_API_WRITE_TESS_KIND_WIRE", 1)
 PRC_API_WRITE_TESS_KIND_COMPRESSED = getattr(_core_mod, "PRC_API_WRITE_TESS_KIND_COMPRESSED", 2)
+PRC_API_TESS_UNKNOWN = getattr(_core_mod, "PRC_API_TESS_UNKNOWN", 0)
+PRC_API_TESS_3D = getattr(_core_mod, "PRC_API_TESS_3D", 1)
+PRC_API_TESS_3D_Compressed = getattr(_core_mod, "PRC_API_TESS_3D_Compressed", 2)
+PRC_API_TESS_3D_Wire = getattr(_core_mod, "PRC_API_TESS_3D_Wire", 3)
+PRC_API_TESS_3D_Wire_Extra = getattr(_core_mod, "PRC_API_TESS_3D_Wire_Extra", 4)
+PRC_API_TESS_MarkUp = getattr(_core_mod, "PRC_API_TESS_MarkUp", 5)
+PRC_API_EXACT_GEOM = getattr(_core_mod, "PRC_API_EXACT_GEOM", 6)
 
 __all__ = [
     "Context",
@@ -116,4 +123,11 @@ __all__ = [
     "PRC_API_WRITE_TESS_KIND_TRIANGLES",
     "PRC_API_WRITE_TESS_KIND_WIRE",
     "PRC_API_WRITE_TESS_KIND_COMPRESSED",
+    "PRC_API_TESS_UNKNOWN",
+    "PRC_API_TESS_3D",
+    "PRC_API_TESS_3D_Compressed",
+    "PRC_API_TESS_3D_Wire",
+    "PRC_API_TESS_3D_Wire_Extra",
+    "PRC_API_TESS_MarkUp",
+    "PRC_API_EXACT_GEOM",
 ]

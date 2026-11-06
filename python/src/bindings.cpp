@@ -958,6 +958,7 @@ public:
 
         py::dict result;
         result["name"] = py::str(safe_string(tess.name));
+        result["type"] = py::int_(static_cast<int>(tess.type));
         result["tess_index"] = py::int_(tess.tess_index);
         result["part_index"] = py::int_(tess.part_index);
         result["product_index"] = py::int_(tess.product_index);
@@ -1361,6 +1362,13 @@ PYBIND11_MODULE(_core, m) {
         m.attr("PRC_API_WRITE_TESS_KIND_TRIANGLES") = py::int_(static_cast<int>(PRC_API_WRITE_TESS_KIND_TRIANGLES));
         m.attr("PRC_API_WRITE_TESS_KIND_WIRE") = py::int_(static_cast<int>(PRC_API_WRITE_TESS_KIND_WIRE));
         m.attr("PRC_API_WRITE_TESS_KIND_COMPRESSED") = py::int_(static_cast<int>(PRC_API_WRITE_TESS_KIND_COMPRESSED));
+        m.attr("PRC_API_TESS_UNKNOWN") = py::int_(static_cast<int>(PRC_API_TESS_UNKNOWN));
+        m.attr("PRC_API_TESS_3D") = py::int_(static_cast<int>(PRC_API_TESS_3D));
+        m.attr("PRC_API_TESS_3D_Compressed") = py::int_(static_cast<int>(PRC_API_TESS_3D_Compressed));
+        m.attr("PRC_API_TESS_3D_Wire") = py::int_(static_cast<int>(PRC_API_TESS_3D_Wire));
+        m.attr("PRC_API_TESS_3D_Wire_Extra") = py::int_(static_cast<int>(PRC_API_TESS_3D_Wire_Extra));
+        m.attr("PRC_API_TESS_MarkUp") = py::int_(static_cast<int>(PRC_API_TESS_MarkUp));
+        m.attr("PRC_API_EXACT_GEOM") = py::int_(static_cast<int>(PRC_API_EXACT_GEOM));
 
     py::class_<Context, std::shared_ptr<Context>>(m, "Context")
         .def(py::init<>())
@@ -1416,7 +1424,8 @@ PYBIND11_MODULE(_core, m) {
            .def("exact_geometry_tessellation_count", &Document::exact_geometry_tessellation_count,
                "Return the number of exact-geometry tessellations.")
         .def("number_of_faces", &Document::number_of_faces, py::arg("tess_index"),
-             "Return the number of faces in a tessellation.")
+             "Return the number of faces in a tessellation. For a PRC_API_TESS_3D_Compressed "
+             "tessellation every face gives the whole mesh, so walk face 0 alone.")
         .def("tessellation_vertex_count", &Document::tessellation_vertex_count, py::arg("tess_index"),
              "Return the number of vertices in the tessellation vertex buffer.")
         .def("tessellation_vertex_positions", &Document::tessellation_vertex_positions, py::arg("tess_index"),
@@ -1428,7 +1437,7 @@ PYBIND11_MODULE(_core, m) {
         .def("tessellation_vertex_uvs", &Document::tessellation_vertex_uvs, py::arg("tess_index"),
              "Return a zero-copy (n,2) float array of tessellation vertex UV coordinates.")
            .def("tessellation_info", &Document::tessellation_info, py::arg("tess_index"),
-               "Return metadata for one tessellation (name and source indices).")
+               "Return metadata for one tessellation (name, type and source indices).")
        .def("exact_geometry_tessellation_info", &Document::exact_geometry_tessellation_info, py::arg("exact_tess_index"),
            "Return metadata for one exact-geometry tessellation.")
        .def("exact_geometry_vertex_count", &Document::exact_geometry_vertex_count, py::arg("exact_tess_index"),

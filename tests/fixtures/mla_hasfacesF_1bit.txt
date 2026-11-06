@@ -1,0 +1,14 @@
+mla_hasfacesF_1bit.prc
+
+The same two cubes as mla_hasfacesT_6bit.prc, written by a nanoPRC writer
+changed for this purpose: has_faces is stored FALSE, and a single entry comes
+in each of is_point_color_on_face (1) and is_multiple_line_attribute_on_face
+(0) in place of one per face. The geometry and colours are the same; the model
+tree names differ (each file is named after itself).
+
+This is the layout of the two test files Datalogics attached to pdf-issues
+#833 (40 faces, has_faces FALSE, is_multiple_line_attribute TRUE), which read
+only with a single entry in this array, and one of which Adobe Acrobat
+renders.
+
+Used by tests/unit/test_multiple_line_attribute_on_face.c.

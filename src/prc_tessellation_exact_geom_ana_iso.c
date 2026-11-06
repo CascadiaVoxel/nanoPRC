@@ -1718,6 +1718,124 @@ prc_get_compressed_curve_from_iso_loop(prc_context *ctx, prc_ptr_topology *loop,
     return topo->topo_single_wire_compress->ref_or_compressed_curve.compressed_curve;
 }
 
+/* From the iso curve data figure out the planar transform
+   so that we can represent the ISO surface with the uncompressed one */
+static int
+prc_get_plane_data_from_iso_curves(prc_context *ctx, prc_ptr_topology *loop,
+    uint8_t positive_z, prc_trans_3d *transform,
+    prc_nano_brep_compressed_data *compressed_data)
+{
+    int code = 0;
+    prc_compressed_curve *curve1, *curve2;
+    uint8_t is_reversed1, is_reversed2;
+    prc_vec3 curve1_start, curve1_end;
+    prc_vec3 curve2_start, curve2_end;
+    prc_hcg_circle_information circle_info;
+    prc_vec3 vec_v, plane_normal;
+
+    /* Lets dig in and get curve1 and curve2. One should be circle the other
+       a line. */
+    curve1 = prc_get_compressed_curve_from_iso_loop(ctx, loop, 0, &is_reversed1);
+    curve2 = prc_get_compressed_curve_from_iso_loop(ctx, loop, 1, &is_reversed2);
+
+    if (curve1->curve_type == PRC_HCG_Circle)
+    {
+        code = prc_get_hcg_circle_data(ctx, &curve1->hcg_circle, &circle_info, compressed_data);
+        if (code < 0)
+        {
+            prc_error(ctx, code, "Failed in prc_get_hcg_circle_data\n");
+            return code;
+        }
+        curve1_start = circle_info.start_point;
+        curve1_end = circle_info.end_point;
+    }
+    else if (curve1->curve_type == PRC_HCG_Line)
+    {
+        prc_get_compressed_curve_start_end(ctx, curve1, &curve1_start, &curve1_end, NULL);
+    }
+    else
+    {
+        prc_error(ctx, PRC_ERROR_PARSE, "Unsupported curve type in ISO plane\n");
+        return PRC_ERROR_PARSE;
+    }
+
+    if (curve2->curve_type == PRC_HCG_Circle)
+    {
+        code = prc_get_hcg_circle_data(ctx, &curve2->hcg_circle, &circle_info, compressed_data);
+        if (code < 0)
+        {
+            prc_error(ctx, code, "Failed in prc_get_hcg_circle_data\n");
+            return code;
+        }
+        curve2_start = circle_info.start_point;
+        curve2_end = circle_info.end_point;
+    }
+    else if (curve2->curve_type == PRC_HCG_Line)
+    {
+        prc_get_compressed_curve_start_end(ctx, curve2, &curve2_start, &curve2_end, NULL);
+    }
+    else
+    {
+        prc_error(ctx, PRC_ERROR_PARSE, "Unsupported curve type in ISO plane\n");
+        return PRC_ERROR_PARSE;
+    }
+
+    if (curve2->curve_type == PRC_HCG_Circle && curve1->curve_type == PRC_HCG_Circle)
+    {
+        prc_error(ctx, PRC_ERROR_PARSE, "Unsupported curve types in ISO plane\n");
+        return PRC_ERROR_PARSE;
+    }
+
+    /* Define our plane using the 3 points curve1_start, curve1_end, curve2_end.
+     * pick curve1_start as the "origin" of the plane, which we will map
+     * [0,0,0] to. Also figure out the rotation values so that we rotate the
+     * z-axis to the normal of the plane defined by these 3 points. */
+
+     /* Initialize transform struct */
+    *transform = (prc_trans_3d){ 0 };
+    transform->behavior = PRC_TRANSFORMATION_Translate | PRC_TRANSFORMATION_Rotate;
+
+    /* 1. Map translation origin to the selected plane origin point */
+    transform->translation = curve1_start;
+
+    /* 2. X-Axis (rotation[0]): Direction from curve1_start to curve1_end */
+    prc_vec_sub(curve1_end, curve1_start, &transform->rotation[0]);
+    code = prc_vec_normalize_sqrt(&transform->rotation[0]);
+    if (code < 0)
+    {
+        prc_error(ctx, code, "Failed to normalize X-axis vector in prc_get_plane_data_from_iso_curves\n");
+        return code;
+    }
+
+    /* 3. Get vector from origin towards curve2_end to help build the plane normal frame */
+    prc_vec_sub(curve2_end, curve1_start, &vec_v);
+
+    /* 4. Compute temporary plane normal vector via cross product (X x V) */
+    prc_vec_cross(transform->rotation[0], vec_v, &plane_normal);
+    code = prc_vec_normalize_sqrt(&plane_normal);
+    if (code < 0)
+    {
+        prc_error(ctx, code, "Failed to normalize plane normal vector in prc_get_plane_data_from_iso_curves\n");
+        return code;
+    }
+
+    /* 5. Enforce the positive_z condition on the normal vector */
+    if ((positive_z && plane_normal.z < 0.0) || (!positive_z && plane_normal.z > 0.0))
+    {
+        prc_vec_negate(&plane_normal);
+    }
+
+    /* 6. Y-Axis (rotation[1]): Orthogonal complement computed via cross product (Z x X) */
+    prc_vec_cross(plane_normal, transform->rotation[0], &transform->rotation[1]);
+    code = prc_vec_normalize_sqrt(&transform->rotation[1]);
+    if (code < 0)
+    {
+        prc_error(ctx, code, "Failed to normalize Y-axis vector in prc_get_plane_data_from_iso_curves\n");
+        return code;
+    }
+    return 0;
+}
+
 /* From the iso curve data figure out the cylinder radius and the transform
    so that we can represent the ISO surface with the uncompressed one */
 static int
@@ -2249,9 +2367,70 @@ prc_tessellate_compressed_face(prc_context *ctx, prc_data *data, uint32_t shell_
 
     switch (topo_face->tag)
     {
+
     case PRC_HCG_IsoPlane:
     {
-        prc_hcg_iso_plane hcg_iso_plane = topo_face->hcg_iso_plane;
+        /* The origin of the plane is the first vertex of the loop */
+        prc_hcg_iso_plane *hcg_iso_plane = &topo_face->hcg_iso_plane;
+        prc_content_compressed_face *face = &hcg_iso_plane->face;
+        prc_surf_plane plane = { 0 };
+        prc_topo_face synthetic_face = { 0 };
+        prc_type_surf synthetic_surface = { 0 };
+        uint8_t is_an_iso_face = face->is_an_iso_face;
+        uint8_t positive_z = hcg_iso_plane->positive_z; /*  TRUE if Z coordinate of unit plane normal is greater than 0; otherwise, it is FALSE */
+
+        free_loops = 1;
+        if (!is_an_iso_face)
+        {
+            prc_error(ctx, PRC_ERROR_PARSE, "ISO face is an Analytical face in prc_tessellate_compressed_face\n");
+            return PRC_ERROR_PARSE;
+        }
+
+        synthetic_surface.surface_type = PRC_TYPE_SURF_Plane;
+        plane.tag = PRC_TYPE_SURF_Plane;
+        synthetic_surface.surf_plane = &plane;
+        synthetic_face.has_tolerance = 0;
+        synthetic_face.surface_geometry.is_referenced = 0;
+        synthetic_face.surface_geometry.surface = synthetic_surface;
+        synthetic_face.is_trimmed = 0;
+        synthetic_face.tag = PRC_TYPE_TOPO_Face;
+        synthetic_face.index_of_outer_loop = -1;
+        synthetic_face.number_of_loops = 1;
+        plane.domain.max_uv.x = 1245;
+        plane.domain.max_uv.y = 1245;
+        plane.domain.min_uv.x = -1245;
+        plane.domain.min_uv.y = -1245;
+        plane.u_parameter_coeff_a = 1;
+        plane.u_parameter_coeff_b = 0;
+        plane.v_parameter_coeff_a = 1;
+        plane.v_parameter_coeff_b = 0;
+
+        code = prc_construct_loop_from_iso_curves(ctx, face, &synthetic_face,
+                                                  0, 0, compressed_data);
+        if (code < 0)
+        {
+            prc_error(ctx, code, "Failed to construct plane loop in prc_tessellate_compressed_face\n");
+            goto free_loops;
+        }
+
+        /* From the loop we need to get the parameters of the cylinder so
+           that we can determine the transformation as well the radius */
+        code = prc_get_plane_data_from_iso_curves(ctx, synthetic_face.loops, positive_z,
+                                                  &plane.transform, compressed_data);
+        if (code < 0)
+        {
+            prc_error(ctx, code, "Failed in prc_get_plane_data_from_iso_curves for compressed ISO plane\n");
+            goto free_loops;
+        }
+
+        code = prc_tessellate_surface(ctx, data, shell_index, face_index, &synthetic_face,
+            face->orientation_surface_with_shell, NULL, NULL);
+        if (code < 0)
+        {
+            prc_error(ctx, code, "Failed in prc_tessellate_surface for compressed ISO plane\n");
+            goto free_loops;
+        }
+
         break;
     }
 

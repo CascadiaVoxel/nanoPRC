@@ -1,0 +1,15 @@
+pcof_hasfacesF_1bit.prc
+
+The same cube as pcof_hasfacesT_6bit.prc, written by a nanoPRC writer changed
+for this purpose in two places: has_faces is stored FALSE, and a single
+is_point_color_on_face bit (1) comes before the point_color_array in place of
+one per face. The geometry and colours are the same; the model tree names
+differ (each file is named after itself).
+
+This is the layout of prc-db's Castle_of_Bouvignes_Belgium_landscape (65,804
+faces, has_faces FALSE, one bit). Adobe Acrobat and PDF-XChange Editor draw it
+with all six colours (November 2026). The same cube with has_faces FALSE and six
+bits, or has_faces TRUE and one bit, is refused by Acrobat and drawn without its
+colours by PDF-XChange.
+
+Used by tests/unit/test_point_color_on_face.c.

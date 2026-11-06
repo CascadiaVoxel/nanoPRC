@@ -635,12 +635,76 @@ prc_convert_compref_curve_to_coedge(prc_context *ctx,
             prc_error(ctx, code, "Failed to get compressed curve in prc_convert_comp_curve_to_coedge\n");
             return code;
         }
-        code = prc_sample_compressed_curve(ctx, NULL, curve, 0, wire_data, compressed_data);
+
+        /* We are creating a loop of samples from multiple curves. We need to
+           allocate more data and the */
+        prc_exact_geom_wire_data wire_data_new;
+        uint8_t discard_endpoint = 1;
+        uint8_t reverse_curve = 0;
+
+        code = prc_sample_compressed_curve(ctx, NULL, curve, 0, &wire_data_new, compressed_data);
         if (code < 0)
         {
             prc_error(ctx, code, "Failed to sample compressed curve in prc_convert_comp_curve_to_coedge\n");
             return code;
         }
+
+        if (wire_data->points != NULL && wire_data->number_of_points > 0)
+        {
+            /* Check that the last point of the existing wire_data matches the first point of the new data */
+            if (prc_vec_dist_between_two_points(wire_data->points[wire_data->number_of_points - 1], wire_data_new.points[0]) > 1e-6)
+            {
+                /* Plan to reverse the next curve */
+                reverse_curve = 1;
+            }
+        }
+        else
+        {
+            discard_endpoint = 0; /* No existing points, so we don't need to discard the first point of the new data */
+        }
+
+        /* Realloc the points in wire_data and combine with the new data with
+           an edge sanity check */
+        if (wire_data->points ==  NULL)
+        {
+            wire_data->points = (prc_vec3 *)prc_calloc(ctx, wire_data_new.number_of_points, sizeof(prc_vec3));
+            if (wire_data->points == NULL)
+            {
+                prc_free(ctx, wire_data_new.points);
+                prc_error(ctx, PRC_ERROR_MEMORY, "Failed to allocate memory for wire_data->points\n");
+                return PRC_ERROR_MEMORY;
+            }
+        }
+        else
+        {
+            wire_data->points = (prc_vec3 *)prc_realloc(ctx, wire_data->points,
+                (wire_data->number_of_points + wire_data_new.number_of_points - 1) * sizeof(prc_vec3));
+            if (wire_data->points == NULL)
+            {
+                prc_free(ctx, wire_data_new.points);
+                prc_error(ctx, PRC_ERROR_MEMORY, "Failed to allocate memory for wire_data->points\n");
+                return PRC_ERROR_MEMORY;
+            }
+        }
+        if (discard_endpoint)
+        {
+            memmove(&wire_data_new.points[0], &wire_data_new.points[1],
+                (wire_data_new.number_of_points - 1) * sizeof(prc_vec3));
+            wire_data_new.number_of_points -= 1;
+        }
+        if (reverse_curve)
+        {
+            for (uint32_t i = 0; i < wire_data_new.number_of_points / 2; ++i)
+            {
+                prc_vec3 temp = wire_data_new.points[i];
+                wire_data_new.points[i] = wire_data_new.points[wire_data_new.number_of_points - 1 - i];
+                wire_data_new.points[wire_data_new.number_of_points - 1 - i] = temp;
+            }
+        }
+        memcpy(&wire_data->points[wire_data->number_of_points], wire_data_new.points,
+               wire_data_new.number_of_points * sizeof(prc_vec3));
+        wire_data->number_of_points = wire_data->number_of_points + wire_data_new.number_of_points;
+        prc_free(ctx, wire_data_new.points);
     }
 
     return 0;

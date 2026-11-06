@@ -853,7 +853,6 @@ typedef struct prc_multi_compressed_connex_s prc_multi_compressed_connex;
 typedef struct prc_compressed_connex_s prc_compressed_connex;
 typedef struct prc_type_asm_file_struct_internal_data_s prc_type_asm_file_struct_internal_data;
 typedef struct prc_attribute_key_value_s prc_attribute_key_value;
-typedef struct prc_reference_unique_identifiers_s prc_reference_unique_identifiers;
 typedef struct prc_compressed_unique_id_s prc_compressed_unique_id;
 typedef struct prc_interval_s prc_interval;
 typedef struct prc_parameterization_s prc_parameterization;
@@ -1786,16 +1785,6 @@ struct prc_type_mkp_annotation_set_s
     prc_unsigned_int number_of_annotations;
     prc_annotation_entity *annotations;
     prc_user_data user_data;
-};
-
-/* Table 128 ReferenceUniqueIdentifier */
-struct prc_reference_unique_identifiers_s
-{
-    prc_unsigned_int tag;
-    prc_unsigned_int type;
-    uint8_t reference_in_same_file_structure;
-    prc_unique_id target_file_structure;
-    prc_unsigned_int unique_id;
 };
 
 /* Table 133 */

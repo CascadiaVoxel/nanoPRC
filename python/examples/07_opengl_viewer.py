@@ -15,7 +15,7 @@ import numpy as np
 from OpenGL.GL import *
 from OpenGL.GLU import gluPerspective
 
-from nanoprc_py import Context
+from nanoprc_py import Context, PRC_API_TESS_3D_Compressed
 
 PRIMITIVE_MODE_MAP = {
     0: GL_TRIANGLES,
@@ -323,6 +323,10 @@ class NanoPRCViewer:
 
         for tess_index in tess_indices:
             num_faces = int(self.document.number_of_faces(tess_index))
+            # Every face of a compressed tessellation gives the whole mesh (the
+            # face only selects a style), so face 0 alone draws it once.
+            if self.document.tessellation_info(tess_index)["type"] == PRC_API_TESS_3D_Compressed:
+                num_faces = min(num_faces, 1)
             for face_index in range(num_faces):
                 positions = np.asarray(self.document.face_vertex_positions(tess_index, face_index), dtype=np.float32)
                 if positions.size == 0:

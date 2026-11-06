@@ -2290,13 +2290,30 @@ prc_check_for_treated_edge(prc_context *ctx, treated_edge_list *edge_list,
     }
 }
 
-static void
+/* Every index here comes from the file. A file whose per-face arrays are
+   read out of step (a wrong length earlier in the entity, say) can name a
+   face past face_number, or ask for more line_attribute_array entries than
+   it stores, so each is checked and the entity is refused rather than read
+   past the end of an array. */
+static int
 prc_store_triangle_style(prc_context *ctx, prc_tess_3d_compressed *data,
     uint32_t tri_num, uint32_t *face_styles, uint8_t *face_encountered,
     uint32_t *triangle_style_array, uint32_t *style_index)
 {
-	uint32_t face_num = data->triangle_face_array[tri_num];
+	uint32_t face_num;
     uint8_t is_multiple_style = 0;
+
+    if (tri_num >= data->triangle_face_array_size)
+    {
+        prc_error(ctx, PRC_ERROR_PARSE, "Triangle %u has no entry in triangle_face_array\n", tri_num);
+        return PRC_ERROR_PARSE;
+    }
+	face_num = data->triangle_face_array[tri_num];
+    if (face_num >= data->face_number)
+    {
+        prc_error(ctx, PRC_ERROR_PARSE, "Triangle %u names face %u of %u\n", tri_num, face_num, data->face_number);
+        return PRC_ERROR_PARSE;
+    }
 
 	if (data->is_multiple_line_attribute)
 	{
@@ -2307,6 +2324,12 @@ prc_store_triangle_style(prc_context *ctx, prc_tess_3d_compressed *data,
 	{
         /* In this case for this particular face, each triangle style is stored
            in the line_attributes_array */
+        if (*style_index >= data->line_attribute_array_size)
+        {
+            prc_error(ctx, PRC_ERROR_PARSE, "line_attribute_array has %u entries; triangle %u needs entry %u\n",
+                data->line_attribute_array_size, tri_num, *style_index);
+            return PRC_ERROR_PARSE;
+        }
 		triangle_style_array[tri_num] = data->line_attribute_array[*style_index];
 		*style_index += 1;
 	}
@@ -2335,6 +2358,12 @@ prc_store_triangle_style(prc_context *ctx, prc_tess_3d_compressed *data,
                this triangles style to what the face is set to */
             if (!face_encountered[face_num])
             {
+                if (*style_index >= data->line_attribute_array_size)
+                {
+                    prc_error(ctx, PRC_ERROR_PARSE, "line_attribute_array has %u entries; face %u needs entry %u\n",
+                        data->line_attribute_array_size, face_num, *style_index);
+                    return PRC_ERROR_PARSE;
+                }
                 face_styles[face_num] = data->line_attribute_array[*style_index];
                 face_encountered[face_num] = 1;
                 *style_index += 1;
@@ -2342,6 +2371,7 @@ prc_store_triangle_style(prc_context *ctx, prc_tess_3d_compressed *data,
             triangle_style_array[tri_num] = face_styles[face_num];
         }
 	}
+    return 0;
 }
 
 /* PROBE (2026-08-06): see PRC_DIAG_DUMP_HOP_DEPTH's own comment at hop_depth's allocation
@@ -3057,8 +3087,10 @@ prc_decode_compressed_tess(prc_context *ctx, prc_tess_3d_compressed *data, uint8
 	if (has_faces)
 	{
 		/* Store the face style for the first triangle */
-		prc_store_triangle_style(ctx, data, 0, face_styles, face_encountered,
+		code = prc_store_triangle_style(ctx, data, 0, face_styles, face_encountered,
             triangle_style_array, &style_index);
+        if (code < 0)
+            goto cleanup;
 	}
 
     /* Start at triangle 2 since we already computed one */
@@ -3380,8 +3412,10 @@ prc_decode_compressed_tess(prc_context *ctx, prc_tess_3d_compressed *data, uint8
         if (has_faces)
         {
             /* Store the face style for the first triangle */
-            prc_store_triangle_style(ctx, data, k, face_styles, face_encountered,
+            code = prc_store_triangle_style(ctx, data, k, face_styles, face_encountered,
                 triangle_style_array, &style_index);
+            if (code < 0)
+                goto cleanup;
         }
 
     }

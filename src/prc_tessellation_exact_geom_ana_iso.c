@@ -2438,8 +2438,6 @@ prc_tessellate_compressed_face(prc_context *ctx, prc_data *data, uint32_t shell_
         prc_hcg_iso_plane *hcg_iso_plane = &topo_face->hcg_iso_plane;
         prc_content_compressed_face *face = &hcg_iso_plane->face;
         prc_surf_plane plane = { 0 };
-        prc_topo_face synthetic_face = { 0 };
-        prc_type_surf synthetic_surface = { 0 };
         uint8_t is_an_iso_face = face->is_an_iso_face;
         uint8_t positive_z = hcg_iso_plane->positive_z; /*  TRUE if Z coordinate of unit plane normal is greater than 0; otherwise, it is FALSE */
 
@@ -2503,8 +2501,6 @@ prc_tessellate_compressed_face(prc_context *ctx, prc_data *data, uint32_t shell_
         prc_hcg_iso_cylinder *hcg_iso_cylinder = &topo_face->hcg_iso_cylinder;
         prc_content_compressed_face *face = &hcg_iso_cylinder->face;
         prc_surf_cylinder cylinder = { 0 };
-        prc_topo_face synthetic_face = { 0 };
-        prc_type_surf synthetic_surface = { 0 };
         uint8_t is_an_iso_face = face->is_an_iso_face;
 
         free_loops = 1;
@@ -2570,8 +2566,6 @@ prc_tessellate_compressed_face(prc_context *ctx, prc_data *data, uint32_t shell_
         prc_hcg_iso_torus *hcg_iso_torus = &topo_face->hcg_iso_torus;
         prc_content_compressed_face *face = &hcg_iso_torus->face;
         prc_surf_torus torus = { 0 };
-        prc_topo_face synthetic_face = { 0 };
-        prc_type_surf synthetic_surface = { 0 };
         uint8_t is_an_iso_face = face->is_an_iso_face;
 
         free_loops = 1;
@@ -2640,8 +2634,6 @@ prc_tessellate_compressed_face(prc_context *ctx, prc_data *data, uint32_t shell_
         prc_hcg_iso_sphere *hcg_iso_sphere = &topo_face->hcg_iso_sphere;
         prc_content_compressed_face *face = &hcg_iso_sphere->face;
         prc_surf_sphere sphere = { 0 };
-        prc_topo_face synthetic_face = { 0 };
-        prc_type_surf synthetic_surface = { 0 };
         uint8_t is_an_iso_face = face->is_an_iso_face;
 
         free_loops = 1;
@@ -2705,8 +2697,6 @@ prc_tessellate_compressed_face(prc_context *ctx, prc_data *data, uint32_t shell_
         prc_hcg_iso_cone *hcg_iso_cone = &topo_face->hcg_iso_cone;
         prc_content_compressed_face *face = &hcg_iso_cone->face;
         prc_surf_cone cone = { 0 };
-        prc_topo_face synthetic_face = { 0 };
-        prc_type_surf synthetic_surface = { 0 };
         uint8_t is_an_iso_face = face->is_an_iso_face;
 
         free_loops = 1;

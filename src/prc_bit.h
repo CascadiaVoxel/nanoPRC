@@ -156,6 +156,10 @@ struct prc_bit_write_state_s
     uint8_t   bit_accum;
     uint8_t   bit_fill;
     int       error;     /* sticky: non-zero means unrecoverable failure */
+    /* The current name of clause 4.4 for this section: the last name
+       written, NULL at the start. A copy, so callers' strings need not
+       outlive it. Set by prc_write_name. */
+    char     *curr_name;
 };
 
 int prc_bitwrite_init(prc_context *ctx, prc_bit_write_state *state, size_t initial_capacity);

@@ -473,6 +473,13 @@ PRC_EXPORT int prc_api_written_by_nanoprc(prc_context *ctx, prc_api_data data);
 /**
  * @brief Release API data and optional tessellation/model-tree allocations.
  *
+ * Frees what the library allocated inside each tessellation passed in (its
+ * vertices, primitives, textures and so on), and the model tree. It does
+ * not free the arrays the caller allocated: each tessellation's tess_faces
+ * array and the tessellation arrays themselves (tess, line_tess,
+ * exact_tess). It reads them while it works, so free them after this call,
+ * with the allocator that made them.
+ *
  * @param ctx Active API context.
  * @param data Data handle returned by prc_api_open_contents.
  * @param tess Optional tessellation array previously allocated by caller.

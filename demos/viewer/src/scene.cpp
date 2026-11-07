@@ -767,7 +767,8 @@ void Scene::load(const char *infile, Camera *camera, bool memoryLeakCheck, bool 
     }
     if (totalLineTesselations > 0)
     {
-        tesses_line = new prc_api_tess[totalLineTesselations];
+        /* Zeroed, so that a slot never filled has no face array to free. */
+        tesses_line = new prc_api_tess[totalLineTesselations]();
         if (tesses_line == NULL)
         {
             printf("Scene::load: failed to allocate line tessellation array\n");
@@ -1069,6 +1070,8 @@ void Scene::load(const char *infile, Camera *camera, bool memoryLeakCheck, bool 
 
     if (totalLineTesselations > 0)
     {
+        for (uint32_t i = 0; i < totalLineTesselations; i++)
+            delete[] tesses_line[i].tess_faces;
         delete[] tesses_line;
     }
 

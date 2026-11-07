@@ -589,6 +589,16 @@ cleanup:
         }
         prc_api_release_context(ctx);
     }
+    /* The face arrays and the tessellation array were allocated here, not
+       by the library, so prc_api_release_data leaves them to us. */
+    if (tesses)
+    {
+        for (uint32_t k = 0; k < total_tessellations; k++)
+        {
+            free(tesses[k].tess_faces);
+        }
+        free(tesses);
+    }
 
     return ret;
 }

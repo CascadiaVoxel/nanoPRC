@@ -781,7 +781,7 @@ prc_approximate_objects_exact_geom(prc_context *ctx, prc_api_data data_in, uint3
                     prc_topo_wire_edge *wire_edge = body->wire_body.topo->topo_wire_edge;
                     prc_exact_geom_wire_data *wire_data =
                         (prc_exact_geom_wire_data *)prc_calloc(ctx, 1, sizeof(prc_exact_geom_wire_data));
-                    if (data->exact_geom_tess_part[geom_count].shells[i].faces[j].wire_data == NULL)
+                    if (wire_data == NULL)
                     {
                         prc_error(ctx, PRC_ERROR_MEMORY, "Allocation failure of wire_data\n");
                         return PRC_ERROR_MEMORY;

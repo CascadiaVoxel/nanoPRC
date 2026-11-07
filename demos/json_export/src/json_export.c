@@ -1060,13 +1060,11 @@ static int write_model_tree(prc_api_product *root, json_writer *w)
 /* ----------------------------------------------------------------------
  * Cleanup helper
  *
- * Releases the tessellation table this program allocated itself (the
- * per-tessellation face arrays) before handing everything back to
- * prc_api_release_data, mirroring the ownership pattern used by the
- * quick-start example: the program allocates the outer prc_api_tess /
- * prc_api_face arrays, and the library is responsible for releasing the
- * buffers it filled in (vertices, primitives, textures, etc.) along with
- * those program-owned arrays when given them via prc_api_release_data.
+ * Frees the tessellation table this program allocated itself: each
+ * tessellation's face array and the tessellation array. The library frees
+ * the buffers it filled in (vertices, primitives, textures and so on) in
+ * prc_api_release_data, but not these, which it did not allocate; and it
+ * reads them while doing so. So this runs after prc_api_release_data.
  * ------------------------------------------------------------------- */
 
 static void tess_table_release_faces(tess_table *table)
@@ -1080,14 +1078,12 @@ static void tess_table_release_faces(tess_table *table)
 
     for (i = 0; i < table->num_tess; i++)
     {
-        /* tess_faces itself is released as part of prc_api_release_data's
-           walk over the tessellation array; we only need to make sure we
-           do not leak it if release_data is never reached (e.g. an earlier
-           fatal error during JSON emission). prc_api_release_data is
-           always called on every exit path below, so in normal operation
-           this function exists primarily as defensive cleanup glue. */
-        (void)table->tesses[i];
+        free(table->tesses[i].tess_faces);
+        table->tesses[i].tess_faces = NULL;
     }
+    free(table->tesses);
+    table->tesses = NULL;
+    table->num_tess = 0;
 }
 
 /* ----------------------------------------------------------------------
@@ -1277,8 +1273,6 @@ cleanup:
         }
     }
 
-    tess_table_release_faces(&table);
-
     if (ctx != NULL)
     {
         /* prc_api_release_data tolerates NULL/zero for any of the
@@ -1298,6 +1292,9 @@ cleanup:
             fprintf(stderr, "warning: memory leak detected during context release\n");
         }
     }
+
+    /* After prc_api_release_data, which reads the arrays it frees from. */
+    tess_table_release_faces(&table);
 
     if (exit_code == 0)
     {

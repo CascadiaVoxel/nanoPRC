@@ -108,8 +108,16 @@ prc_get_compressed_vertex(prc_context *ctx, prc_compressed_vertex *comp_vertex,
             return PRC_ERROR_PARSE;
         }
         prc_compressed_vertex *vertex_store = NULL;
-        code = prc_get_vertex_by_id(ctx, compressed_data, comp_vertex->point_index,
-            &vertex_store);
+        if (compressed_data->use_alt_indexing)
+        {
+            code = prc_get_vertex_by_id(ctx, compressed_data, comp_vertex->point_index_alt,
+                &vertex_store);
+        }
+        else
+        {
+            code = prc_get_vertex_by_id(ctx, compressed_data, comp_vertex->point_index,
+                &vertex_store);
+        }
         if (code < 0)
         {
             prc_error(ctx, code, "Failed to get common vertex by id in prc_get_compressed_point\n");

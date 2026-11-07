@@ -516,11 +516,15 @@ prc_release_file_struct_globals(prc_context *ctx, prc_asm_file_structure_globals
 }
 
 static void
-prc_release_internal_global_data(prc_context *ctx, prc_type_asm_file_struct_internal_data *global_data)
+prc_release_internal_global_data(prc_context *ctx,
+                            prc_type_asm_file_struct_internal_data *global_data)
 {
-
+    if (global_data->base.name.name.string != NULL)
+    {
+        prc_free(ctx, global_data->base.name.name.string);
+        global_data->base.name.name.string = NULL;
+    }
 }
-
 
 /* Work-list entry for the iterative release walk below: either a prc_ri node
    to release, or a deferred "free this rep_items array" marker. The marker is

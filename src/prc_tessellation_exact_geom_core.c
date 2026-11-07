@@ -2230,6 +2230,8 @@ prc_tessellate_trimmed_face(prc_context *ctx, prc_data *data, uint32_t shell_ind
         code = prc_build_periodic_outer_loop(ctx, num_loops, loop_samples, wrap_axis, sampling_info, &true_outer_loop);
         if (code < 0)
         {
+            if (has_wrapping_loop)
+                prc_free(ctx, true_outer_loop.uv_samples);
             prc_free(ctx, grid.uv);
             prc_free(ctx, grid.verts);
             prc_free(ctx, cell_inside);
@@ -2251,6 +2253,8 @@ prc_tessellate_trimmed_face(prc_context *ctx, prc_data *data, uint32_t shell_ind
         }
         if (true_outer_index == (uint32_t)-1)
         {
+            if (has_wrapping_loop)
+                prc_free(ctx, true_outer_loop.uv_samples);
             prc_free(ctx, grid.uv);
             prc_free(ctx, grid.verts);
             prc_free(ctx, cell_inside);
@@ -2269,6 +2273,8 @@ prc_tessellate_trimmed_face(prc_context *ctx, prc_data *data, uint32_t shell_ind
         kept_triangles = (uint32_t *)prc_calloc(ctx, cell_count_u * cell_count_v * 6, sizeof(uint32_t));
         if (cell_inside_raw == NULL || cell_inside == NULL || kept_triangles == NULL || cell_processed == NULL)
         {
+            if (has_wrapping_loop)
+                prc_free(ctx, true_outer_loop.uv_samples);
             prc_free(ctx, grid.uv);
             prc_free(ctx, grid.verts);
             prc_free(ctx, cell_inside_raw);
@@ -2528,6 +2534,8 @@ prc_tessellate_trimmed_face(prc_context *ctx, prc_data *data, uint32_t shell_ind
                         &fringe_triangles, &fringe_num_triangles, &fringe_tris_cap);
                 if (code < 0)
                 {
+                    if (has_wrapping_loop)
+                        prc_free(ctx, true_outer_loop.uv_samples);
                     prc_free(ctx, grid.uv);
                     prc_free(ctx, grid.verts);
                     prc_free(ctx, cell_inside);
@@ -2545,6 +2553,8 @@ prc_tessellate_trimmed_face(prc_context *ctx, prc_data *data, uint32_t shell_ind
         grid.wrap_u, grid.wrap_v, grid.uv, &traced_loops, &num_traced);
     if (code < 0)
     {
+        if (has_wrapping_loop)
+            prc_free(ctx, true_outer_loop.uv_samples);
         prc_free(ctx, grid.uv);
         prc_free(ctx, grid.verts);
         prc_free(ctx, cell_inside);
@@ -2642,7 +2652,10 @@ prc_tessellate_trimmed_face(prc_context *ctx, prc_data *data, uint32_t shell_ind
     prc_free(ctx, combined_loops);
     prc_free_loop_array(ctx, traced_loops, num_traced);
     if (has_wrapping_loop)
+    {
         prc_free(ctx, true_outer_loop.uv_samples);
+        true_outer_loop.uv_samples = NULL;
+    }
     if (code < 0)
     {
         prc_free(ctx, grid.uv);
@@ -2689,6 +2702,13 @@ prc_tessellate_trimmed_face(prc_context *ctx, prc_data *data, uint32_t shell_ind
     prc_free(ctx, fringe_poly_triangles);
 
 fringe_done:
+
+    if (has_wrapping_loop && true_outer_loop.uv_samples != NULL)
+    {
+        prc_free(ctx, true_outer_loop.uv_samples);
+        true_outer_loop.uv_samples = NULL;
+    }
+
     prc_free(ctx, cell_processed);
     prc_free(ctx, cell_inside);
 

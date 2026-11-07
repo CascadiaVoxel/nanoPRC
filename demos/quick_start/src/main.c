@@ -305,8 +305,13 @@ int main(int argc, char *argv[])
         }
     }
 
-    /* Clean up */
+    /* Clean up. prc_api_release_data frees what the library put in each
+       tessellation; the face arrays and the tessellation array were
+       allocated here, so they are freed here, after it. */
     prc_api_release_data(ctx, data, tesses, totalTesselations, NULL, 0, NULL, 0, model_tree);
+    for (k = 0; k < totalTesselations; k++)
+        free(tesses[k].tess_faces);
+    free(tesses);
     code = prc_api_release_context(ctx);
 
     return 0;

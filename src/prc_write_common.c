@@ -18,22 +18,49 @@
 #include "prc_write_common.h"
 #include "prc_app_id.h"
 
+/* A Name: same_name TRUE means "the current name" of clause 4.4, the last
+   name written in this section (NULL at its start), not "no name". So TRUE
+   is written only when name is the current name, both NULL or both the same
+   text. Otherwise the name follows, a NULL name as a null string, and
+   becomes the current name. Writing TRUE for every NULL name, as this did,
+   gave an unnamed entity the name of whatever was named before it. */
 int
 prc_write_name(prc_context *ctx, prc_bit_write_state *s, const char *name)
 {
-    if (name == NULL)
-        return prc_bitwrite_bit(ctx, s, 1); /* same = 1: no name */
+    prc_string str;
 
+    if ((name == NULL && s->curr_name == NULL)
+        || (name != NULL && s->curr_name != NULL && strcmp(name, s->curr_name) == 0))
+        return prc_bitwrite_bit(ctx, s, 1); /* same_name: the current name */
+
+    if (prc_bitwrite_bit(ctx, s, 0) != 0) return -1; /* same_name = 0: a name follows */
+    memset(&str, 0, sizeof(str));
+    if (name != NULL)
     {
-        prc_string str;
-
-        if (prc_bitwrite_bit(ctx, s, 0) != 0) return -1; /* same = 0: name follows */
-        memset(&str, 0, sizeof(str));
         /* prc_bitwrite_string only reads through this pointer. */
         str.string = (unsigned char *)name;
         str.size = (prc_unsigned_int)strlen(name);
-        return prc_bitwrite_string(ctx, s, &str);
     }
+    if (prc_bitwrite_string(ctx, s, &str) != 0) return -1;
+
+    /* The current name is now this one; keep a copy. */
+    if (s->curr_name != NULL)
+        prc_free(ctx, s->curr_name);
+    s->curr_name = NULL;
+    if (name != NULL)
+    {
+        size_t n = strlen(name);
+
+        s->curr_name = (char *)prc_malloc(ctx, n + 1);
+        if (s->curr_name == NULL)
+        {
+            prc_error(ctx, PRC_ERROR_MEMORY, "Allocation error in prc_write_name\n");
+            s->error = 1;
+            return -1;
+        }
+        memcpy(s->curr_name, name, n + 1);
+    }
+    return 0;
 }
 
 uint8_t *

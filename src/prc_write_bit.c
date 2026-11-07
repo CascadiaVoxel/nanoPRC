@@ -69,6 +69,7 @@ prc_bitwrite_init(prc_context *ctx, prc_bit_write_state *state, size_t initial_c
     state->bit_accum = 0;
     state->bit_fill = 0;
     state->error = 0;
+    state->curr_name = NULL;
 
     state->buf = (uint8_t *)prc_malloc(ctx, initial_capacity);
     if (state->buf == NULL)
@@ -87,6 +88,9 @@ prc_bitwrite_release(prc_context *ctx, prc_bit_write_state *state)
     if (state->buf != NULL)
         prc_free(ctx, state->buf);
     state->buf = NULL;
+    if (state->curr_name != NULL)
+        prc_free(ctx, state->curr_name);
+    state->curr_name = NULL;
     state->capacity = 0;
     state->byte_pos = 0;
     state->bit_accum = 0;

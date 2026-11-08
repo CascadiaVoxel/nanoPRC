@@ -2397,7 +2397,6 @@ struct prc_compressed_vertex_s
 {
     uint8_t not_already_stored;
     prc_unsigned_int point_index; /* Note variable bit number */
-    prc_unsigned_int point_index_alt; /* Used for index_into_storage = (Number_entries - 1) - ref_number cases */
     prc_compressed_point point_data;
 };
 
@@ -4018,7 +4017,6 @@ struct prc_nano_brep_compressed_data_s
     uint8_t surface_type_is_prc_hcg_ana_torus;
     uint8_t is_a_compressed_face;
     uint8_t is_a_SingleWireBodyCompress;
-    uint8_t use_alt_indexing;
 };
 
 prc_data* prc_open_contents(prc_context *ctx, const char *infile);

@@ -757,73 +757,6 @@ prc_convert_iso_curves_to_std_loop(prc_context *ctx, prc_compressed_curve **curv
     return 0;
 }
 
-/* Look at the start vertex values. If they are all zero, then use the 
-   alternate encoding */
-static int
-prc_count_refs(prc_context *ctx, prc_ref_or_compressed_curve *curve,
-    uint32_t *num_zero_refs, uint32_t *num_nonzero_refs)
-{
-    int code = 0;
-    prc_hcg_circle_information circle_info;
-
-    switch (curve->compressed_curve->curve_type)
-    {
-        case PRC_HCG_Line:
-        {
-            if (curve->compressed_curve->hcg_line.start_end_data.is_vertex)
-            {
-                if (!curve->compressed_curve->hcg_line.start_end_data.start_vertex.not_already_stored)
-                {
-                    if (curve->compressed_curve->hcg_line.start_end_data.start_vertex.point_index == 0)
-                    {
-                        (*num_zero_refs)++;
-                    }
-                    else
-                    {
-                        (*num_nonzero_refs)++;
-                    }
-                }
-            }
-            break;
-        }
-        case PRC_HCG_Circle:
-        {
-            prc_hcg_circle *hcg_circle = &curve->compressed_curve->hcg_circle;
-
-            if (hcg_circle->is_particular_circle)
-            {
-                if (hcg_circle->particular_circle.start_end_data.is_vertex)
-                {
-                    if (hcg_circle->particular_circle.start_end_data.start_vertex.point_index == 0)
-                    {
-                        (*num_zero_refs)++;
-                    }
-                    else
-                    {
-                        (*num_nonzero_refs)++;
-                    }
-                }
-            }
-            else
-            {
-                if (hcg_circle->general_circle.start_end_data.is_vertex)
-                {
-                    if (hcg_circle->general_circle.start_end_data.start_vertex.point_index == 0)
-                    {
-                        (*num_zero_refs)++;
-                    }
-                    else
-                    {
-                        (*num_nonzero_refs)++;
-                    }
-                }
-            }
-            break;
-        }
-    }
-    return 0;
-}
-
 static int
 prc_convert_compressed_loop_to_std_loop(prc_context *ctx, prc_ana_face_trim_loop *ana_loop,
     prc_ptr_topology *synthetic_loop,
@@ -832,8 +765,6 @@ prc_convert_compressed_loop_to_std_loop(prc_context *ctx, prc_ana_face_trim_loop
     int code;
     uint32_t j;
     uint32_t curve_count = ana_loop->curve_count;
-    uint32_t num_zero_refs = 0;
-    uint32_t num_nonzero_refs = 0;
 
     synthetic_loop->is_stored = 0;
     synthetic_loop->topo = (prc_topo *)prc_calloc(ctx, 1, sizeof(prc_topo));
@@ -857,35 +788,6 @@ prc_convert_compressed_loop_to_std_loop(prc_context *ctx, prc_ana_face_trim_loop
     {
         prc_error(ctx, PRC_ERROR_MEMORY, "Failed to allocate memory for synthetic_loop->topo->topo_loop->coedge\n");
         return PRC_ERROR_MEMORY;
-    }
-
-    /* Add a check to determine how the reference values in the curve are
-       encoded. The idea is that if there all but one zero reference then
-       the encoding uses a index_into_storage = (Number_entries - 1) - ref_number
-       encoding. We create this in parallel to the other indexing and here 
-       we decide if we should use it for this loop.
-    */
-    for (j = 0; j < curve_count; j++)
-    {
-        code = prc_count_refs(ctx, &ana_loop->trim_curves[j], &num_zero_refs, &num_nonzero_refs);
-        if (code < 0)
-        {
-            prc_error(ctx, code, "Failed in prc_count_refs\n");
-            return code;
-        }
-    }
-
-    if (num_zero_refs > 0 && num_nonzero_refs == 0)
-    {
-        /* We are going to guess that with all the starting refs being set
-           to zero, the encoding is the strange case where we need to
-           use the alt indexing.  We are going to assume there is no mixing
-           within the same file */
-        compressed_data->use_alt_indexing = 1;
-    }
-    else
-    {
-        compressed_data->use_alt_indexing = 0;
     }
 
     for (j = 0; j < curve_count; j++)

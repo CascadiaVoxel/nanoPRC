@@ -141,6 +141,13 @@ prc_parse_compressed_vertex(prc_context *ctx, prc_bit_state *bit_state,
         data->point_index = prc_bitread_uint_variable_bit(ctx, bit_state,
             compressed_data->number_bits_for_encoding);
 
+        /* Used for alternate index storage of references. We later
+           look at the refs used in the loop. If there are all zeros
+           except the last one, then we will use these indices. Question
+           is do we keep iso and ana separate?? */
+        data->point_index_alt = (compressed_data->iso_vertex_count +
+                    compressed_data->ana_vertex_count - 1) - data->point_index;
+
         /* The index is the vertex's own number (see prc_next_ref_number), so
            it is used as it is, on either kind of face. */
         if (!prc_ref_number_is_stored(compressed_data->number_of_vertex_refs,

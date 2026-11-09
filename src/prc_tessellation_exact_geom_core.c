@@ -2426,10 +2426,18 @@ prc_tessellate_trimmed_face(prc_context *ctx, prc_data *data, uint32_t shell_ind
                     int32_t nj_below = prc_wrap_cell_index((int32_t)j - 1, cell_count_v, grid.wrap_v);
                     int32_t nj_above = prc_wrap_cell_index((int32_t)j + 1, cell_count_v, grid.wrap_v);
 
-                    /* --- FIXED ROBUST BOUNDS SHIELD PASS ---
-                       If an axis is not periodic and does not wrap, do not look for neighbors
-                       past the out-of-bounds terminal limits (< 0). Validate neighbors ONLY
-                       if they point to valid rows within the allocated matrix buffer. */
+                    /* A missing neighbor (index < 0) means this cell sits on a
+                       non-wrapping axis's domain edge. That must erode just
+                       like a non-kept neighbor would: the whole point of this
+                       pass (see comment above) is to keep the traced outline
+                       at least one cell away from the surface's own domain
+                       edge as well as the true trim boundary, which matters
+                       whenever a trim loop's edge coincides with that domain
+                       edge (e.g. a sub-patch authored with its own surface
+                       domain already tightened to its trim box) -- otherwise
+                       that edge row/column is never eroded and the traced
+                       outline doubles back on the coincident trim edge,
+                       producing a zero-width degenerate ring. */
                     uint8_t u_valid = 1;
                     if (grid.wrap_u) {
                         if (ni_left < 0 || ni_right < 0 || !cell_inside_raw[j * cell_count_u + ni_left] || !cell_inside_raw[j * cell_count_u + ni_right]) {
@@ -2437,8 +2445,8 @@ prc_tessellate_trimmed_face(prc_context *ctx, prc_data *data, uint32_t shell_ind
                         }
                     }
                     else {
-                        if (ni_left >= 0 && !cell_inside_raw[j * cell_count_u + ni_left])  u_valid = 0;
-                        if (ni_right >= 0 && !cell_inside_raw[j * cell_count_u + ni_right]) u_valid = 0;
+                        if (ni_left < 0 || !cell_inside_raw[j * cell_count_u + ni_left])  u_valid = 0;
+                        if (ni_right < 0 || !cell_inside_raw[j * cell_count_u + ni_right]) u_valid = 0;
                     }
 
                     uint8_t v_valid = 1;
@@ -2448,8 +2456,8 @@ prc_tessellate_trimmed_face(prc_context *ctx, prc_data *data, uint32_t shell_ind
                         }
                     }
                     else {
-                        if (nj_below >= 0 && !cell_inside_raw[nj_below * cell_count_u + i]) v_valid = 0;
-                        if (nj_above >= 0 && !cell_inside_raw[nj_above * cell_count_u + i]) v_valid = 0;
+                        if (nj_below < 0 || !cell_inside_raw[nj_below * cell_count_u + i]) v_valid = 0;
+                        if (nj_above < 0 || !cell_inside_raw[nj_above * cell_count_u + i]) v_valid = 0;
                     }
 
                     if (u_valid && v_valid)
@@ -2467,6 +2475,11 @@ prc_tessellate_trimmed_face(prc_context *ctx, prc_data *data, uint32_t shell_ind
                 cell_processed[k] = 1;
         }
 
+        /* Set PRC_DIAG_TRIM_GRID=1 to dump the raw vs. eroded cell
+           classification counts for this grid -- useful when a trimmed
+           curved face's kept region looks like the wrong size/shape, or
+           ear-clipping stalls on its traced boundary afterward */
+        if (prc_diag_getenv("PRC_DIAG_TRIM_GRID") != NULL)
         {
             uint32_t raw_inside_count = 0;
             uint32_t eroded_inside_count = 0;
@@ -2477,13 +2490,10 @@ prc_tessellate_trimmed_face(prc_context *ctx, prc_data *data, uint32_t shell_ind
                 if (cell_inside[k_cell]) eroded_inside_count++;
             }
 
-            fprintf(stderr, "=== CRITICAL GRID MATRIX DIAGNOSTIC ===\n");
-            fprintf(stderr, "Grid Properties -> wrap_u: %u, wrap_v: %u\n", grid.wrap_u, grid.wrap_v);
-            fprintf(stderr, "Input Flags     -> has_wrapping_loop: %u, wrap_axis: %u\n", has_wrapping_loop, wrap_axis);
-            fprintf(stderr, "Cell Space Counts -> cell_count_u: %u, cell_count_v: %u\n", cell_count_u, cell_count_v);
-            fprintf(stderr, "Raw Classifications Kept: %u\n", raw_inside_count);
-            fprintf(stderr, "Eroded Classifications Kept (cell_inside): %u\n", eroded_inside_count);
-            fprintf(stderr, "========================================\n");
+            fprintf(stderr, "PRC_DIAG_TRIM_GRID: wrap_u=%u wrap_v=%u has_wrapping_loop=%u wrap_axis=%u "
+                "cell_count_u=%u cell_count_v=%u raw_inside=%u eroded_inside=%u\n",
+                grid.wrap_u, grid.wrap_v, has_wrapping_loop, wrap_axis,
+                cell_count_u, cell_count_v, raw_inside_count, eroded_inside_count);
         }
 
         prc_free(ctx, cell_inside_raw);

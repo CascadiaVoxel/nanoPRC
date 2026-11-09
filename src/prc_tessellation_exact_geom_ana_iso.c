@@ -802,6 +802,21 @@ prc_convert_compressed_loop_to_std_loop(prc_context *ctx, prc_ana_face_trim_loop
             return code;
         }
     }
+
+    /* loop_surface_orientation (Table 231 AnaFaceTrimLoop, spec-documented
+       only as a bare "Orientation of loop with surface" boolean, no stated
+       polarity) says whether this whole loop needs to be walked in the
+       opposite overall direction to match this surface's orientation
+       convention -- e.g. a cylinder's two rim loops commonly need opposite
+       net winding so prc_point_inside_trimmed_region's wind-sign AND test
+       produces the band between them rather than rejecting it outright.
+       This is forwarded into the standard (non-ana-specific) loop_orientation
+       field Table 186 already reserves for exactly this; prc_sample_loop
+       reverses the loop's fully concatenated sample array once it is built
+       if that field says to, which also fixes this same gap for ordinary
+       (non-ana) B-rep loops that carry the same bit */
+    synthetic_loop->topo->topo_loop->loop_orientation = ana_loop->loop_surface_orientation;
+
     return 0;
 }
 

@@ -379,6 +379,38 @@ prc_sample_loop(prc_context *ctx, prc_nano_brep_ref_data *brep_ref_data,
         /* Duplicate the first point to complete the loop */
         loop_samples->samples[pos] = coedge_samples[0].samples[0];
 
+        /* topo_loop->loop_orientation (Table 186) says this whole loop needs
+           to be walked in the opposite overall direction to match its
+           surface's orientation convention -- e.g. two of a cylinder's rim
+           loops commonly need opposite net winding so
+           prc_point_inside_trimmed_region's wind-sign AND test produces the
+           band between them rather than rejecting it outright. Reverse the
+           complete, already-concatenated sample array (a closed loop's
+           first and last points are equal, so this preserves that
+           invariant) rather than touching any individual coedge, since the
+           coedges above are already correctly stitched to each other and
+           only the loop's net direction is in question here.
+           0 == needs flipping is a working assumption (the field is
+           spec-documented only as a bare boolean, no stated polarity)
+           matching the sibling coedge_orientation field's own "1 is
+           correct, 0 is reversed" convention (see prc_sample_coedge);
+           invert this condition if a loop comes out winding backwards
+           against real files */
+        if (!topo_loop->loop_orientation)
+        {
+            uint32_t lo = 0, hi = loop_samples->num_samples - 1;
+
+            while (lo < hi)
+            {
+                prc_vec3 temp = loop_samples->samples[lo];
+
+                loop_samples->samples[lo] = loop_samples->samples[hi];
+                loop_samples->samples[hi] = temp;
+                lo++;
+                hi--;
+            }
+        }
+
         /* A loop trimmed down to a single point (e.g. a cone's apex) samples
            as every point coinciding with the first -- flag it so later
            stages can skip the angular uv mapping and hole/ear-clip bridging

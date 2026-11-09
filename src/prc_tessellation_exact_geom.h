@@ -70,6 +70,7 @@ typedef struct prc_uint32_pair_s
 /* Temporarily loosened for debugging (was 1e-3) to get a coarser boundary
    loop mesh while diagnosing the periodic-loop trim work -- restore before
    shipping */
+#define LOOP_DEGENERACY_TEST 1e-6
 #define CURVE_PRECISION 1e-1
 #define SURFACE_PRECISION 1e-4
 #define SURFACE_MAX_SAMPLES 1024

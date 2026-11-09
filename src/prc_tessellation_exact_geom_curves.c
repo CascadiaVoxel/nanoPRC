@@ -1480,6 +1480,7 @@ prc_sample_curve(prc_context *ctx, prc_content_wire_edge *curve,
     prc_exact_geom_transform *exact_geom_trans = NULL;
     prc_trans_3d *transform = NULL;
     prc_curve_sampling_info sample_info;
+    prc_surface_params surf_params = { 0 }; /* Wrap up the any surface params in this */
     int code;
 
     code = prc_get_curve_sample_info(ctx, &curve->ptr_curve, &sample_info);
@@ -1603,6 +1604,9 @@ prc_sample_curve(prc_context *ctx, prc_content_wire_edge *curve,
 
         exact_geom_trans = &onsurf->exact_geom_transform;
         transform = &onsurf->transform;
+        /* Wrap these parameters up */
+        surf_params.surface_params = onsurf->base_surface_params;
+        onsurf->base_surface_params = &surf_params.surface_params;
         break;
     }
 

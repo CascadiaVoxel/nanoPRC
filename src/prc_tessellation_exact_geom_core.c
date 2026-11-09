@@ -260,7 +260,8 @@ prc_sample_coedge(prc_context *ctx, prc_nano_brep_ref_data *brep_ref_data,
 
 static int
 prc_sample_loop(prc_context *ctx, prc_nano_brep_ref_data *brep_ref_data,
-    prc_topo_face *topo_face, prc_ptr_topology *loop, prc_loop_samples *loop_samples)
+    prc_topo_face *topo_face, prc_ptr_topology *loop,
+    prc_loop_samples *loop_samples, uint8_t *loop_degenerate)
 {
     /* Loops are made up of several co-edges which should be curves.
        Here we make our way through a sampling approximation of the loop */
@@ -299,6 +300,7 @@ prc_sample_loop(prc_context *ctx, prc_nano_brep_ref_data *brep_ref_data,
     /* We have to sample each of the coedges and concatenate them together. */
     for (k = 0; k < num_coedges; k++)
     {
+        /* This method does fix the direction/orientation of the coedge */
         code = prc_sample_coedge(ctx, brep_ref_data, &topo_loop->coedge[k], &coedge_samples[k]);
         if (code < 0)
         {
@@ -315,6 +317,32 @@ prc_sample_loop(prc_context *ctx, prc_nano_brep_ref_data *brep_ref_data,
             return code;
         }
         total_samples += coedge_samples[k].num_samples;
+    }
+
+    /* Check that we don't have a degenerate loop */
+    prc_vec3 first_prev = coedge_samples[0].samples[0];
+    prc_vec3 last_prev = coedge_samples[0].samples[coedge_samples[0].num_samples - 1];
+    for (k = 1; k < num_coedges; k++)
+    {
+        prc_vec3 first = coedge_samples[k].samples[0];
+        prc_vec3 last = coedge_samples[k].samples[coedge_samples[k].num_samples - 1];
+
+        if (k < num_coedges - 1)
+        {
+            if (prc_vec_dist_between_two_points(first, last_prev) > LOOP_DEGENERACY_TEST)
+            {
+                *loop_degenerate = 1;
+            }
+            last_prev = last;
+        }
+        else
+        {
+            /* Last coedge */
+            if (prc_vec_dist_between_two_points(first_prev, last) > LOOP_DEGENERACY_TEST)
+            {
+                *loop_degenerate = 1;
+            }
+        }
     }
 
 #ifdef PRC_DEBUG_EARCLIP
@@ -350,6 +378,38 @@ prc_sample_loop(prc_context *ctx, prc_nano_brep_ref_data *brep_ref_data,
         }
         /* Duplicate the first point to complete the loop */
         loop_samples->samples[pos] = coedge_samples[0].samples[0];
+
+        /* topo_loop->loop_orientation (Table 186) says this whole loop needs
+           to be walked in the opposite overall direction to match its
+           surface's orientation convention -- e.g. two of a cylinder's rim
+           loops commonly need opposite net winding so
+           prc_point_inside_trimmed_region's wind-sign AND test produces the
+           band between them rather than rejecting it outright. Reverse the
+           complete, already-concatenated sample array (a closed loop's
+           first and last points are equal, so this preserves that
+           invariant) rather than touching any individual coedge, since the
+           coedges above are already correctly stitched to each other and
+           only the loop's net direction is in question here.
+           0 == needs flipping is a working assumption (the field is
+           spec-documented only as a bare boolean, no stated polarity)
+           matching the sibling coedge_orientation field's own "1 is
+           correct, 0 is reversed" convention (see prc_sample_coedge);
+           invert this condition if a loop comes out winding backwards
+           against real files */
+        if (!topo_loop->loop_orientation)
+        {
+            uint32_t lo = 0, hi = loop_samples->num_samples - 1;
+
+            while (lo < hi)
+            {
+                prc_vec3 temp = loop_samples->samples[lo];
+
+                loop_samples->samples[lo] = loop_samples->samples[hi];
+                loop_samples->samples[hi] = temp;
+                lo++;
+                hi--;
+            }
+        }
 
         /* A loop trimmed down to a single point (e.g. a cone's apex) samples
            as every point coinciding with the first -- flag it so later
@@ -2398,10 +2458,18 @@ prc_tessellate_trimmed_face(prc_context *ctx, prc_data *data, uint32_t shell_ind
                     int32_t nj_below = prc_wrap_cell_index((int32_t)j - 1, cell_count_v, grid.wrap_v);
                     int32_t nj_above = prc_wrap_cell_index((int32_t)j + 1, cell_count_v, grid.wrap_v);
 
-                    /* --- FIXED ROBUST BOUNDS SHIELD PASS ---
-                       If an axis is not periodic and does not wrap, do not look for neighbors
-                       past the out-of-bounds terminal limits (< 0). Validate neighbors ONLY
-                       if they point to valid rows within the allocated matrix buffer. */
+                    /* A missing neighbor (index < 0) means this cell sits on a
+                       non-wrapping axis's domain edge. That must erode just
+                       like a non-kept neighbor would: the whole point of this
+                       pass (see comment above) is to keep the traced outline
+                       at least one cell away from the surface's own domain
+                       edge as well as the true trim boundary, which matters
+                       whenever a trim loop's edge coincides with that domain
+                       edge (e.g. a sub-patch authored with its own surface
+                       domain already tightened to its trim box) -- otherwise
+                       that edge row/column is never eroded and the traced
+                       outline doubles back on the coincident trim edge,
+                       producing a zero-width degenerate ring. */
                     uint8_t u_valid = 1;
                     if (grid.wrap_u) {
                         if (ni_left < 0 || ni_right < 0 || !cell_inside_raw[j * cell_count_u + ni_left] || !cell_inside_raw[j * cell_count_u + ni_right]) {
@@ -2409,8 +2477,8 @@ prc_tessellate_trimmed_face(prc_context *ctx, prc_data *data, uint32_t shell_ind
                         }
                     }
                     else {
-                        if (ni_left >= 0 && !cell_inside_raw[j * cell_count_u + ni_left])  u_valid = 0;
-                        if (ni_right >= 0 && !cell_inside_raw[j * cell_count_u + ni_right]) u_valid = 0;
+                        if (ni_left < 0 || !cell_inside_raw[j * cell_count_u + ni_left])  u_valid = 0;
+                        if (ni_right < 0 || !cell_inside_raw[j * cell_count_u + ni_right]) u_valid = 0;
                     }
 
                     uint8_t v_valid = 1;
@@ -2420,8 +2488,8 @@ prc_tessellate_trimmed_face(prc_context *ctx, prc_data *data, uint32_t shell_ind
                         }
                     }
                     else {
-                        if (nj_below >= 0 && !cell_inside_raw[nj_below * cell_count_u + i]) v_valid = 0;
-                        if (nj_above >= 0 && !cell_inside_raw[nj_above * cell_count_u + i]) v_valid = 0;
+                        if (nj_below < 0 || !cell_inside_raw[nj_below * cell_count_u + i]) v_valid = 0;
+                        if (nj_above < 0 || !cell_inside_raw[nj_above * cell_count_u + i]) v_valid = 0;
                     }
 
                     if (u_valid && v_valid)
@@ -2439,6 +2507,11 @@ prc_tessellate_trimmed_face(prc_context *ctx, prc_data *data, uint32_t shell_ind
                 cell_processed[k] = 1;
         }
 
+        /* Set PRC_DIAG_TRIM_GRID=1 to dump the raw vs. eroded cell
+           classification counts for this grid -- useful when a trimmed
+           curved face's kept region looks like the wrong size/shape, or
+           ear-clipping stalls on its traced boundary afterward */
+        if (prc_diag_getenv("PRC_DIAG_TRIM_GRID") != NULL)
         {
             uint32_t raw_inside_count = 0;
             uint32_t eroded_inside_count = 0;
@@ -2449,13 +2522,10 @@ prc_tessellate_trimmed_face(prc_context *ctx, prc_data *data, uint32_t shell_ind
                 if (cell_inside[k_cell]) eroded_inside_count++;
             }
 
-            fprintf(stderr, "=== CRITICAL GRID MATRIX DIAGNOSTIC ===\n");
-            fprintf(stderr, "Grid Properties -> wrap_u: %u, wrap_v: %u\n", grid.wrap_u, grid.wrap_v);
-            fprintf(stderr, "Input Flags     -> has_wrapping_loop: %u, wrap_axis: %u\n", has_wrapping_loop, wrap_axis);
-            fprintf(stderr, "Cell Space Counts -> cell_count_u: %u, cell_count_v: %u\n", cell_count_u, cell_count_v);
-            fprintf(stderr, "Raw Classifications Kept: %u\n", raw_inside_count);
-            fprintf(stderr, "Eroded Classifications Kept (cell_inside): %u\n", eroded_inside_count);
-            fprintf(stderr, "========================================\n");
+            fprintf(stderr, "PRC_DIAG_TRIM_GRID: wrap_u=%u wrap_v=%u has_wrapping_loop=%u wrap_axis=%u "
+                "cell_count_u=%u cell_count_v=%u raw_inside=%u eroded_inside=%u\n",
+                grid.wrap_u, grid.wrap_v, has_wrapping_loop, wrap_axis,
+                cell_count_u, cell_count_v, raw_inside_count, eroded_inside_count);
         }
 
         prc_free(ctx, cell_inside_raw);
@@ -4661,6 +4731,8 @@ prc_tessellate_surface(prc_context *ctx, prc_data *data, uint32_t shell_index,
     prc_ptr_topology *loops = topo_face->loops;
     prc_loop_samples *loop_samples = NULL;
     uint8_t topo_context_behavior = 0;
+    uint8_t *loop_degenerate = NULL;
+    uint32_t num_degenerate_loops = 0;
 
     if (topo_context != NULL)
     {
@@ -4707,6 +4779,12 @@ prc_tessellate_surface(prc_context *ctx, prc_data *data, uint32_t shell_index,
         Lets do that first and store the loops in a sampled form */
     if (num_loops > 0)
     {
+        loop_degenerate = (uint8_t *)prc_calloc(ctx, num_loops, sizeof(uint8_t));
+        if (loop_degenerate == NULL)
+        {
+            prc_error(ctx, PRC_ERROR_MEMORY, "Failed in allocation prc_tessellate_surface\n");
+            return PRC_ERROR_MEMORY;
+        }
         loop_samples = (prc_loop_samples *)prc_calloc(ctx, num_loops, sizeof(prc_loop_samples));
         if (loop_samples == NULL)
         {
@@ -4715,7 +4793,8 @@ prc_tessellate_surface(prc_context *ctx, prc_data *data, uint32_t shell_index,
         }
         for (k = 0; k < num_loops; k++)
         {
-            code = prc_sample_loop(ctx, brep_ref_data, topo_face, &loops[k], &loop_samples[k]);
+            code = prc_sample_loop(ctx, brep_ref_data, topo_face, &loops[k],
+                &loop_samples[k], &loop_degenerate[k]);
             if (code < 0)
             {
                 for (j = 0; j <= k; j++)
@@ -4729,7 +4808,69 @@ prc_tessellate_surface(prc_context *ctx, prc_data *data, uint32_t shell_index,
                 prc_error(ctx, PRC_ERROR_INTERNAL, "Failed in prc_sample_loop\n");
                 return PRC_ERROR_INTERNAL;
             }
+            if (loop_degenerate[k])
+            {
+                num_degenerate_loops++;
+            }
         }
+
+        /* Remove any degenerate loops */
+        if (num_degenerate_loops > 0)
+        {
+            uint32_t new_num_loops = num_loops - num_degenerate_loops;
+
+            if (new_num_loops > 0)
+            {
+                prc_loop_samples *new_loop_samples = (prc_loop_samples *)prc_calloc(ctx, new_num_loops, sizeof(prc_loop_samples));
+                if (new_loop_samples == NULL)
+                {
+                    prc_error(ctx, PRC_ERROR_MEMORY, "Failed in allocation prc_tessellate_surface\n");
+                    return PRC_ERROR_MEMORY;
+                }
+                uint32_t new_index = 0;
+                for (k = 0; k < num_loops; k++)
+                {
+                    if (!loop_degenerate[k])
+                    {
+                        new_loop_samples[new_index] = loop_samples[k];
+                        new_index++;
+                    }
+                    else
+                    {
+                        if (loop_samples[k].samples != NULL)
+                        {
+                            prc_free(ctx, loop_samples[k].samples);
+                        }
+                        if (loop_samples[k].uv_samples != NULL)
+                        {
+                            prc_free(ctx, loop_samples[k].uv_samples);
+                        }
+                    }
+                }
+                prc_free(ctx, loop_samples);
+                loop_samples = new_loop_samples;
+                num_loops = new_num_loops;
+            }
+            else
+            {
+                /* All the loops were degenerate */
+                for (k = 0; k < num_loops; k++)
+                {
+                    if (loop_samples[k].samples != NULL)
+                    {
+                        prc_free(ctx, loop_samples[k].samples);
+                    }
+                    if (loop_samples[k].uv_samples != NULL)
+                    {
+                        prc_free(ctx, loop_samples[k].uv_samples);
+                    }
+                }
+                prc_free(ctx, loop_samples);
+                loop_samples = NULL;
+                num_loops = 0;
+            }
+        }
+        prc_free(ctx, loop_degenerate);
 
         /* A cone's single trim loop can detour out to the apex and back
             (full circumference, line to apex, degenerate point, line

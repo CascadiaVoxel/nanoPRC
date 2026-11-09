@@ -88,6 +88,36 @@ discoverable/settable surface in a normal build. Enable them at configure time i
 cmake -S . -B build -DPRC_ENABLE_DIAG_ENV=ON
 ```
 
+#### Using these hooks from Visual Studio on Windows
+
+If you built with `cmake -G "Visual Studio 17 2022" ...` (a `build/` folder full of `.vcxproj`
+files rather than a CMake "Open Folder" workspace), the option above is a CMake cache variable, not
+something VS's own UI exposes -- re-run that `cmake` command with `-DPRC_ENABLE_DIAG_ENV=ON` (or `OFF`
+to strip the hooks back out) against your existing build directory, then rebuild; VS picks up the
+regenerated project files next time it builds.
+
+Once the hooks are compiled in, setting the actual `PRC_DIAG_*`/`PRC_TRACE_*`/`PRC_FUZZ_*` variable for
+an F5 debugging session only takes effect per-project: Solution Explorer -> right-click the startup
+project -> **Properties -> Debugging -> Environment**, one `NAME=value` per line, e.g.
+`PRC_DIAG_TRIM_GRID=1`. That setting lives in the project's `.vcxproj.user` file and only applies to
+launches through VS's debugger, not to running the `.exe` directly. (If you do use the CMake
+"Open Folder" workflow instead, the equivalent is the `"env"` object of a configuration in
+`launch.vs.json`.)
+
+For quick iteration outside the debugger, set it for just that PowerShell process instead:
+
+```powershell
+$env:PRC_DIAG_TRIM_GRID = "1"
+.\build\Debug\scan_prc.exe yourfile.prc
+Remove-Item Env:PRC_DIAG_TRIM_GRID
+```
+
+Most of these hooks only check whether the variable is *set at all* (`getenv(name) != NULL`), so
+`PRC_DIAG_TRIM_GRID=0` still turns one on -- delete the variable entirely (remove the line in VS's
+Environment field, or `Remove-Item Env:...` in PowerShell) to turn it back off. A few call sites opt
+into checking for a non-`"0"` value instead (e.g. `PRC_DIAG_TESSELLATE_SURFACE`); check the inline
+comment at the specific hook you're using if you're not sure which behavior it has.
+
 #### Dumping Huffman code tables
 
 One of these hooks is documented here rather than only in-source, because it answers a question about

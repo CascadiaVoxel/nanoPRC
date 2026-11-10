@@ -206,7 +206,7 @@ prc_internal_api_process_vertex_color_data(prc_context *ctx, uint32_t num_vertic
 
             if (has_alpha)
             {
-                decoded_colors[3] = color_data->first_vertex.alpha;
+                decoded_colors[3] = color_data->first_vertex.alpha / 255.0f;
             }
             else
             {
@@ -222,7 +222,7 @@ prc_internal_api_process_vertex_color_data(prc_context *ctx, uint32_t num_vertic
             decoded_colors[array_offset + 2] = color_data->remaining_vertices[k - 1].color.blue / 255.0;
             if (has_alpha)
             {
-                decoded_colors[array_offset + 3] = color_data->remaining_vertices[k - 1].color.alpha;
+                decoded_colors[array_offset + 3] = color_data->remaining_vertices[k - 1].color.alpha / 255.0f;
             }
             else
             {

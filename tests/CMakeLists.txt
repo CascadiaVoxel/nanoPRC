@@ -82,6 +82,11 @@ target_link_libraries(test_vertex_colors prc_static)
 target_include_directories(test_vertex_colors PRIVATE tests)
 add_test(NAME test_vertex_colors COMMAND test_vertex_colors)
 
+add_executable(test_vertex_color_alpha tests/unit/test_vertex_color_alpha.c)
+target_link_libraries(test_vertex_color_alpha prc_static)
+target_include_directories(test_vertex_color_alpha PRIVATE tests)
+add_test(NAME test_vertex_color_alpha COMMAND test_vertex_color_alpha)
+
 add_executable(test_wire_tess tests/unit/test_wire_tess.c)
 target_link_libraries(test_wire_tess prc_static)
 target_include_directories(test_wire_tess PRIVATE tests)

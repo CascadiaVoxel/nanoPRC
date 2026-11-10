@@ -58,15 +58,29 @@ elseif(EMSCRIPTEN)
         "-sALLOW_MEMORY_GROWTH=1"
         "-sASYNCIFY=1"
         "-sSTACK_SIZE=4194304"
-        "-sASSERTIONS=2"
-        "-sSAFE_HEAP=1"
-        "-g"
         "-sEXPORTED_RUNTIME_METHODS=[\"FS\",\"ccall\",\"cwrap\"]"
         "-sMODULARIZE=1"
         "-sEXPORT_NAME=NanoPRCViewerModule"
         "--preload-file=${CMAKE_SOURCE_DIR}/examples/cube.pdf@/cube.pdf"
         "--shell-file=${CMAKE_CURRENT_SOURCE_DIR}/web/shell.html"
     )
+    # Debug-only diagnostics: -g keeps DWARF debug info in the wasm binary so
+    # browser-side C/C++ source debugging works (see mobile_viewer/README.md
+    # -- Chrome/Edge's "C/C++ DevTools Support (DWARF)" extension, or VS
+    # Code's "WebAssembly DWARF Debugging" extension); -sASSERTIONS=2 and
+    # -sSAFE_HEAP=1 turn a raw "memory access out of bounds" crash into an
+    # actionable message pointing at the offending access. Left out of
+    # Release builds: all three cost real size/runtime overhead, and
+    # CMAKE_BUILD_TYPE=Debug (set by scripts/build_wasm.ps1 -Debug) already
+    # gets emcc's own default -g/-O0 compile flags for the actual source
+    # files on top of these
+    if(CMAKE_BUILD_TYPE STREQUAL "Debug")
+        target_link_options(mobile_viewer PRIVATE
+            "-g"
+            "-sASSERTIONS=2"
+            "-sSAFE_HEAP=1"
+        )
+    endif()
 elseif(IOS)
     add_executable(mobile_viewer MACOSX_BUNDLE ${MOBILE_VIEWER_SOURCES})
     set_target_properties(mobile_viewer PROPERTIES

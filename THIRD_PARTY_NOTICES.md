@@ -20,6 +20,9 @@ The components below retain their own upstream licenses and are used as third-pa
 - **Khronos Platform Header** (`KHR/khrplatform.h`) is Copyright (c) 2008-2018 The Khronos Group Inc. and licensed under an MIT-style permissive license.
 - **Roboto Font** (`demos/viewer/src/roboto_font.h`, Roboto version 3.009) is Copyright 2011 The Roboto Project Authors and licensed under the SIL Open Font License, Version 1.1. See `thirdparty/Roboto_OFL.txt`.
 
+## Mobile/WASM Viewer
+- **GLM** is licensed under the MIT license. Copyright (c) 2005 - G-Truc Creation
+
 ## OBJ Export Demo
 
 - **stb_image_write** (`demos/obj_export/src/stb_image_write.h`) is by Sean Barrett, available under the MIT License or the Unlicense (public domain), at the user's choice. See https://github.com/nothings/stb; the license text is at the end of the file.

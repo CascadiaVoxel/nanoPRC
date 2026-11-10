@@ -78,14 +78,15 @@ else()
     # This captures your local Windows testing profile seamlessly!
     add_executable(mobile_viewer ${MOBILE_VIEWER_SOURCES})
     
-    set(MOBILE_SYSTEM_LIBS)
-    if(WIN32)
-        list(APPEND MOBILE_SYSTEM_LIBS "opengl32")
-    endif()
-    
+    # We remove all static library linking here because SDL3 handles function loading at runtime
     target_link_libraries(mobile_viewer PRIVATE 
-        nano_prc SDL3-shared ${MOBILE_SYSTEM_LIBS}
+        nano_prc SDL3-shared
     )
 endif()
 
+add_subdirectory(
+    "${CMAKE_CURRENT_SOURCE_DIR}/../thirdparty/glm" 
+    "${CMAKE_CURRENT_BINARY_DIR}/glm_build"
+)
 target_include_directories(mobile_viewer PRIVATE "src")
+target_link_libraries(mobile_viewer PRIVATE glm::glm-header-only)

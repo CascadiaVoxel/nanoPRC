@@ -25,6 +25,7 @@ __pycache__/
 build-debug/
 build_asan/
 build_debugmem/
+build-wasm/
 python/src/nanoprc_py/_core.pdb
 
 # Generated Doxygen output

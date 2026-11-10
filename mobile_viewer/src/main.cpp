@@ -8,9 +8,14 @@
 #include <cstddef>
 
 // ============================================================================
-// CROSS-PLATFORM OPENGL ES 3.0 FUNCTION POINTER RESOLUTION (WINDOWS ENABLE)
+// CROSS-PLATFORM OPENGL ES 3.0 FUNCTION POINTER RESOLUTION (WINDOWS/WEB)
 // ============================================================================
-#if defined(SDL_PLATFORM_WIN32)
+// Also needed on Emscripten: SDL3/SDL_opengles2.h only declares the GLES2
+// surface, so these GLES3-only VAO entry points are just as undeclared at
+// compile time there as on Windows, even though WebGL2 implements them at
+// runtime (SDL_GL_GetProcAddress resolves them fine once -sUSE_WEBGL2=1 is
+// set, same as the Windows path below) -- not actually Windows-specific
+#if defined(SDL_PLATFORM_WIN32) || defined(__EMSCRIPTEN__)
 // VAO Function Layout Profiles
 typedef void (GL_APIENTRY *PFNGLGENVERTEXARRAYSOESPROC) (GLsizei n, GLuint *arrays);
 typedef void (GL_APIENTRY *PFNGLBINDVERTEXARRAYOESPROC) (GLuint array);

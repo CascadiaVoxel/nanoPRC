@@ -2630,6 +2630,7 @@ prc_api_get_line_tessellation_vertices(prc_context *ctx, prc_api_data data_in,
     face_out->has_transparency = 0;
     face_out->is_texture = 0;
     face_out->vertices_have_style = 0;
+    face_out->has_vertex_colors = 0;
     face_out->face_has_single_style = 0;
     face_out->single_style_index = 0;
     face_out->reserved = NULL;
@@ -3849,6 +3850,7 @@ prc_api_get_tessellation_vertices(prc_context *ctx, prc_api_data data_in,
         }
 
         prc_tess_face face = tess3d->face_tessellation_data[face_index];
+        face_out->has_vertex_colors = face.has_vertex_colors ? 1 : 0;
         /* Different entitities in the face can have different line attributes
            That is what the size relates to. TODO. Add that feature here
            where we use different styles for the different entities. At this
@@ -4798,6 +4800,9 @@ uncompressed_done:
         {
             has_style = false;
         }
+
+        if (has_face)
+            face_out->has_vertex_colors = has_vertex_colors;
 
         if (has_style)
         {

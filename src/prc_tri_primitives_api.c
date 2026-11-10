@@ -4750,9 +4750,14 @@ uncompressed_done:
            makes face_style_index resolve to a real style-table lookup at
            index 0 below instead of staying -1 ("no style, use the
            built-in default material" in prc_internal_api_get_style, which
-           only special-cases style_index < 0, not == 0). */
+           only special-cases style_index < 0, not == 0).
+           It also needs the per-triangle styles to have been decoded: the
+           decoder stores them only when the file's has_faces is TRUE, so a
+           tessellation with is_multiple_line_attribute set and has_faces
+           FALSE (pdf-issues #833's CT-P2-twoent-TEX1) has none, and every
+           read of triangle_styles below would dereference NULL. */
         uint8_t has_style =
-            tess->is_multiple_line_attribute ? true : false;
+            (tess->is_multiple_line_attribute && tess->triangle_styles != NULL) ? true : false;
         uint8_t has_more_than_one_tri_style = false;
         uint32_t num_triangles = tess->triangle_face_array_size;
         prc_internal_api_color_state_t initial_color_state;

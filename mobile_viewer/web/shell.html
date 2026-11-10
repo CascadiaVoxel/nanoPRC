@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>nanoPRC Web Viewer</title>
+  <style>
+    html, body { margin: 0; height: 100%; background: #111; overflow: hidden; }
+    canvas { display: block; width: 100vw; height: 100vh; outline: none; }
+    #status {
+      position: fixed; left: 8px; bottom: 8px; margin: 0;
+      font: 12px monospace; color: #9f9; background: rgba(0,0,0,0.5);
+      padding: 4px 8px; border-radius: 4px; pointer-events: none;
+    }
+  </style>
+</head>
+<body>
+  <canvas id="canvas" oncontextmenu="event.preventDefault()" tabindex="-1"></canvas>
+  <p id="status">loading...</p>
+
+  {{{ SCRIPT }}}
+
+  <script>
+    /* MODULARIZE=1 means the glue script above only defines the
+       NanoPRCViewerModule factory -- nothing runs until we call it.
+       canvasElement is handed to SDL3's Emscripten video backend, which
+       looks for Module.canvas; preloaded files (examples/cube.pdf baked in
+       at build time via --preload-file) are already staged into MEMFS by
+       the time this Promise resolves, so main() finds them exactly like a
+       normal file read. */
+    var canvasElement = document.getElementById('canvas');
+    var statusElement = document.getElementById('status');
+
+    NanoPRCViewerModule({ canvas: canvasElement })
+      .then(function () {
+        statusElement.textContent = 'running';
+      })
+      .catch(function (err) {
+        statusElement.textContent = 'failed to start: ' + err;
+        console.error('nanoPRC WASM module failed to initialize', err);
+      });
+  </script>
+</body>
+</html>

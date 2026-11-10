@@ -14,6 +14,59 @@ if(ANDROID)
     target_link_libraries(mobile_viewer PRIVATE 
         nano_prc SDL3-shared GLESv3 log android
     )
+elseif(EMSCRIPTEN)
+    # Web/WASM build: emits mobile_viewer.html + .js + .wasm. SDL3 targets
+    # WebGL2 through the same GLES3 context request main.cpp already makes
+    # for Android/desktop, so no renderer code changes are needed here --
+    # only link-time flags.
+    #
+    # - ASYNCIFY: main.cpp's render loop is a plain blocking `while(running)`
+    #   (the normal SDL desktop-app shape), not the callback-driven
+    #   emscripten_set_main_loop style the web needs to let the browser
+    #   paint/handle events between frames. Asyncify transforms the whole
+    #   call graph so that blocking loop can still yield each iteration
+    #   without rewriting main.cpp; costs some code size/perf, acceptable
+    #   for this demo. If main.cpp is later restructured to call
+    #   emscripten_set_main_loop directly, this can be dropped.
+    # - prc_api_open_contents only takes a file path, no in-memory-buffer
+    #   variant -- --preload-file packages examples/cube.pdf into the
+    #   virtual filesystem (MEMFS) at /cube.pdf ahead of main() running, so
+    #   ResolveCrossPlatformAssetPath's existing relative-path branch
+    #   ("cube.pdf", resolved against MEMFS's root cwd) finds it unmodified.
+    #   A real "pick your own file" page would instead write the picked
+    #   File's bytes into MEMFS from JS at runtime before calling this same
+    #   path-based API -- left as a follow-up once mobile_viewer's own
+    #   asset handling is settled.
+    add_executable(mobile_viewer ${MOBILE_VIEWER_SOURCES})
+    # prc_static, not nano_prc: nano_prc is a SHARED library, and Emscripten
+    # treats add_library(... SHARED ...) as a genuine WASM dynamic-linking
+    # side module -- it has to be fetched over HTTP as its own .so file at
+    # startup, separately from mobile_viewer.wasm, which just adds a
+    # deployment footgun (two artifacts that must be served from the same
+    # relative path) for no benefit in a single-page demo. prc_static is
+    # the same source list built as an ordinary static library, so this
+    # folds everything into one self-contained mobile_viewer.wasm instead.
+    # SDL3-shared doesn't exist here -- SDL's own CMake only builds it when
+    # SDL_SHARED is on, which it force-disables for Emscripten (static
+    # only); SDL3::SDL3 is the alias SDL's CMakeLists guarantees always
+    # resolves to whichever variant actually got built
+    target_link_libraries(mobile_viewer PRIVATE prc_static SDL3::SDL3)
+    set_target_properties(mobile_viewer PROPERTIES SUFFIX ".html")
+    target_link_options(mobile_viewer PRIVATE
+        "-sUSE_WEBGL2=1"
+        "-sFULL_ES3=1"
+        "-sALLOW_MEMORY_GROWTH=1"
+        "-sASYNCIFY=1"
+        "-sSTACK_SIZE=4194304"
+        "-sASSERTIONS=2"
+        "-sSAFE_HEAP=1"
+        "-g"
+        "-sEXPORTED_RUNTIME_METHODS=[\"FS\",\"ccall\",\"cwrap\"]"
+        "-sMODULARIZE=1"
+        "-sEXPORT_NAME=NanoPRCViewerModule"
+        "--preload-file=${CMAKE_SOURCE_DIR}/examples/cube.pdf@/cube.pdf"
+        "--shell-file=${CMAKE_CURRENT_SOURCE_DIR}/web/shell.html"
+    )
 elseif(IOS)
     add_executable(mobile_viewer MACOSX_BUNDLE ${MOBILE_VIEWER_SOURCES})
     set_target_properties(mobile_viewer PROPERTIES
@@ -25,14 +78,15 @@ else()
     # This captures your local Windows testing profile seamlessly!
     add_executable(mobile_viewer ${MOBILE_VIEWER_SOURCES})
     
-    set(MOBILE_SYSTEM_LIBS)
-    if(WIN32)
-        list(APPEND MOBILE_SYSTEM_LIBS "opengl32")
-    endif()
-    
+    # We remove all static library linking here because SDL3 handles function loading at runtime
     target_link_libraries(mobile_viewer PRIVATE 
-        nano_prc SDL3-shared ${MOBILE_SYSTEM_LIBS}
+        nano_prc SDL3-shared
     )
 endif()
 
+add_subdirectory(
+    "${CMAKE_CURRENT_SOURCE_DIR}/../thirdparty/glm" 
+    "${CMAKE_CURRENT_BINARY_DIR}/glm_build"
+)
 target_include_directories(mobile_viewer PRIVATE "src")
+target_link_libraries(mobile_viewer PRIVATE glm::glm-header-only)

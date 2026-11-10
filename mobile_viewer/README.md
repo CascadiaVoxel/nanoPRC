@@ -44,11 +44,16 @@ builds the `mobile_viewer` target. Output lands in
 
 Useful flags:
 ```powershell
+.\scripts\build_wasm.ps1 -Debug           # -O0, DWARF debug info, assertions, safe-heap (see Debugging below)
 .\scripts\build_wasm.ps1 -Reconfigure     # force a fresh CMake configure
 .\scripts\build_wasm.ps1 -Serve           # build, then also serve locally
 .\scripts\build_wasm.ps1 -Serve -Port 9000
 .\scripts\build_wasm.ps1 -EmsdkPath D:\tools\emsdk
 ```
+
+`-Debug` builds into a separate `build-wasm-debug/` directory (not
+`build-wasm/`), so you can keep a Release and a Debug build around at the
+same time without reconfiguring back and forth every time you switch.
 
 ## Run
 
@@ -61,6 +66,41 @@ python -m http.server 8765
 ```
 
 Then open `http://localhost:8765/mobile_viewer.html`.
+
+## Debugging
+
+Visual Studio can't debug this -- it's C/C++ compiled to WASM and executed
+by the *browser's* own engine, not something the Windows native debugger
+can attach to. Debugging instead happens through the browser's own devtools
+reading DWARF debug info embedded in the `.wasm` file (that's what `-Debug`'s
+`-g` link flag is for; see the `if(CMAKE_BUILD_TYPE STREQUAL "Debug")` block
+in [CMakeLists.txt](CMakeLists.txt)). `-Debug` also adds `-sASSERTIONS=2` and
+`-sSAFE_HEAP=1`, which turn a raw "memory access out of bounds" crash into a
+message that actually points at the offending access -- these cost real
+size/runtime overhead, which is why they're Debug-only, not in Release.
+
+1. **Build a debug bundle and serve it:**
+   ```powershell
+   .\scripts\build_wasm.ps1 -Debug -Serve
+   ```
+
+2. **In the browser directly** (Chrome or Edge, both Chromium-based):
+   install the **"C/C++ DevTools Support (DWARF)"** extension (Chrome Web
+   Store / Edge Add-ons), open `http://localhost:8765/mobile_viewer.html`,
+   open DevTools, and your actual `.cpp`/`.h` files show up in the Sources
+   panel with working breakpoints/stepping/variables -- despite this being
+   compiled code, not JavaScript.
+
+3. **From VS Code instead:** install the **"WebAssembly DWARF Debugging"**
+   extension (`ms-vscode.wasm-dwarf-debugging`) plus either the **"Microsoft
+   Edge Tools for VS Code"** or Chrome debugger extension, then use
+   `.vscode/launch.json`'s "WASM: Debug mobile_viewer in Edge" (or Chrome)
+   configuration -- its `preLaunchTask` builds+serves the debug bundle via
+   `.vscode/tasks.json`, then launches the browser attached, so you can set
+   breakpoints directly in `main.cpp` from VS Code's own editor. Note
+   `.vscode/` is git-ignored in this repo, so `launch.json`/`tasks.json`
+   exist locally but aren't tracked -- recreate them (or `git add -f`) on a
+   fresh checkout if you want this workflow available again.
 
 ## What it does right now
 

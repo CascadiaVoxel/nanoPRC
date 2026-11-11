@@ -209,6 +209,14 @@ typedef struct prc_api_face_s
     prc_api_texture texture;
     prc_api_material material;
     uint8_t vertices_have_style;
+    /* 1 if the file stores a colour for each vertex. The reader puts it in
+       each vertex's color, except on a plain face with texture coordinates,
+       where color is white. 0 if the file stores none: color then holds a
+       default, which is white, or the colour of the face's style on a plain
+       face with no material, or 0 on a compressed face whose vertices carry
+       their own style (vertices_have_style). For a compressed tessellation
+       it is the same for every face. */
+    uint8_t has_vertex_colors;
     uint8_t face_has_single_style;
     uint32_t single_style_index; /* Only valid if face_has_single_style */
     prc_api_tess_vertex_buffer face_vertices; /* Only valid in the PRC_API_TESS_3D case */

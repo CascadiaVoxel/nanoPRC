@@ -206,3 +206,8 @@ target_link_libraries(test_multiple_line_attribute_on_face prc_static)
 target_include_directories(test_multiple_line_attribute_on_face PRIVATE tests)
 target_compile_definitions(test_multiple_line_attribute_on_face PRIVATE PRC_TEST_FIXTURES_DIR="${PROJECT_SOURCE_DIR}/tests/fixtures")
 add_test(NAME test_multiple_line_attribute_on_face COMMAND test_multiple_line_attribute_on_face)
+
+add_executable(test_has_vertex_colors tests/unit/test_has_vertex_colors.c)
+target_link_libraries(test_has_vertex_colors prc_static)
+target_include_directories(test_has_vertex_colors PRIVATE tests)
+add_test(NAME test_has_vertex_colors COMMAND test_has_vertex_colors)

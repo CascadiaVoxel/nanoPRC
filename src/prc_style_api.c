@@ -78,6 +78,7 @@ prc_api_initialize_face(prc_context *ctx, prc_api_face *face)
     face->is_texture = 0;
     face->num_graphic_primitives = 0;
     face->vertices_have_style = 0;
+    face->has_vertex_colors = 0;
     face->face_has_single_style = 0;
     face->disable_face = 0;
     face->reserved = NULL;

@@ -1681,15 +1681,15 @@ prc_parse_compressed_weights(prc_context *ctx, prc_bit_state *bit_state,
         prc_error(ctx, PRC_ERROR_PARSE, "Count larger than the rest of the section in prc_parse_compressed_weights\n");
         return PRC_ERROR_PARSE;
     }
-    data->compressed_weights = (double *)prc_calloc(ctx, num_points, sizeof(double));
-    if (!data->compressed_weights)
-    {
-        prc_error(ctx, PRC_ERROR_MEMORY, "Memory allocation failed in prc_parse_compressed_weights\n");
-        return PRC_ERROR_MEMORY;
-    }
 
     if (data->number_bit_weight <= 30)
     {
+        data->compressed_weights = (double *)prc_calloc(ctx, num_points, sizeof(double));
+        if (!data->compressed_weights)
+        {
+            prc_error(ctx, PRC_ERROR_MEMORY, "Memory allocation failed in prc_parse_compressed_weights\n");
+            return PRC_ERROR_MEMORY;
+        }
         data->tolerance = prc_bitread_double(ctx, bit_state);
         for (i = 0; i < num_points; i++)
         {
@@ -1699,9 +1699,16 @@ prc_parse_compressed_weights(prc_context *ctx, prc_bit_state *bit_state,
     }
     else
     {
+        /* Wider than 30 bits: each weight is a plain double, held in weights as the table names it */
+        data->weights = (double *)prc_calloc(ctx, num_points, sizeof(double));
+        if (!data->weights)
+        {
+            prc_error(ctx, PRC_ERROR_MEMORY, "Memory allocation failed in prc_parse_compressed_weights\n");
+            return PRC_ERROR_MEMORY;
+        }
         for (i = 0; i < num_points; i++)
         {
-            data->compressed_weights[i] = prc_bitread_double(ctx, bit_state);
+            data->weights[i] = prc_bitread_double(ctx, bit_state);
         }
     }
     return 0;

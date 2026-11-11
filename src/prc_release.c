@@ -1600,6 +1600,10 @@ prc_release_compressed_weights(prc_context *ctx, prc_compressed_weights *data)
     {
         prc_free(ctx, data->compressed_weights);
     }
+    if (data->weights != NULL)
+    {
+        prc_free(ctx, data->weights);
+    }
 }
 
 static void

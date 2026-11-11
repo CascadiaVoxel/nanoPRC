@@ -344,6 +344,10 @@ struct prc_api_part_s
     uint32_t biased_layer_index;
     uint8_t behavior_bit_field1;
     uint8_t behavior_bit_field2;
+    /** The local coordinate system that places this part or representation
+        item, as an index into the coordinate systems of file structure
+        tess_file_index, biased by 1; 0 for none.
+        prc_api_get_local_coordinate_system gives its matrix. */
     uint32_t biased_local_coordinate_index;
     size_t num_rep_items;
     prc_api_part *rep_items;
@@ -568,6 +572,27 @@ PRC_EXPORT void prc_api_set_transform_identity(prc_context *ctx, prc_api_transfo
  * @param new_transform Transform to apply.
  */
 PRC_EXPORT void prc_api_update_transform(prc_context *ctx, prc_api_transform *concate_transform, prc_api_transform *new_transform);
+
+/**
+ * @brief The matrix of a part's or representation item's local coordinate system.
+ *
+ * A part or representation item whose biased_local_coordinate_index is not 0
+ * is placed by that coordinate system: its geometry is given in the
+ * coordinate system's frame, and the matrix takes it into the frame of the
+ * product that holds it, so the product's world transform applies after it.
+ * The vertices nanoPRC returns for the item's tessellation are in the
+ * coordinate system's frame; the matrix is not applied to them.
+ *
+ * @param ctx Active API context.
+ * @param data Data handle.
+ * @param file_index The item's tess_file_index.
+ * @param biased_index The item's biased_local_coordinate_index.
+ * @param transform Receives the matrix, column-major as prc_api_product::location.
+ * @return 0 on success; PRC_API_ERROR_PARAMETER when the file structure has no
+ *         such coordinate system (including biased_index 0).
+ */
+PRC_EXPORT int prc_api_get_local_coordinate_system(prc_context *ctx, prc_api_data data, uint32_t file_index,
+    uint32_t biased_index, prc_api_transform *transform);
 
 /**
  * @brief Apply a (column-major, affine) transform to a 3D point.

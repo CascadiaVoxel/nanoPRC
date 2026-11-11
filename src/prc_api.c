@@ -708,6 +708,28 @@ prc_api_set_transform(prc_context *ctx, prc_api_transform *location,
     return 0;
 }
 
+PRC_EXPORT int
+prc_api_get_local_coordinate_system(prc_context *ctx, prc_api_data data_in, uint32_t file_index,
+    uint32_t biased_index, prc_api_transform *transform)
+{
+    prc_data *data = (prc_data *)data_in;
+    prc_file_struct_internal_global_data *global_data;
+
+    if (data == NULL || transform == NULL || file_index >= data->file_structure_count ||
+        data->file_struct[file_index].globals == NULL)
+    {
+        prc_error(ctx, PRC_API_ERROR_PARAMETER, "No such file structure in prc_api_get_local_coordinate_system\n");
+        return PRC_API_ERROR_PARAMETER;
+    }
+    global_data = &data->file_struct[file_index].globals->global_data;
+    if (biased_index == 0 || biased_index > global_data->ref_coord_count || global_data->ref_coords == NULL)
+    {
+        prc_error(ctx, PRC_API_ERROR_PARAMETER, "No such coordinate system in prc_api_get_local_coordinate_system\n");
+        return PRC_API_ERROR_PARAMETER;
+    }
+    return prc_api_set_transform(ctx, transform, &global_data->ref_coords[biased_index - 1].transform);
+}
+
 static int
 prc_api_set_transform_to_identity(prc_context *ctx, prc_api_transform *transform)
 {

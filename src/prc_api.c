@@ -2054,37 +2054,87 @@ cleanup:
 /* Reworked version which starts out with the last product in the last file and
    recursively works its way through the data. This is the first call in
    and we have to start at a special place (last product in last file). */
+/* The most roots the model tree takes from a ModelFile; further ones are left out. */
+#define PRC_API_MAX_MODEL_ROOTS 64
+
+/* The roots of the model tree: the product occurrences the ModelFile lists
+   (Table 36), each found by the unique identifier of its file structure and
+   its biased index among that structure's product occurrences. Adobe Acrobat
+   draws every one: 3D_PDF_Mounted_Airless_Sprayer_Maintenance.stream-154 in
+   the public prc-db collection lists two, the assembly in file structure 75
+   and, in 76, a second assembly that holds a removed copy of the first and a
+   handle, and Acrobat draws both. A file whose ModelFile lists none that can
+   be found has the one root it had before, the last product occurrence of
+   the last file structure. Returns the number of roots. */
+static uint32_t
+prc_api_helper_model_roots(prc_context *ctx, prc_api_data data, uint32_t *root_files,
+    prc_asm_product_occurrence **root_products)
+{
+    prc_data *data_in = (prc_data *)data;
+    uint32_t last_file_index = data_in->file_structure_count - 1;
+    const prc_type_asm_modelfile *model = data_in->file_struct[last_file_index].model;
+    prc_asm_file_structure_tree *last_tree = data_in->file_struct[last_file_index].tree;
+    uint32_t n = 0, k;
+
+    if (model != NULL && model->product_occurences != NULL)
+    {
+        for (k = 0; k < model->number_of_root_product_occurrences && n < PRC_API_MAX_MODEL_ROOTS; k++)
+        {
+            const prc_product_occurrence_reference *ref = &model->product_occurences[k];
+            uint32_t biased_file = prc_api_helper_get_biased_file_index_from_unique_id(ctx, data,
+                ref->unique_id);
+            prc_asm_file_structure_tree *tree;
+
+            if (biased_file == 0 || ref->root_index == 0)
+                continue;
+            tree = data_in->file_struct[biased_file - 1].tree;
+            if (tree == NULL || tree->products == NULL || ref->root_index > tree->product_count)
+                continue;
+            root_files[n] = biased_file - 1;
+            root_products[n++] = &tree->products[ref->root_index - 1];
+        }
+    }
+    if (n == 0)
+    {
+        root_files[0] = last_file_index;
+        root_products[0] = &last_tree->products[last_tree->product_count - 1];
+        n = 1;
+    }
+    return n;
+}
+
 PRC_EXPORT int
 prc_api_prep_model_tree(prc_context *ctx, prc_api_data data, uint32_t *num_parts,
                         uint32_t *num_products, uint32_t *num_markups)
 {
-    uint32_t last_file_index;
     prc_data *data_in = (prc_data *)data;
-    prc_asm_file_structure_tree *last_tree;
-    prc_asm_product_occurrence *prc_product;
+    prc_asm_product_occurrence *root_products[PRC_API_MAX_MODEL_ROOTS];
+    uint32_t root_files[PRC_API_MAX_MODEL_ROOTS];
+    uint32_t num_roots, k;
     int code;
     uint32_t num_files;
 
     num_files = data_in->file_structure_count;
-    last_file_index = num_files - 1;
-    last_tree = data_in->file_struct[last_file_index].tree;
-    prc_product = &last_tree->products[last_tree->product_count - 1];
+    num_roots = prc_api_helper_model_roots(ctx, data, root_files, root_products);
 
     *num_parts = 0;
     *num_markups = 0;
     *num_products = 1;
-    /* We start with 1 because we have to account for the root node which is the
-       last product in the last file */
+    /* We start with 1 for the model node; prc_api_helper_count_items counts
+       each root it starts from */
 
    /* This is a recursive method to count the parts, products and markups
       so that we can allocate the proper amount of space. */
-    code = prc_api_helper_count_items(ctx, data, num_files, last_file_index,
-                                      prc_product, num_parts, num_products,
-                                      num_markups);
-    if (code < 0)
+    for (k = 0; k < num_roots; k++)
     {
-        prc_error(ctx, code, "Failed in prc_api_helper_add_items\n");
-        return code;
+        code = prc_api_helper_count_items(ctx, data, num_files, root_files[k],
+                                          root_products[k], num_parts, num_products,
+                                          num_markups);
+        if (code < 0)
+        {
+            prc_error(ctx, code, "Failed in prc_api_helper_add_items\n");
+            return code;
+        }
     }
     return 0;
 }
@@ -3286,12 +3336,10 @@ prc_api_helper_first_node(prc_context *ctx, prc_api_data data, uint32_t num_file
 {
     uint32_t last_file_index = num_files - 1;
     prc_data *data_in = (prc_data *)data;
-    prc_asm_file_structure_tree *last_tree = data_in->file_struct[last_file_index].tree;
     prc_filestructure *files = data_in->file_struct;
-    prc_asm_product_occurrence *prc_product = &last_tree->products[last_tree->product_count - 1];
-    prc_references_of_product_occurrence product_refs = prc_product->references_product_occurrence;
-    uint32_t num_children = product_refs.number_of_child_product_occurrences;
-    uint32_t k;
+    prc_asm_product_occurrence *root_products[PRC_API_MAX_MODEL_ROOTS];
+    uint32_t root_files[PRC_API_MAX_MODEL_ROOTS];
+    uint32_t num_roots, k;
     prc_api_transform product_transform; /* This keeps track of transforms through the prototypes */
     int code;
 
@@ -3303,23 +3351,29 @@ prc_api_helper_first_node(prc_context *ctx, prc_api_data data, uint32_t num_file
         return code;
     }
 
-    /* Special handling for the first case */
+    /* Special handling for the first case: the model node's children are
+       the roots, side by side */
+    num_roots = prc_api_helper_model_roots(ctx, data, root_files, root_products);
     reserve->product_index += 1;
     product_tree->children = &reserve->products[reserve->product_index];
-    reserve->product_index += 1;
+    product_tree->num_children = num_roots;
+    reserve->product_index += num_roots;
 
-    /* Start the recusion starting from the last product in the last file */
-    code = prc_api_set_transform_to_identity(ctx, &product_transform);
-    if (code < 0)
+    for (k = 0; k < num_roots; k++)
     {
-        prc_error(ctx, code, "Failed in prc_api_helper_copy_product_details\n");
-        return code;
-    }
+        /* Start the recursion from each root */
+        code = prc_api_set_transform_to_identity(ctx, &product_transform);
+        if (code < 0)
+        {
+            prc_error(ctx, code, "Failed in prc_api_helper_copy_product_details\n");
+            return code;
+        }
 
-    /* pass NULL as parent_style for the top-level call */
-    prc_api_helper_add_product(ctx, data, num_files, last_file_index, NULL,
-        product_transform, &last_tree->products[last_tree->product_count - 1],
-        0, 0, &product_tree->children[0], reserve, NULL);
+        /* pass NULL as parent_style for the top-level call */
+        prc_api_helper_add_product(ctx, data, num_files, root_files[k], NULL,
+            product_transform, root_products[k],
+            0, 0, &product_tree->children[k], reserve, NULL);
+    }
 
     return 0;
 }

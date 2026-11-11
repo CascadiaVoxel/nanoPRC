@@ -4358,7 +4358,12 @@ prc_api_get_number_faces(prc_context *ctx, prc_api_data data_in,
            only ever emitted one for the supplied-normals/C2 path, so this
            branch was accidentally never exercised by nanoPRC's own C1
            output). */
+        /* A tessellation with one line attribute per face (is_multiple_line_attribute
+           FALSE, more than one entry) varies by face too: Table 174 stores one
+           entry per face then, and the decoder gives every triangle its face's
+           style, so it is one face here as well. */
         if (tessellation->tess_3d_compressed->is_multiple_line_attribute ||
+            tessellation->tess_3d_compressed->line_attribute_array_size > 1 ||
             (tessellation->tess_3d_compressed->decoded_point_color_array != NULL))
         {
             /* We may need to look at the content of the line_attribute array

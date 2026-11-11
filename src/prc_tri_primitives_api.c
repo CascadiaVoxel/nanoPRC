@@ -3453,6 +3453,75 @@ failure:
     return code;
 }
 
+/* Rewrites the fans and strips of one group of entities as triangles, placed
+   after the group's own triangles, so that normals can be calculated: that
+   calculation takes plain triangles only. The face's index array is replaced
+   by the new one, and the group then holds only triangles, so the face has a
+   single graphic primitive. Fans turn about their first vertex; every second
+   triangle of a strip has its first two vertices exchanged, so that all keep
+   the strip's winding, as nanoPRC's exporters triangulate them. */
+static int
+prc_internal_api_fans_strips_to_triangles(prc_context *ctx, prc_internal_api_face *face_out_reserved,
+    prc_internal_api_tess_entities *entity)
+{
+    const uint32_t *src = face_out_reserved->vertex_indices;
+    size_t num_triangles = entity->num_triangles;
+    size_t k, m, n;
+    uint32_t *dst;
+
+    for (k = 0; k < entity->num_fans + entity->num_strips; k++)
+    {
+        const size_t *offsets = k < entity->num_fans ? &entity->fan_offsets[2 * k] :
+                                &entity->strip_offsets[2 * (k - entity->num_fans)];
+
+        if (offsets[0] + offsets[1] > face_out_reserved->num_indices)
+            return PRC_API_ERROR_PARSER;
+        if (offsets[1] > 2)
+            num_triangles += offsets[1] - 2;
+    }
+    if (entity->num_triangles * 3 > face_out_reserved->num_indices)
+        return PRC_API_ERROR_PARSER;
+
+    dst = (uint32_t *)prc_malloc(ctx, (num_triangles > 0 ? num_triangles : 1) * 3 * sizeof(uint32_t));
+    if (dst == NULL)
+        return PRC_API_ERROR_MEMORY;
+    memcpy(dst, src, entity->num_triangles * 3 * sizeof(uint32_t));
+    n = entity->num_triangles * 3;
+    for (k = 0; k < entity->num_fans; k++)
+    {
+        const uint32_t *v = &src[entity->fan_offsets[2 * k]];
+
+        for (m = 2; m < entity->fan_offsets[2 * k + 1]; m++)
+        {
+            dst[n++] = v[0];
+            dst[n++] = v[m - 1];
+            dst[n++] = v[m];
+        }
+    }
+    for (k = 0; k < entity->num_strips; k++)
+    {
+        const uint32_t *v = &src[entity->strip_offsets[2 * k]];
+
+        for (m = 2; m < entity->strip_offsets[2 * k + 1]; m++)
+        {
+            dst[n++] = v[m % 2 == 0 ? m - 2 : m - 1];
+            dst[n++] = v[m % 2 == 0 ? m - 1 : m - 2];
+            dst[n++] = v[m];
+        }
+    }
+
+    if (face_out_reserved->owns_vertex_indices)
+        prc_free(ctx, face_out_reserved->vertex_indices);
+    face_out_reserved->vertex_indices = dst;
+    face_out_reserved->owns_vertex_indices = 1;
+    face_out_reserved->num_indices = n;
+    face_out_reserved->capacity = n;
+    entity->num_triangles = num_triangles;
+    entity->num_fans = 0;
+    entity->num_strips = 0;
+    return 0;
+}
+
 /* tess_index_in is an index into the tessellations in part_details or
    markup_details in prc_data */
 PRC_EXPORT int
@@ -4307,23 +4376,29 @@ prc_api_get_tessellation_vertices(prc_context *ctx, prc_api_data data_in,
             (entities_textured_one_norm->num_triangles > 0) +
             entities_textured_one_norm->num_fans + entities_textured_one_norm->num_strips;
 
-        /* Do a sanity check here. Right now if we have to compute the normals,
-           we only support that case where we have pure triangles. No strips or fans.
-           Per the spec it seems they could occur.
-
-           They do not, and that is now measured rather than assumed. Across
-           307 third-party files: 17,522 uncompressed TESS_3D entities, of
-           which 6,878 set must_calculate_normals and 7,587 carry fans or
-           strips -- and ZERO do both. So this refusal has never fired on a
-           real file, and extending it is a capability gap rather than a
-           defect. Our own writer refuses to produce the combination for the
-           same reason (prc_write_tess_3d_ex). */
+        /* Do a sanity check here. Normals are calculated over triangles, so a
+           face that must have its normals calculated and holds fans or strips
+           has them rewritten as triangles below. That is done for one group of
+           entities with a normal per vertex, textured or not, which is how the
+           files that do it store them: ZooKeys-263-001-g004.stream-27 in the
+           public prc-db collection (698 tessellations of textured fans and
+           strips) and objekty.stream-159 (plain strips, textured fans). The
+           measurement that once found no such file covered 307 files. Anything
+           else is still refused. Our own writer refuses to produce the
+           combination (prc_write_tess_3d_ex). */
         if (tess3d->must_calculate_normals)
         {
-            if (entities_multiple_norms->num_fans > 0 || entities_multiple_norms->num_strips > 0 ||
+            uint8_t multi_has_entities = entities_multiple_norms->num_triangles > 0 ||
+                entities_multiple_norms->num_fans > 0 || entities_multiple_norms->num_strips > 0;
+            uint8_t textured_multi_has_entities = entities_textured_multiple_norms->num_triangles > 0 ||
+                entities_textured_multiple_norms->num_fans > 0 || entities_textured_multiple_norms->num_strips > 0;
+
+            if (entities_one_norm->num_fans > 0 || entities_one_norm->num_strips > 0 ||
                 entities_textured_one_norm->num_fans > 0 || entities_textured_one_norm->num_strips > 0 ||
-                entities_textured_multiple_norms->num_fans > 0 || entities_textured_multiple_norms->num_strips > 0 ||
-                entities_one_norm->num_fans > 0 || entities_one_norm->num_strips > 0)
+                ((entities_multiple_norms->num_fans > 0 || entities_multiple_norms->num_strips > 0 ||
+                  entities_textured_multiple_norms->num_fans > 0 || entities_textured_multiple_norms->num_strips > 0) &&
+                 (multi_has_entities + textured_multi_has_entities != 1 ||
+                  entities_one_norm->num_triangles > 0 || entities_textured_one_norm->num_triangles > 0)))
             {
                 prc_error(ctx, PRC_API_ERROR_UNSUPPORTED,
                     "Normal recompute only supports pure triangles in prc_api_get_tessellation_vertices\n");
@@ -4575,18 +4650,29 @@ prc_api_get_tessellation_vertices(prc_context *ctx, prc_api_data data_in,
            where face.used_entities_flag has only triangle types (no fans or strips) */
         if (uncompressed_data.must_calculate_normals &&
             (face.used_entities_flag == PRC_FACETESSDATA_Triangle ||
-             face.used_entities_flag == PRC_FACETESSDATA_TriangleTextured))
+             face.used_entities_flag == PRC_FACETESSDATA_TriangleTextured ||
+             entities_multiple_norms->num_fans > 0 || entities_multiple_norms->num_strips > 0 ||
+             entities_textured_multiple_norms->num_fans > 0 || entities_textured_multiple_norms->num_strips > 0))
         {
             size_t num_triangles;
+            prc_internal_api_tess_entities *group =
+                (entities_textured_multiple_norms->num_triangles > 0 || entities_textured_multiple_norms->num_fans > 0 ||
+                 entities_textured_multiple_norms->num_strips > 0) ? entities_textured_multiple_norms :
+                entities_multiple_norms;
 
-            if (face.used_entities_flag == PRC_FACETESSDATA_Triangle)
+            if (group->num_fans > 0 || group->num_strips > 0)
             {
-                num_triangles = entities_multiple_norms->num_triangles;
+                code = prc_internal_api_fans_strips_to_triangles(ctx, face_out_reserved, group);
+                if (code < 0)
+                {
+                    prc_error(ctx, code,
+                        "Failed in prc_internal_api_fans_strips_to_triangles\n");
+                    goto uncompressed_failure;
+                }
+                uncompressed_data.vertex_indices = face_out_reserved->vertex_indices;
+                face_out->num_graphic_primitives = 1;
             }
-            else
-            {
-                num_triangles = entities_textured_multiple_norms->num_triangles;
-            }
+            num_triangles = group->num_triangles;
             code = prc_internal_api_calculate_normals_triangles(ctx, num_triangles,
                                                                 &uncompressed_data);
             if (code < 0)

@@ -394,6 +394,14 @@ struct prc_api_product_s
         location_set is 1; otherwise treat as identity. */
     prc_api_transform location;
     char *name;
+    /** The product occurrence's graphics behaviour, as stored: the low and
+        high bytes of its behaviour field, as for prc_api_part. 0x01 in
+        behavior_bit_field1 is PRC_GRAPHICS_Show; 0x20 in behavior_bit_field2
+        is PRC_GRAPHICS_Removed (0x2000), a product that has been removed and
+        no longer appears, which Adobe Acrobat does not draw. 0 for nodes that
+        are not product occurrences. */
+    uint8_t behavior_bit_field1;
+    uint8_t behavior_bit_field2;
     prc_api_part *part;
     uint32_t num_markups;
     prc_api_markup *markup;

@@ -29,10 +29,14 @@ elseif(EMSCRIPTEN)
     #   for this demo. If main.cpp is later restructured to call
     #   emscripten_set_main_loop directly, this can be dropped.
     # - prc_api_open_contents only takes a file path, no in-memory-buffer
-    #   variant -- --preload-file packages examples/cube.pdf into the
-    #   virtual filesystem (MEMFS) at /cube.pdf ahead of main() running, so
-    #   ResolveCrossPlatformAssetPath's existing relative-path branch
-    #   ("cube.pdf", resolved against MEMFS's root cwd) finds it unmodified.
+    #   variant -- --preload-file packages examples/triangle.pdf into the
+    #   virtual filesystem (MEMFS) at /triangle.pdf ahead of main() running,
+    #   so ResolveCrossPlatformAssetPath's existing relative-path branch
+    #   (main.cpp currently opens "triangle.pdf", resolved against MEMFS's
+    #   root cwd) finds it unmodified -- keep this filename in sync with
+    #   whatever ResolveCrossPlatformAssetPath's caller in main.cpp actually
+    #   asks for; it won't fail loudly if they drift apart; see the next
+    #   comment.
     #   A real "pick your own file" page would instead write the picked
     #   File's bytes into MEMFS from JS at runtime before calling this same
     #   path-based API -- left as a follow-up once mobile_viewer's own
@@ -61,7 +65,7 @@ elseif(EMSCRIPTEN)
         "-sEXPORTED_RUNTIME_METHODS=[\"FS\",\"ccall\",\"cwrap\"]"
         "-sMODULARIZE=1"
         "-sEXPORT_NAME=NanoPRCViewerModule"
-        "--preload-file=${CMAKE_SOURCE_DIR}/examples/cube.pdf@/cube.pdf"
+        "--preload-file=${CMAKE_SOURCE_DIR}/examples/triangle.pdf@/triangle.pdf"
         "--shell-file=${CMAKE_CURRENT_SOURCE_DIR}/web/shell.html"
     )
     # Debug-only diagnostics: -g keeps DWARF debug info in the wasm binary so

@@ -600,7 +600,10 @@ prc_convert_compref_curve_to_coedge(prc_context *ctx,
 
     topo_coedge = coedge->next_coedge.topo->topo_coedge;
     topo_coedge->tag = PRC_TYPE_TOPO_CoEdge;
-    topo_coedge->coedge_orientation = 1;
+    /* A curve named by index was stored by the face that shares it, and runs the
+       other way round in this one, as in the iso case below */
+    topo_coedge->coedge_orientation = (comp_curve->curve_is_not_already_stored ||
+                                       comp_curve->is_deduced_curve) ? 1 : 0;
     topo_coedge->ptr_topology.is_stored = 0;
     topo_coedge->ptr_topology.topo = (prc_topo *)prc_calloc(ctx, 1, sizeof(prc_topo));
     if (topo_coedge == NULL)

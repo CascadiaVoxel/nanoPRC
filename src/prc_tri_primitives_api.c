@@ -4844,8 +4844,14 @@ uncompressed_done:
            tessellation with is_multiple_line_attribute set and has_faces
            FALSE (pdf-issues #833's CT-P2-twoent-TEX1) has none, and every
            read of triangle_styles below would dereference NULL. */
+        /* One line attribute per face (is_multiple_line_attribute FALSE, more
+           than one entry) is real variation too: the decoder gives each
+           triangle its face's style. 3D_PDF_Lamp.stream-273 in prc-db colours
+           its switch so, eleven faces in three materials, which Adobe Acrobat
+           draws and which were drawn in one before. */
         uint8_t has_style =
-            (tess->is_multiple_line_attribute && tess->triangle_styles != NULL) ? true : false;
+            ((tess->is_multiple_line_attribute || tess->line_attribute_array_size > 1) &&
+             tess->triangle_styles != NULL) ? true : false;
         uint8_t has_more_than_one_tri_style = false;
         uint32_t num_triangles = tess->triangle_face_array_size;
         prc_internal_api_color_state_t initial_color_state;
@@ -5013,6 +5019,12 @@ uncompressed_done:
 
         face_style_index = -1;
         face_style_file_index = -1;
+
+        /* Styles from the reference data override the tessellation's, as
+           below; a vertex's style then comes from the reference data alone,
+           and the per-triangle styles are not used */
+        if (has_more_than_one_ref_style)
+            has_more_than_one_tri_style = false;
 
         /* Style is coming directly from the tessellation data */
         if (has_more_than_one_tri_style)

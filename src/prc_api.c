@@ -1347,6 +1347,8 @@ prc_api_initialize_model_tree_parent(prc_context *ctx, prc_api_product *parent,
     parent->is_model = 0;
     parent->reserved = NULL;
     parent->name = NULL;
+    parent->behavior_bit_field1 = 0;
+    parent->behavior_bit_field2 = 0;
     parent->type = PRC_API_NODE_PRODUCT;
     parent->num_children = 0;
     parent->children = NULL;
@@ -1361,6 +1363,8 @@ static void
 prc_api_copy_node(prc_context *ctx, prc_api_product *des, prc_api_product *src)
 {
     des->name = src->name;
+    des->behavior_bit_field1 = src->behavior_bit_field1;
+    des->behavior_bit_field2 = src->behavior_bit_field2;
     des->type = src->type;
     des->num_children = src->num_children;
     des->children = src->children;
@@ -2345,6 +2349,8 @@ prc_api_helper_init_model_node(prc_context *ctx, prc_api_product *product,
     }
 
     product->is_model = 1;
+    product->behavior_bit_field1 = 0;
+    product->behavior_bit_field2 = 0;
     len_name = (file_name != NULL) ? strlen((const char *)file_name)
                                     : strlen(default_model_name);
     product->name = (char *)prc_calloc(ctx, len_name + 1, sizeof(char));
@@ -2697,6 +2703,8 @@ prc_api_helper_copy_product_details(prc_context *ctx, prc_api_data data,
        but with location_set never flagged, no consumer (demos/json_export,
        demos/stl_export) ever knew real data was sitting right here. */
     product_tree->location_set = !incoming_matrix.is_identity;
+    product_tree->behavior_bit_field1 = 0;
+    product_tree->behavior_bit_field2 = 0;
     product_tree->is_model = 0;
     product_tree->type = PRC_API_NODE_PRODUCT;
     product_tree->num_children = 0;
@@ -3216,6 +3224,12 @@ prc_api_helper_add_product(prc_context *ctx, prc_api_data data, uint32_t num_fil
                     result = code;
                     goto cleanup;
                 }
+                /* The behaviour is the occurrence's in the tree, not its last
+                   prototype's: in 3D_PDF_Mounted_Airless_Sprayer_Maintenance.
+                   stream-154 (prc-db) 206 prototypes are removed while the
+                   occurrences that use them are drawn */
+                work_product_tree->behavior_bit_field1 = item.product->base.graphics_content.behavior_bit_field1;
+                work_product_tree->behavior_bit_field2 = item.product->base.graphics_content.behavior_bit_field2;
             }
 
             /* We should be at the last prototype. At this point work on the child

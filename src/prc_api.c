@@ -3093,6 +3093,7 @@ prc_api_helper_add_product(prc_context *ctx, prc_api_data data, uint32_t num_fil
         uint32_t work_parent_biased_style_file_index = item.parent_biased_style_file_index;
         prc_api_product *work_product_tree = item.product_tree;
         prc_api_object_style *work_parent_style = item.parent_style;
+        uint8_t chain_located = 0;
 
         for (;;)
         {
@@ -3165,10 +3166,16 @@ prc_api_helper_add_product(prc_context *ctx, prc_api_data data, uint32_t num_fil
                 goto cleanup;
             }
 
-            /* There is a prototypes to this product. Continue to drill but concatenate
-               any transform as we go. */
-            if (work_product->has_transform)
+            /* There is a prototypes to this product. Continue to drill. The
+               first location along the chain places the product: an
+               occurrence's own location replaces its prototype's rather than
+               adding to it. In 3D_PDF_Lamp.stream-273 (prc-db) ten occurrences
+               repeat their prototype's location, and Adobe Acrobat places
+               them by it once; applied twice, the bulb sat outside its
+               housing. */
+            if (work_product->has_transform && !chain_located)
             {
+                chain_located = 1;
                 code = prc_api_set_transform(ctx, &new_transform, &work_product->location);
                 if (code < 0)
                 {

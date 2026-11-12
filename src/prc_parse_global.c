@@ -543,8 +543,15 @@ prc_parse_cartesian_transformation_2d(prc_context *ctx, prc_bit_state *bit_state
     }
     if (data.behavior & PRC_TRANSFORMATION_Rotate)
     {
+        /* One axis is stored, not the two the 2D Transformation table lists:
+           3D_Schreibtisch_2010.stream-954 in the public prc-db collection has
+           seven texture transformations, two of them rotations, and reads to
+           the end only this way, each stored axis a unit vector. The y axis
+           is taken as the x axis turned a quarter turn anticlockwise, which
+           makes the pair a rotation; no file yet shows the other sign. */
         data.rotation[0] = prc_parse_2d_vector(ctx, bit_state);
-        data.rotation[1] = prc_parse_2d_vector(ctx, bit_state);
+        data.rotation[1].x = -data.rotation[0].y;
+        data.rotation[1].y = data.rotation[0].x;
     }
     if (data.behavior & PRC_TRANSFORMATION_Scale)
     {
@@ -885,8 +892,11 @@ prc_parse_graph_picture(prc_context *ctx, prc_bit_state *bit_state, prc_graph_pi
         }
         else
         {
-            prc_error(ctx, PRC_ERROR_MEMORY, "Failed in prc_parse_uncomp_file\n");
-            return PRC_ERROR_MEMORY;
+            /* A block that does not decode as the format the picture names leaves
+               the picture without an image, as an unreadable raw block does below,
+               rather than refusing the file. A file in the public prc-db collection
+               (ZooKeys-263-001-g004.stream-27) names PNG for 25 blocks that are not
+               PNG, and the rest of it reads. */
         }
     }
     /* The raw formats carry their size in the picture. A block that cannot be

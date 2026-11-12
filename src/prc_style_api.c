@@ -266,7 +266,9 @@ prc_internal_api_get_color_from_style(prc_context *ctx, prc_file_struct_internal
         }
         else
         {
-            /* This is a color */
+            /* This is a color. Its index counts doubles in the colour array,
+               three per colour, as prc_api_helper_get_face_style reads it */
+            color_material_index = color_material_index / 3;
             if (color_material_index < global_data->color_count)
             {
                 rgb_color = global_data->colors[color_material_index];

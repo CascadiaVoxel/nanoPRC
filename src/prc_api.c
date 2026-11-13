@@ -4234,6 +4234,15 @@ prc_api_initialize_tessellation(prc_context *ctx, prc_api_data data_in,
     api_tess->mark_up_index = -1;
     api_tess->reserved = NULL;
     api_tess->text_primitives = NULL;
+    /* No box until the vertices are fetched, and none at all for a
+       tessellation that has none (see prc_api_tess) */
+    api_tess->bound_box_initialized = 0;
+    api_tess->bounding_box_min[0] = 0;
+    api_tess->bounding_box_min[1] = 0;
+    api_tess->bounding_box_min[2] = 0;
+    api_tess->bounding_box_max[0] = 0;
+    api_tess->bounding_box_max[1] = 0;
+    api_tess->bounding_box_max[2] = 0;
 
     tessellation = &data->file_struct[file_index].tessellation->tess[tessellation_index];
 

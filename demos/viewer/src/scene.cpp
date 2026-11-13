@@ -388,6 +388,14 @@ static void setBounds(prc_context *ctx, Product *app_child, prc_api_tess *tess,
         tess != NULL ? tess->bounding_box_max[1] : 0.0,
         tess != NULL ? tess->bounding_box_max[2] : 0.0);
 
+    /* A tessellation with no vertices has no box (all zeros, see
+       prc_api_tess): it bounds nothing, so it stays out of the scene's */
+    if (!tess->bound_box_initialized)
+    {
+        app_child->setBoundingBox(Vector4(0.0f), Vector4(0.0f));
+        return;
+    }
+
     app_child->setBoundingBox(tess->bounding_box_min, tess->bounding_box_max);
 
     /* Adjust the bounding boxes for the model by the matrix */
@@ -941,9 +949,12 @@ void Scene::load(const char *infile, Camera *camera, bool memoryLeakCheck, bool 
     Vector4 min_bound;
     Vector4 max_bound;
 
-    max_bound.x = FLT_MIN;
-    max_bound.y = FLT_MIN;
-    max_bound.z = FLT_MIN;
+    /* FLT_MIN is the smallest positive float, not the most negative: a start
+       of FLT_MIN stretched the box of a model lying wholly at negative
+       coordinates out to the origin */
+    max_bound.x = -FLT_MAX;
+    max_bound.y = -FLT_MAX;
+    max_bound.z = -FLT_MAX;
     min_bound.x = FLT_MAX;
     min_bound.y = FLT_MAX;
     min_bound.z = FLT_MAX;
@@ -981,6 +992,16 @@ void Scene::load(const char *infile, Camera *camera, bool memoryLeakCheck, bool 
         Vector3 center = Vector3((_bbox_max[0] + _bbox_min[0]) * 0.5f,
             (_bbox_max[1] + _bbox_min[1]) * 0.5f,
             (_bbox_max[2] + _bbox_min[2]) * 0.5f);
+
+        /* Nothing bounded (no tessellation with vertices) leaves the box
+           inside out; take the fallback setCameraInitialPosition takes, not
+           a view built from infinities, which draws a black frame */
+        if (!(max.x >= min.x && max.y >= min.y && max.z >= min.z) ||
+            !std::isfinite(diagonal) || diagonal <= 1e-4f)
+        {
+            center = Vector3(0.0f, 0.0f, 0.0f);
+            diagonal = 100.0f;
+        }
 
         /* Position camera at a reasonable distance to see the entire object */
         float distance = diagonal * 1.5f;

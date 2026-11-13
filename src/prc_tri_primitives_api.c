@@ -1579,6 +1579,8 @@ prc_internal_api_find_bounding_box(prc_context *ctx, prc_tess *tess, prc_api_tes
 
     if (num_vertices == 0 || vertices == NULL)
     {
+        /* No vertices, so no box: zeros, and the caller's copy says so (it
+           used to keep whatever it held, read as a box) */
         tess->bounding_box_min[0] = 0;
         tess->bounding_box_min[1] = 0;
         tess->bounding_box_min[2] = 0;
@@ -1586,6 +1588,14 @@ prc_internal_api_find_bounding_box(prc_context *ctx, prc_tess *tess, prc_api_tes
         tess->bounding_box_max[0] = 0;
         tess->bounding_box_max[1] = 0;
         tess->bounding_box_max[2] = 0;
+
+        api_tess->bounding_box_min[0] = 0;
+        api_tess->bounding_box_min[1] = 0;
+        api_tess->bounding_box_min[2] = 0;
+        api_tess->bounding_box_max[0] = 0;
+        api_tess->bounding_box_max[1] = 0;
+        api_tess->bounding_box_max[2] = 0;
+        api_tess->bound_box_initialized = 0;
         return;
     }
 
@@ -1621,6 +1631,7 @@ prc_internal_api_find_bounding_box(prc_context *ctx, prc_tess *tess, prc_api_tes
     api_tess->bounding_box_max[0] = tess->bounding_box_max[0];
     api_tess->bounding_box_max[1] = tess->bounding_box_max[1];
     api_tess->bounding_box_max[2] = tess->bounding_box_max[2];
+    api_tess->bound_box_initialized = 1;
 }
 
 static int
@@ -3842,12 +3853,14 @@ prc_api_get_tessellation_vertices(prc_context *ctx, prc_api_data data_in,
     }
     else
     {
+        /* The vertices were fetched, and the box found from them, before */
         api_tess->bounding_box_min[0] = tess->bounding_box_min[0];
         api_tess->bounding_box_min[1] = tess->bounding_box_min[1];
         api_tess->bounding_box_min[2] = tess->bounding_box_min[2];
         api_tess->bounding_box_max[0] = tess->bounding_box_max[0];
         api_tess->bounding_box_max[1] = tess->bounding_box_max[1];
         api_tess->bounding_box_max[2] = tess->bounding_box_max[2];
+        api_tess->bound_box_initialized = 1;
     }
 
     /* Only 3D and 3D compressed have normals */

@@ -264,6 +264,12 @@ typedef struct prc_api_tess_s
     prc_api_text_primitive *text_primitives;
     prc_api_face *tess_faces;
     prc_api_tess_vertex_buffer tess_vertices;
+    /** 1 once bounding_box_min/max hold the box of the tessellation's
+        vertices, which prc_api_get_tessellation_vertices finds when it first
+        fetches them. 0 before that, and for a tessellation with no vertices
+        (a compressed tessellation with no triangulated data, a markup with
+        only text); its box is then all zeros and bounds nothing, so leave it
+        out of any box built from several tessellations. */
     uint8_t bound_box_initialized;
     double bounding_box_min[3];
     double bounding_box_max[3];

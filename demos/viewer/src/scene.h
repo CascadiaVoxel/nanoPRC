@@ -105,6 +105,10 @@ public:
         int width, int height, float renderScale,
         int shadowResolution, bool enableShadows);
 
+    /* The framebuffer the finished frame is drawn into: 0, the window's
+       own, unless batch mode gives an offscreen one to read the frame from */
+    void setOutputFramebuffer(unsigned int framebuffer) { _outputFramebuffer = framebuffer; }
+
     Scene();
     ~Scene();
 
@@ -158,6 +162,7 @@ private:
 
     int _width, _height;
     int _renderWidth, _renderHeight;
+    unsigned int _outputFramebuffer;
 
     double _bbox_min[3];
     double _bbox_max[3];

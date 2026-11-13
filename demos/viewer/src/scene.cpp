@@ -278,6 +278,19 @@ void Scene::render(Camera *camera)
     else
         glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
 
+    /* The sky first, writing no depth: geometry then draws over it, and
+       transparent geometry (which writes no depth either) blends with it.
+       Drawn after, the sky covered every pixel still at the far plane,
+       transparent geometry included. */
+    if (!_wireframe)
+    {
+        glDepthMask(GL_FALSE);
+        glDepthFunc(GL_LEQUAL);
+        renderSkybox(camera);
+        glDepthFunc(GL_LESS);
+        glDepthMask(GL_TRUE);
+    }
+
     if (_backfaceCull)
         glEnable(GL_CULL_FACE);
     else
@@ -286,12 +299,6 @@ void Scene::render(Camera *camera)
     renderModels(camera);
 
     glDisable(GL_CULL_FACE);
-
-    if (!_wireframe)
-    {
-        glDepthFunc(GL_LEQUAL);
-        renderSkybox(camera);
-    }
 
     glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
     return;
@@ -321,6 +328,19 @@ void Scene::render(Camera *camera)
     else
         glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
 
+    /* The sky first, writing no depth: geometry then draws over it, and
+       transparent geometry (which writes no depth either) blends with it.
+       Drawn after, the sky covered every pixel still at the far plane,
+       transparent geometry included. */
+    if (!_wireframe)
+    {
+        glDepthMask(GL_FALSE);
+        glDepthFunc(GL_LEQUAL);
+        renderSkybox(camera);
+        glDepthFunc(GL_LESS);
+        glDepthMask(GL_TRUE);
+    }
+
     if (_backfaceCull)
         glEnable(GL_CULL_FACE);
     else
@@ -332,9 +352,6 @@ void Scene::render(Camera *camera)
 
     if (!_wireframe)
     {
-        glDepthFunc(GL_LEQUAL);
-        renderSkybox(camera);
-
         /* Bloom */
         if (_enableBloom)
         {

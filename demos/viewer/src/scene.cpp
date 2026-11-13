@@ -16,6 +16,7 @@
 
 #include "scene.h"
 
+#include <cfloat>
 #include <cstdio>
 #include <cstdlib>
 #include <string>
@@ -410,9 +411,49 @@ static void setBounds(prc_context *ctx, Product *app_child, prc_api_tess *tess,
     maxBound->z = std::fmax(max_bound.z, maxBound->z);
 }
 
+/* PRC_GRAPHICS_Removed (0x2000), as it appears in the high byte of a
+   behaviour field, behavior_bit_field2: a product or item that has been
+   removed and no longer appears (see prc_api_product). Adobe Acrobat does not
+   draw it or anything under it; the viewer loads it switched off, so it can
+   still be switched on from the model tree. */
+#define PRC_REMOVED_BYTE2 0x20
+
+static Matrix4 toMatrix4(const prc_api_transform &t)
+{
+    Matrix4 m = Matrix4(1.0f);
+
+    m.columns[0] = Vector4((float)t.matrix[0], (float)t.matrix[1], (float)t.matrix[2], (float)t.matrix[3]);
+    m.columns[1] = Vector4((float)t.matrix[4], (float)t.matrix[5], (float)t.matrix[6], (float)t.matrix[7]);
+    m.columns[2] = Vector4((float)t.matrix[8], (float)t.matrix[9], (float)t.matrix[10], (float)t.matrix[11]);
+    m.columns[3] = Vector4((float)t.matrix[12], (float)t.matrix[13], (float)t.matrix[14], (float)t.matrix[15]);
+    return m;
+}
+
+/* A part or representation item with a local coordinate system
+   (biased_local_coordinate_index) is placed by it within its parent's frame:
+   nanoPRC gives its vertices in that system's frame. Sets app_node's model
+   matrix to it, and folds it into matrix (for bounds); 1 if it has one. */
+static bool placeByLocalCoordinateSystem(prc_context *ctx, prc_api_data data, const prc_api_part *item,
+    Product *app_node, Matrix4 *matrix, uint8_t *is_identity)
+{
+    prc_api_transform own;
+    Matrix4 m;
+
+    if (item->biased_local_coordinate_index == 0 ||
+        prc_api_get_local_coordinate_system(ctx, data, item->tess_file_index,
+            item->biased_local_coordinate_index, &own) != 0 ||
+        own.is_identity)
+        return false;
+    m = toMatrix4(own);
+    app_node->setModel(m);
+    *matrix = *matrix * m;
+    *is_identity = 0;
+    return true;
+}
+
 void Scene::addRepItems(prc_context *ctx, prc_api_data data, prc_api_part *api_part,
     Product *app_product, Product *heap, uint32_t *product_count,
-    Vector4 *minBound, Vector4 *maxBound, prc_api_transform location, Matrix4 matrix)
+    Vector4 *minBound, Vector4 *maxBound, uint8_t is_identity, Matrix4 matrix)
 {
     uint32_t k;
     prc_api_tess *tess;
@@ -422,11 +463,24 @@ void Scene::addRepItems(prc_context *ctx, prc_api_data data, prc_api_part *api_p
 
     for (k = 0; k < api_part->num_rep_items; k++)
     {
+        const prc_api_part *item = &api_part->rep_items[k];
+        Matrix4 item_matrix = matrix;
+        uint8_t item_identity = is_identity;
+        /* A removed item is loaded switched off, and kept out of the scene's
+           bounds, so the view fits what is drawn */
+        Vector4 removedMin = Vector4(FLT_MAX), removedMax = Vector4(-FLT_MAX);
+        bool removed = (item->behavior_bit_field2 & PRC_REMOVED_BYTE2) != 0;
+        Vector4 *itemMin = removed ? &removedMin : minBound;
+        Vector4 *itemMax = removed ? &removedMax : maxBound;
+
         Product *app_child = app_product->getChildFromHeap(k, heap, product_count);
         *product_count += 1;
         app_child->setParent(app_product);
         app_child->setName(api_part->rep_items[k].name);
         app_child->setModel(Matrix4(1.0f));
+        placeByLocalCoordinateSystem(ctx, data, item, app_child, &item_matrix, &item_identity);
+        if (removed)
+            app_child->setEnabled(false);
         app_child->setBoundingBox(Vector4(0.0f), Vector4(0.0f));
         if (api_part->rep_items[k].attributes.num_base_attributes > 0)
         {
@@ -445,8 +499,8 @@ void Scene::addRepItems(prc_context *ctx, prc_api_data data, prc_api_part *api_p
 
         if (tess != NULL)
         {
-            setBounds(ctx, app_child, tess, matrix, location.is_identity, minBound,
-                maxBound);
+            setBounds(ctx, app_child, tess, item_matrix, item_identity, itemMin,
+                itemMax);
 
             /* Attach the model */
             app_child->attach(ctx, data, tess, *getTextRenderPtr());
@@ -469,7 +523,7 @@ void Scene::addRepItems(prc_context *ctx, prc_api_data data, prc_api_part *api_p
         {
             /* This is a recursive case */
             addRepItems(ctx, data, api_part->rep_items + k, app_child, heap,
-                product_count, minBound, maxBound, location, matrix);
+                product_count, itemMin, itemMax, item_identity, item_matrix);
         }
     }
 }
@@ -490,6 +544,16 @@ void Scene::convertTree(prc_context *ctx, prc_api_data data, prc_api_product *ap
     uint32_t start_index;
     uint32_t num_markups = prc_api_model_item_number_of_markups(ctx, api_product);
     uint8_t has_part = api_product->part != NULL;
+
+    /* A removed product is loaded switched off, with everything under it, and
+       kept out of the scene's bounds, so the view fits what is drawn */
+    Vector4 removedMin = Vector4(FLT_MAX), removedMax = Vector4(-FLT_MAX);
+    if (api_product->behavior_bit_field2 & PRC_REMOVED_BYTE2)
+    {
+        app_product->setEnabled(false);
+        minBound = &removedMin;
+        maxBound = &removedMax;
+    }
 
     app_product->setName(api_product->name);
     app_product->setIsPartNode(false);
@@ -539,6 +603,21 @@ void Scene::convertTree(prc_context *ctx, prc_api_data data, prc_api_product *ap
             app_child->setPartNameSameAsProduct(api_product->part->name_same_as_product != 0);
             app_child->setModel(Matrix4(1.0f));
 
+            /* The part can carry its own local coordinate system, and be
+               removed, as its items can (see addRepItems) */
+            Matrix4 part_matrix = matrix;
+            uint8_t part_identity = location.is_identity;
+            Vector4 partRemovedMin = Vector4(FLT_MAX), partRemovedMax = Vector4(-FLT_MAX);
+            Vector4 *partMin = minBound, *partMax = maxBound;
+
+            placeByLocalCoordinateSystem(ctx, data, api_product->part, app_child, &part_matrix, &part_identity);
+            if (api_product->part->behavior_bit_field2 & PRC_REMOVED_BYTE2)
+            {
+                app_child->setEnabled(false);
+                partMin = &partRemovedMin;
+                partMax = &partRemovedMax;
+            }
+
             if (api_product->part->attributes.num_base_attributes > 0)
             {
                 app_child->setAttributes(&api_product->part->attributes);
@@ -552,8 +631,8 @@ void Scene::convertTree(prc_context *ctx, prc_api_data data, prc_api_product *ap
 
             if (api_product->part->tess != NULL)
             {
-                setBounds(ctx, app_child, api_product->part->tess, matrix,
-                    location.is_identity, minBound, maxBound);
+                setBounds(ctx, app_child, api_product->part->tess, part_matrix,
+                    part_identity, partMin, partMax);
                 app_child->attach(ctx, data, api_product->part->tess,
                     *getTextRenderPtr());
             }
@@ -562,7 +641,7 @@ void Scene::convertTree(prc_context *ctx, prc_api_data data, prc_api_product *ap
             {
                 /* Add the RI items as children of the part child Product (app_child) */
                 addRepItems(ctx, data, api_product->part, app_child, heap, product_count,
-                    minBound, maxBound, location, matrix);
+                    partMin, partMax, part_identity, part_matrix);
             }
         }
 

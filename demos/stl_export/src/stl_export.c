@@ -64,6 +64,25 @@
  * @param out_normal Output normal array.
  * @return int 1 if the triangle is valid, 0 if it is degenerate (zero area).
  */
+/* PRC_GRAPHICS_Removed (0x2000), as it appears in the high byte of a
+   behaviour field, behavior_bit_field2: a product or item that has been
+   removed and no longer appears (see prc_api_product). */
+#define PRC_REMOVED_BYTE2 0x20
+
+/* tess_visited values: a part draws the tessellation, or only removed ones do */
+#define TESS_DRAWN 1
+#define TESS_REMOVED_ONLY 2
+
+/* A representation item waiting to be visited, with the transform it is
+   placed by (its product's, then the local coordinate systems of the sets
+   that hold it), and whether it lies under something removed. */
+typedef struct
+{
+    const prc_api_part *item;
+    prc_api_transform xform;
+    int removed;
+} item_visit;
+
 static int compute_geometric_normal(const float v1[3], const float v2[3], const float v3[3], float out_normal[3])
 {
     /* In double, and only an exactly zero area counts as degenerate. A fixed
@@ -109,19 +128,19 @@ static void write_stl_triangle(FILE *out, const float v1[3], const float v2[3], 
 }
 
 /**
- * @brief Applies a transform's LINEAR (3x3, no translation) part to a normal
- * vector and re-normalizes. Exact for rotation + uniform scale (including
- * reflections); an approximation under non-uniform scale/shear, which would
- * strictly need the inverse-transpose of the linear part -- not attempted
- * here since PRC_TRANSFORMATION_NonUniformScale/NonOrtho are optional,
- * uncommon flags and getting this exactly right adds real complexity for a
- * rare case. Positions (see prc_api_transform_point, used on actual vertex
- * data below) are always exact regardless.
+ * @brief Moves a normal into place by a transform and re-normalizes. A
+ * normal takes the cofactor matrix of the transform's linear (3x3) part: its
+ * inverse transpose times its determinant, so with the determinant's sign it
+ * points the same way and stays perpendicular to the surface under
+ * non-uniform scale and shear too (local coordinate systems do scale
+ * unevenly). Positions (see prc_api_transform_point) are always exact.
  */
 static void transform_normal(const prc_api_transform *xform, const float in[3], float out[3])
 {
     const double *m;
+    double c[9], det;
     float len;
+    int i;
 
     if (xform == NULL || xform->is_identity)
     {
@@ -130,9 +149,25 @@ static void transform_normal(const prc_api_transform *xform, const float in[3], 
     }
 
     m = xform->matrix;
-    out[0] = (float)(m[0] * in[0] + m[4] * in[1] + m[8]  * in[2]);
-    out[1] = (float)(m[1] * in[0] + m[5] * in[1] + m[9]  * in[2]);
-    out[2] = (float)(m[2] * in[0] + m[6] * in[1] + m[10] * in[2]);
+    /* c is column-major, as m is */
+    c[0] = m[5] * m[10] - m[6] * m[9];
+    c[1] = m[6] * m[8] - m[4] * m[10];
+    c[2] = m[4] * m[9] - m[5] * m[8];
+    c[3] = m[9] * m[2] - m[10] * m[1];
+    c[4] = m[10] * m[0] - m[8] * m[2];
+    c[5] = m[8] * m[1] - m[9] * m[0];
+    c[6] = m[1] * m[6] - m[2] * m[5];
+    c[7] = m[2] * m[4] - m[0] * m[6];
+    c[8] = m[0] * m[5] - m[1] * m[4];
+    det = m[0] * c[0] + m[4] * c[3] + m[8] * c[6];
+    if (det < 0.0)
+    {
+        for (i = 0; i < 9; i++)
+            c[i] = -c[i];
+    }
+    out[0] = (float)(c[0] * in[0] + c[3] * in[1] + c[6] * in[2]);
+    out[1] = (float)(c[1] * in[0] + c[4] * in[1] + c[7] * in[2]);
+    out[2] = (float)(c[2] * in[0] + c[5] * in[1] + c[8] * in[2]);
 
     len = sqrtf(out[0] * out[0] + out[1] * out[1] + out[2] * out[2]);
     if (len > EPSILON)
@@ -155,12 +190,29 @@ static void transform_normal(const prc_api_transform *xform, const float in[3], 
  * @param v3 Third vertex data structure.
  * @param xform Accumulated world-space transform for this instance (NULL or
  *              identity for no-op) -- applied to positions exactly, normals
- *              via their linear part only (see transform_normal).
+ *              by its cofactor matrix (see transform_normal). A transform
+ *              that mirrors turns the corners' order over, so the last two
+ *              are swapped back to keep the facet facing outward.
  * @param count Pointer to the accumulated counter of exported triangles.
  */
 static void process_and_write_triangle(FILE *out, prc_api_vertex v1, prc_api_vertex v2, prc_api_vertex v3, const prc_api_transform *xform, uint32_t *count)
 {
     float computed_n[3];
+
+    if (xform != NULL && !xform->is_identity)
+    {
+        const double *m = xform->matrix;
+        double det = m[0] * (m[5] * m[10] - m[9] * m[6])
+                   - m[4] * (m[1] * m[10] - m[9] * m[2])
+                   + m[8] * (m[1] * m[6] - m[5] * m[2]);
+
+        if (det < 0.0)
+        {
+            prc_api_vertex t = v2;
+            v2 = v3;
+            v3 = t;
+        }
+    }
 
     if (xform != NULL && !xform->is_identity)
     {
@@ -340,67 +392,102 @@ static void write_tessellation_geometry(prc_context *ctx, prc_api_data data, FIL
  * local origin instead of mounted on its bracket).
  *
  * A part's geometry is either on its items or, when it is a single B-rep
- * item, on the part itself; both are written. Tessellations are looked up
- * by part_detail_index, the API's numbering.
+ * item, on the part itself; both are written. An item with a local
+ * coordinate system (biased_local_coordinate_index) is placed by it within
+ * its parent's frame, as nanoPRC returns its vertices in that system's
+ * frame (see prc_api_get_local_coordinate_system). Tessellations are looked
+ * up by part_detail_index, the API's numbering.
  *
- * Marks each visited tessellation index in tess_visited so the caller can
- * report any tessellation no part draws.
+ * A product or item marked removed (PRC_GRAPHICS_Removed) is not written,
+ * nor anything under it: Adobe Acrobat does not draw it.
+ *
+ * Marks each tessellation in tess_visited, TESS_DRAWN or, when only removed
+ * products or items draw it, TESS_REMOVED_ONLY, so the caller can report
+ * any tessellation no part draws.
  */
 static void export_node_recursive(prc_context *ctx, prc_api_data data, FILE *stl_file,
     prc_api_tess *tesses, uint32_t total_tessellations, prc_api_product *node,
-    prc_api_transform parent_world, uint32_t *triangles_exported, uint8_t *tess_visited)
+    prc_api_transform parent_world, int removed, uint32_t *triangles_exported, uint8_t *tess_visited)
 {
     prc_api_transform node_world = parent_world;
     size_t k;
 
+    if (node->behavior_bit_field2 & PRC_REMOVED_BYTE2)
+        removed = 1;
     prc_api_update_transform(ctx, &node_world, &node->location);
 
     if (node->part != NULL)
     {
         /* The part and every representation item under it, sets included:
            an item set holds its own items, to a depth the file chooses, so
-           they are visited from an explicit stack rather than by recursion. */
-        const prc_api_part **stack;
+           they are visited from an explicit stack rather than by recursion.
+           Each carries the transform it is placed by. */
+        item_visit *stack;
         size_t depth = 0, capacity = 16;
 
-        stack = (const prc_api_part **)malloc(capacity * sizeof(*stack));
+        stack = (item_visit *)malloc(capacity * sizeof(*stack));
         if (stack != NULL)
-            stack[depth++] = node->part;
+        {
+            stack[depth].item = node->part;
+            stack[depth].xform = node_world;
+            stack[depth++].removed = removed;
+        }
         while (depth > 0)
         {
-            const prc_api_part *item = stack[--depth];
+            item_visit v = stack[--depth];
+            const prc_api_part *item = v.item;
             size_t ri;
 
+            if (item->behavior_bit_field2 & PRC_REMOVED_BYTE2)
+                v.removed = 1;
+            if (item->biased_local_coordinate_index != 0)
+            {
+                prc_api_transform own;
+
+                if (prc_api_get_local_coordinate_system(ctx, data, item->tess_file_index,
+                        item->biased_local_coordinate_index, &own) == 0)
+                    prc_api_update_transform(ctx, &v.xform, &own);
+            }
             /* part_detail_index, not biased_tess_index - 1: the tessellations
                were initialized by the API's numbering, which differs from the
                file's wherever parts share a file tessellation (see prc_api.h). */
             if (item->biased_tess_index > 0 && item->part_detail_index < total_tessellations)
             {
                 uint32_t tess_idx = item->part_detail_index;
-                write_tessellation_geometry(ctx, data, stl_file, &tesses[tess_idx], &node_world, triangles_exported);
-                tess_visited[tess_idx] = 1;
+
+                if (v.removed)
+                {
+                    if (tess_visited[tess_idx] == 0)
+                        tess_visited[tess_idx] = TESS_REMOVED_ONLY;
+                }
+                else
+                {
+                    write_tessellation_geometry(ctx, data, stl_file, &tesses[tess_idx], &v.xform, triangles_exported);
+                    tess_visited[tess_idx] = TESS_DRAWN;
+                }
             }
             for (ri = item->num_rep_items; ri > 0; ri--)
             {
                 if (depth == capacity)
                 {
-                    const prc_api_part **grown =
-                        (const prc_api_part **)realloc((void *)stack, capacity * 2 * sizeof(*stack));
+                    item_visit *grown = (item_visit *)realloc(stack, capacity * 2 * sizeof(*stack));
                     if (grown == NULL)
                         break;
                     stack = grown;
                     capacity *= 2;
                 }
-                stack[depth++] = &item->rep_items[ri - 1];
+                stack[depth].item = &item->rep_items[ri - 1];
+                stack[depth].xform = v.xform;
+                stack[depth++].removed = v.removed;
             }
         }
-        free((void *)stack);
+        free(stack);
     }
 
     for (k = 0; k < node->num_children; k++)
     {
         export_node_recursive(ctx, data, stl_file, tesses, total_tessellations,
-            &node->children[k], node_world, triangles_exported, tess_visited);
+            &node->children[k], node_world, removed, triangles_exported, tess_visited);
     }
 }
 
@@ -547,7 +634,7 @@ int main(int argc, char *argv[])
         prc_api_transform root_transform;
         prc_api_set_transform_identity(ctx, &root_transform);
         export_node_recursive(ctx, data, stl_file, tesses, total_tessellations,
-            model_tree, root_transform, &triangles_exported, tess_visited);
+            model_tree, root_transform, 0, &triangles_exported, tess_visited);
     }
 
     /* A surface tessellation that no part draws is reported, not written.
@@ -555,12 +642,24 @@ int main(int argc, char *argv[])
        tessellations at the origin, on the strength of files that seemed to
        hold geometry the tree never reached; in every case checked, the tree
        did reach it, and the export had looked it up by the file's numbering
-       instead of the API's (see export_node_recursive). */
-    for (uint32_t i = 0; i < total_tessellations; i++)
+       instead of the API's (see export_node_recursive). One that only
+       removed products or items draw is counted instead. */
     {
-        if (!tess_visited[i] &&
-            (tesses[i].type == PRC_API_TESS_3D || tesses[i].type == PRC_API_TESS_3D_Compressed))
-            fprintf(stderr, "Warning: tessellation %u is not drawn by any part; not exported.\n", i);
+        uint32_t removed_only = 0;
+
+        for (uint32_t i = 0; i < total_tessellations; i++)
+        {
+            if (tess_visited[i] == TESS_DRAWN ||
+                (tesses[i].type != PRC_API_TESS_3D && tesses[i].type != PRC_API_TESS_3D_Compressed))
+                continue;
+            if (tess_visited[i] == TESS_REMOVED_ONLY)
+                removed_only++;
+            else
+                fprintf(stderr, "Warning: tessellation %u is not drawn by any part; not exported.\n", i);
+        }
+        if (removed_only > 0)
+            printf("%u tessellation(s) left out: only products or items marked removed draw them.\n",
+                (unsigned)removed_only);
     }
 
     /* Step 4: Seek back to the header placeholder offset to patch the final count */

@@ -173,7 +173,7 @@ private:
 
     void addRepItems(prc_context *ctx, prc_api_data data, prc_api_part *api_part,
         Product *app_product, Product *heap, uint32_t *product_count,
-        Vector4 *minBound, Vector4 *maxBound, prc_api_transform location, Matrix4 matrix);
+        Vector4 *minBound, Vector4 *maxBound, uint8_t is_identity, Matrix4 matrix);
 };
 
 #endif // _SCENE_H_

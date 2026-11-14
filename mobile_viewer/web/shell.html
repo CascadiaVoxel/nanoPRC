@@ -1,43 +1,149 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
 <head>
-  <meta charset="utf-8">
-  <title>nanoPRC Web Viewer</title>
-  <style>
-    html, body { margin: 0; height: 100%; background: #111; overflow: hidden; }
-    canvas { display: block; width: 100vw; height: 100vh; outline: none; }
-    #status {
-      position: fixed; left: 8px; bottom: 8px; margin: 0;
-      font: 12px monospace; color: #9f9; background: rgba(0,0,0,0.5);
-      padding: 4px 8px; border-radius: 4px; pointer-events: none;
-    }
-  </style>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>nanoPRC Web Viewer</title>
+    <style>
+        html, body {
+            margin: 0;
+            padding: 0;
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+            background: #141820;
+            font-family: sans-serif;
+        }
+
+        #canvas {
+            display: block;
+            width: 100vw;
+            height: 100vh;
+        }
+
+        #status {
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            color: #e0e6f0;
+            font-size: 16px;
+            pointer-events: none;
+        }
+
+        #hud-banner {
+            position: fixed;
+            top: 14px;
+            left: 50%;
+            transform: translateX(-50%);
+            padding: 8px 16px;
+            border-radius: 8px;
+            background: rgba(15, 20, 28, 0.72);
+            border: 1px solid rgba(255, 255, 255, 0.14);
+            color: #e6ecf5;
+            font-size: 13px;
+            letter-spacing: 0.2px;
+            text-align: center;
+            pointer-events: none;
+            z-index: 100;
+            backdrop-filter: blur(4px);
+            white-space: nowrap;
+        }
+
+            #hud-banner strong {
+                color: #ffffff;
+            }
+
+        #drop-overlay {
+            display: none;
+            position: fixed;
+            inset: 12px;
+            border: 3px dashed #4da3ff;
+            border-radius: 12px;
+            background: rgba(20, 40, 70, 0.55);
+            color: #ffffff;
+            font-size: 22px;
+            font-weight: bold;
+            align-items: center;
+            justify-content: center;
+            pointer-events: none;
+            z-index: 9999;
+        }
+
+            #drop-overlay.active {
+                display: flex;
+            }
+    </style>
 </head>
 <body>
-  <canvas id="canvas" oncontextmenu="event.preventDefault()" tabindex="-1"></canvas>
-  <p id="status">loading...</p>
+    <div id="status">loading...</div>
+    <div id="hud-banner">
+        <strong>Powered by nanoPRC.</strong> Drag and drop PRC or PDF files onto page.
+    </div>
+    <div id="drop-overlay">Drop .pdf or .prc file to view</div>
+    <canvas id="canvas" oncontextmenu="event.preventDefault()" tabindex="-1"></canvas>
 
-  {{{ SCRIPT }}}
+    {{{ SCRIPT }}}
 
-  <script>
-    /* MODULARIZE=1 means the glue script above only defines the
-       NanoPRCViewerModule factory -- nothing runs until we call it.
-       canvasElement is handed to SDL3's Emscripten video backend, which
-       looks for Module.canvas; preloaded files (examples/cube.pdf baked in
-       at build time via --preload-file) are already staged into MEMFS by
-       the time this Promise resolves, so main() finds them exactly like a
-       normal file read. */
-    var canvasElement = document.getElementById('canvas');
-    var statusElement = document.getElementById('status');
+    <script>
+        const statusEl = document.getElementById('status');
+        const dropOverlay = document.getElementById('drop-overlay');
+        const canvasEl = document.getElementById('canvas');
+        let wasmInstance = null;
+        let dragCounter = 0;
 
-    NanoPRCViewerModule({ canvas: canvasElement })
-      .then(function () {
-        statusElement.textContent = 'running';
-      })
-      .catch(function (err) {
-        statusElement.textContent = 'failed to start: ' + err;
-        console.error('nanoPRC WASM module failed to initialize', err);
-      });
-  </script>
+        NanoPRCViewerModule({
+            canvas: canvasEl,
+            onRuntimeInitialized: function () {
+                wasmInstance = this;
+                statusEl.style.display = 'none';
+            }
+        }).then(function (instance) {
+            wasmInstance = instance;
+            statusEl.style.display = 'none';
+        });
+
+        window.addEventListener('dragenter', function (e) {
+            e.preventDefault();
+            dragCounter++;
+            dropOverlay.classList.add('active');
+        });
+
+        window.addEventListener('dragleave', function (e) {
+            e.preventDefault();
+            dragCounter--;
+            if (dragCounter <= 0) {
+                dragCounter = 0;
+                dropOverlay.classList.remove('active');
+            }
+        });
+
+        window.addEventListener('dragover', function (e) {
+            e.preventDefault();
+            if (e.dataTransfer) {
+                e.dataTransfer.dropEffect = 'copy';
+            }
+        });
+
+        window.addEventListener('drop', async function (e) {
+            e.preventDefault();
+            dragCounter = 0;
+            dropOverlay.classList.remove('active');
+
+            if (!wasmInstance || !e.dataTransfer || !e.dataTransfer.files || e.dataTransfer.files.length === 0) {
+                return;
+            }
+
+            const file = e.dataTransfer.files[0];
+            const buffer = await file.arrayBuffer();
+            const bytes = new Uint8Array(buffer);
+
+            try { wasmInstance.FS.mkdir('/tmp'); } catch (err) { }
+            const virtualPath = '/tmp/' + file.name;
+            wasmInstance.FS.writeFile(virtualPath, bytes);
+
+            wasmInstance.ccall('OnWebFileDropped', null, ['string'], [virtualPath]);
+        });
+    </script>
 </body>
 </html>

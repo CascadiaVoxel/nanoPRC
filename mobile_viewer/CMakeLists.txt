@@ -1,12 +1,68 @@
 cmake_minimum_required(VERSION 3.16)
 project(mobile_viewer CXX)
 
-set(CMAKE_CXX_STANDARD 14)
+set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-set(MOBILE_VIEWER_SOURCES 
+set(MOBILE_VIEWER_SOURCES
+    "src/camera.cpp"
+    "src/texture.cpp"
+    "src/product.cpp"
+    "src/scene.cpp"
+    "src/mesh.cpp"
     "src/main.cpp"
+    "src/shadow.cpp"
+    "src/skybox.cpp"
+    "src/shader.cpp"
+    "src/composite.cpp"
+    "../thirdparty/imgui/imgui.cpp"
+	"../thirdparty/imgui/imgui_draw.cpp"
+	"../thirdparty/imgui/imgui_widgets.cpp"
+	"../thirdparty/imgui/imgui_tables.cpp"
+	"../thirdparty/imgui/backends/imgui_impl_sdl3.cpp"
+	"../thirdparty/imgui/backends/imgui_impl_opengl3.cpp"
 )
+
+# pack shaders into header files (guarded, skip missing source files)
+message("Creating shader output")
+set(SHADER_SRC_DIR ${CMAKE_CURRENT_SOURCE_DIR}/shaders)
+set(SHADER_OUT_DIR src/shaders)
+
+file(MAKE_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/src/shaders)
+
+set(GENERATOR_SCRIPT ${CMAKE_CURRENT_SOURCE_DIR}/../demos/viewer/cmake/shader_to_header.cmake)
+
+# helper macro to add a shader only if the source exists
+macro(add_shader_if_exists SRC_PATH OUT_REL HEADER_VAR VAR_NAME)
+    if(EXISTS "${SRC_PATH}")
+        set(OUT_PATH "${CMAKE_CURRENT_BINARY_DIR}/${OUT_REL}")
+        message("OUT_PATH for shader is ${OUT_PATH} for source ${SRC_PATH} with variable name ${VAR_NAME}")
+        add_custom_command(
+            OUTPUT ${OUT_PATH}
+            COMMAND ${CMAKE_COMMAND} -DINPUT_FILE=${SRC_PATH} -DOUTPUT_FILE=${OUT_PATH} -DVARIABLE_NAME=${VAR_NAME} -P ${GENERATOR_SCRIPT}
+            DEPENDS ${SRC_PATH}
+            COMMENT "Generating ${OUT_REL}"
+        )
+        list(APPEND GENERATED_SHADER_HEADERS ${OUT_PATH})
+        set(${HEADER_VAR} ${OUT_REL} PARENT_SCOPE)
+    else()
+        message(WARNING "Shader source not found: ${SRC_PATH} -> skipping generation of ${OUT_REL}")
+    endif()
+endmacro()
+
+# call the helper for each shader you want to generate
+add_shader_if_exists("${SHADER_SRC_DIR}/generic.vert" "${SHADER_OUT_DIR}/generic.vert.h" GENERIC_VERT_HEADER generic_vert_source)
+add_shader_if_exists("${SHADER_SRC_DIR}/generic.frag" "${SHADER_OUT_DIR}/generic.frag.h" GENERIC_FRAG_HEADER generic_frag_source)
+add_shader_if_exists("${SHADER_SRC_DIR}/skybox.vert" "${SHADER_OUT_DIR}/skybox.vert.h" SKYBOX_VERT_HEADER skybox_vert_source)
+add_shader_if_exists("${SHADER_SRC_DIR}/skybox.frag" "${SHADER_OUT_DIR}/skybox.frag.h" SKYBOX_FRAG_HEADER skybox_frag_source)
+add_shader_if_exists("${SHADER_SRC_DIR}/shadow.vert" "${SHADER_OUT_DIR}/shadow.vert.h" SHADOW_VERT_HEADER shadow_vert_source)
+add_shader_if_exists("${SHADER_SRC_DIR}/shadow.frag" "${SHADER_OUT_DIR}/shadow.frag.h" SHADOW_FRAG_HEADER shadow_frag_source)
+add_shader_if_exists("${SHADER_SRC_DIR}/composite.vert" "${SHADER_OUT_DIR}/composite.vert.h" COMPOSITE_VERT_HEADER composite_vert_source)
+add_shader_if_exists("${SHADER_SRC_DIR}/composite.frag" "${SHADER_OUT_DIR}/composite.frag.h" COMPOSITE_FRAG_HEADER composite_frag_source)
+add_shader_if_exists("${SHADER_SRC_DIR}/gui.vert" "${SHADER_OUT_DIR}/gui.vert.h" GUI_VERT_HEADER gui_vert_source)
+add_shader_if_exists("${SHADER_SRC_DIR}/gui.frag" "${SHADER_OUT_DIR}/gui.frag.h" GUI_FRAG_HEADER gui_frag_source)
+add_shader_if_exists("${SHADER_SRC_DIR}/downsample.frag" "${SHADER_OUT_DIR}/downsample.frag.h" DOWNSAMPLE_FRAG_HEADER downsample_frag_source)
+add_shader_if_exists("${SHADER_SRC_DIR}/upsample.frag" "${SHADER_OUT_DIR}/upsample.frag.h" UPSAMPLE_FRAG_HEADER upsample_frag_source)
 
 # Branch target compilation rules dynamically based on configuration tags
 if(ANDROID)
@@ -57,17 +113,20 @@ elseif(EMSCRIPTEN)
     target_link_libraries(mobile_viewer PRIVATE prc_static SDL3::SDL3)
     set_target_properties(mobile_viewer PROPERTIES SUFFIX ".html")
     target_link_options(mobile_viewer PRIVATE
+        "-sASYNCIFY_STACK_SIZE=65536"
         "-sUSE_WEBGL2=1"
         "-sFULL_ES3=1"
         "-sALLOW_MEMORY_GROWTH=1"
         "-sASYNCIFY=1"
         "-sSTACK_SIZE=4194304"
+        "-sEXPORTED_FUNCTIONS=[\"_main\",\"_OnWebFileDropped\"]"
         "-sEXPORTED_RUNTIME_METHODS=[\"FS\",\"ccall\",\"cwrap\"]"
         "-sMODULARIZE=1"
         "-sEXPORT_NAME=NanoPRCViewerModule"
         "--preload-file=${CMAKE_SOURCE_DIR}/examples/triangle.pdf@/triangle.pdf"
         "--shell-file=${CMAKE_CURRENT_SOURCE_DIR}/web/shell.html"
     )
+
     # Debug-only diagnostics: -g keeps DWARF debug info in the wasm binary so
     # browser-side C/C++ source debugging works (see mobile_viewer/README.md
     # -- Chrome/Edge's "C/C++ DevTools Support (DWARF)" extension, or VS
@@ -102,9 +161,27 @@ else()
     )
 endif()
 
+    # if none found, warn (optional)
+if(NOT GENERATED_SHADER_HEADERS)
+    message(WARNING "No shader headers will be generated: no shader source files found in ${SHADER_SRC_DIR}")
+else()
+    add_custom_target(generate_nano_prc_shaders ALL DEPENDS ${GENERATED_SHADER_HEADERS})
+    add_dependencies(mobile_viewer generate_nano_prc_shaders)
+
+    # Add the generated headers to the target sources and mark GENERATED
+    target_sources(mobile_viewer PRIVATE ${GENERATED_SHADER_HEADERS})
+    set_source_files_properties(${GENERATED_SHADER_HEADERS} PROPERTIES GENERATED TRUE)
+endif()
+
 add_subdirectory(
     "${CMAKE_CURRENT_SOURCE_DIR}/../thirdparty/glm" 
     "${CMAKE_CURRENT_BINARY_DIR}/glm_build"
 )
-target_include_directories(mobile_viewer PRIVATE "src")
+
+target_include_directories(mobile_viewer PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../thirdparty/MatrixUtil/MatrixUtil/include)
+target_include_directories(mobile_viewer PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../thirdparty/imgui)
+
+target_include_directories(mobile_viewer PRIVATE
+    "src"
+    "${CMAKE_CURRENT_BINARY_DIR}/src")
 target_link_libraries(mobile_viewer PRIVATE glm::glm-header-only)

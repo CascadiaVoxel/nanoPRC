@@ -23,6 +23,20 @@ static std::string safe_string(const char* cstr) {
     return cstr ? std::string(cstr) : std::string();
 }
 
+/* A name as a Python str. PRC names are not always UTF-8 (prc-db holds names
+   in Latin-1), and converting those strictly raises UnicodeDecodeError, so
+   bytes that are not UTF-8 become U+FFFD. */
+static py::str lenient_str(const char* cstr) {
+    if (!cstr) {
+        return py::str("");
+    }
+    PyObject* s = PyUnicode_DecodeUTF8(cstr, static_cast<Py_ssize_t>(std::strlen(cstr)), "replace");
+    if (!s) {
+        throw py::error_already_set();
+    }
+    return py::reinterpret_steal<py::str>(s);
+}
+
 static py::object attribute_value_to_python(const prc_api_attribute_entry& entry)
 {
     switch (entry.type) {
@@ -679,6 +693,34 @@ public:
         return node_->part ? attributes_to_python(&node_->part->attributes) : py::list();
     }
 
+    /* This node's own placement, relative to its parent: 16 doubles,
+       column-major, or None when it has none (identity). */
+    py::object location() const {
+        if (!node_->location_set || node_->location.is_identity) {
+            return py::none();
+        }
+        py::list m;
+        for (int i = 0; i < 16; ++i) {
+            m.append(node_->location.matrix[i]);
+        }
+        return std::move(m);
+    }
+
+    uint32_t behavior_bit_field1() const {
+        return node_->behavior_bit_field1;
+    }
+
+    uint32_t behavior_bit_field2() const {
+        return node_->behavior_bit_field2;
+    }
+
+    /* PRC_GRAPHICS_Removed (0x2000): 0x20 in behavior_bit_field2 */
+    bool is_removed() const {
+        return (node_->behavior_bit_field2 & 0x20) != 0;
+    }
+
+    py::object part_item_tree() const;  /* defined after Document */
+
     std::string repr() const {
         return "ModelNode(name='" + name() + "', children=" + std::to_string(num_children()) + ")";
     }
@@ -795,6 +837,30 @@ public:
 
     prc_context* raw() const {
         return owner_->raw();
+    }
+
+    /* Counts the tessellations once (prc_api_get_number_tessellations),
+       which is what gives each part and item its part_detail_index */
+    void ensure_tessellations_counted() {
+        initialize_tessellations();
+    }
+
+    /* The matrix of a part's or representation item's local coordinate
+       system (prc_api_get_local_coordinate_system): 16 doubles,
+       column-major, or None when there is none. */
+    py::object local_coordinate_system(uint32_t file_index, uint32_t biased_index) const {
+        if (!data_ || biased_index == 0) {
+            return py::none();
+        }
+        prc_api_transform t;
+        if (prc_api_get_local_coordinate_system(owner_->raw(), data_, file_index, biased_index, &t) != 0) {
+            return py::none();
+        }
+        py::list m;
+        for (int i = 0; i < 16; ++i) {
+            m.append(t.matrix[i]);
+        }
+        return std::move(m);
     }
 
     void print_error_stack() const {
@@ -1335,6 +1401,55 @@ private:
     uint32_t exact_geom_offset_ = 0;
 };
 
+/* The node's part and its representation items, as nested dicts:
+   name, tess_index (the API's tessellation index, part_detail_index, or None
+   when it draws none), tess_file_index, biased_local_coordinate_index,
+   local_coordinate_system (16 doubles, column-major, or None),
+   behavior_bit_field1/2, is_removed, and items (the same, for each nested
+   item). None when the node has no part. Items nest in sets to a depth the
+   file chooses, so they are built from an explicit stack. */
+py::object ModelNode::part_item_tree() const {
+    if (!node_->part) {
+        return py::none();
+    }
+    /* part_detail_index is only set once the tessellations are counted;
+       before that every item reads 0 */
+    if (owner_) {
+        owner_->ensure_tessellations_counted();
+    }
+    py::dict root;
+    std::vector<std::pair<const prc_api_part*, py::dict>> stack;
+    stack.emplace_back(node_->part, root);
+    while (!stack.empty()) {
+        const prc_api_part* item = stack.back().first;
+        py::dict d = stack.back().second;
+        stack.pop_back();
+
+        d["name"] = lenient_str(item->name);
+        if (item->biased_tess_index > 0) {
+            d["tess_index"] = item->part_detail_index;
+        } else {
+            d["tess_index"] = py::none();
+        }
+        d["tess_file_index"] = item->tess_file_index;
+        d["biased_local_coordinate_index"] = item->biased_local_coordinate_index;
+        d["local_coordinate_system"] =
+            owner_ ? owner_->local_coordinate_system(item->tess_file_index, item->biased_local_coordinate_index)
+                   : py::none();
+        d["behavior_bit_field1"] = static_cast<uint32_t>(item->behavior_bit_field1);
+        d["behavior_bit_field2"] = static_cast<uint32_t>(item->behavior_bit_field2);
+        d["is_removed"] = (item->behavior_bit_field2 & 0x20) != 0;
+        py::list items;
+        for (size_t i = 0; i < item->num_rep_items; ++i) {
+            py::dict child;
+            items.append(child);
+            stack.emplace_back(&item->rep_items[i], child);
+        }
+        d["items"] = items;
+    }
+    return std::move(root);
+}
+
 std::shared_ptr<Document> context_open(const std::shared_ptr<Context>& ctx, const std::string& infile) {
     if (!ctx || !ctx->raw()) {
         throw std::runtime_error("Context is not initialized");
@@ -1403,6 +1518,18 @@ PYBIND11_MODULE(_core, m) {
                "Return model-node attributes as a list of {base_title, entries[]} dictionaries.")
            .def("part_attributes", &ModelNode::part_attributes,
                "Return part attributes as a list of {base_title, entries[]} dictionaries.")
+        .def_property_readonly("location", &ModelNode::location,
+            "This node's placement relative to its parent: 16 doubles, column-major, or None for none.")
+        .def_property_readonly("behavior_bit_field1", &ModelNode::behavior_bit_field1)
+        .def_property_readonly("behavior_bit_field2", &ModelNode::behavior_bit_field2)
+        .def_property_readonly("is_removed", &ModelNode::is_removed,
+            "True when the product is marked removed (PRC_GRAPHICS_Removed); Adobe Acrobat draws "
+            "neither it nor anything under it.")
+        .def("part_item_tree", &ModelNode::part_item_tree,
+            "Return the node's part and its representation items as nested dicts (name, tess_index, "
+            "tess_file_index, biased_local_coordinate_index, local_coordinate_system, behavior_bit_field1/2, "
+            "is_removed, items), or None when it has no part. An item's local_coordinate_system places its "
+            "vertices within its parent's frame.")
         .def("children", &ModelNode::children)
         .def("__repr__", &ModelNode::repr);
 
@@ -1410,6 +1537,10 @@ PYBIND11_MODULE(_core, m) {
         .def_property_readonly("is_open", &Document::is_open)
         .def_property_readonly("number_of_views", &Document::number_of_views)
         .def("get_view", &Document::get_view, py::arg("view_index"), "Return metadata for a named view.")
+        .def("local_coordinate_system", &Document::local_coordinate_system,
+            py::arg("file_index"), py::arg("biased_index"),
+            "Return the matrix of a part's or representation item's local coordinate system "
+            "(its tess_file_index and biased_local_coordinate_index): 16 doubles, column-major, or None.")
         .def("prepare_model_tree", &Document::prepare_model_tree,
              "Compute model tree counts required before tree creation.")
         .def("has_model_tree", &Document::has_model_tree,

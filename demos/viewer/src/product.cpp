@@ -819,6 +819,14 @@ void Product::attach(prc_context *ctx, prc_api_data data, const prc_api_tess *te
     {
         face_max = numGraphicObjects;
     }
+    else if (tess->type == PRC_API_TESS_3D_Compressed && tess->num_faces > 0)
+    {
+        /* Every face of a compressed tessellation gives the whole mesh, with
+           its styles per vertex (see prc_api_get_tessellation_vertices), so
+           the first face draws it all. Walking each face drew the mesh once
+           per face, one copy on top of the other. */
+        face_max = 1;
+    }
     else
     {
         face_max = tess->num_faces;
@@ -985,6 +993,10 @@ void Product::attach(prc_context *ctx, prc_api_data data, const prc_api_tess *te
         /* For the indices offset in the multi-face case */
         vertex_offset += face_vertex_count;
     } // End faces (and materials)
+
+    /* _meshes was sized for every face's primitives; draw only those filled */
+    if (counter < _numMeshes)
+        _numMeshes = counter;
 
     if (combined_vertices.size() > 0 && indices.size() > 0)
         uploadGPU(combined_vertices.size(), combined_vertices.data(), indices);

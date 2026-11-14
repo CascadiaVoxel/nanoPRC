@@ -14,8 +14,7 @@
     along with nanoPRC. If not, see <https://www.gnu.org/licenses/>.
 */
 
-#include <SDL3/SDL.h>
-#include <SDL3/SDL_opengles2.h> //  Provides all GLES/OES type profiles seamlessly.
+#include "gles3_loader.h"
 #include <prc_api.h>
 
 // Core C++ Standard Library
@@ -25,145 +24,14 @@
 #include <cstring>
 #include <cstddef>
 
+#include "camera.h"
+
 // Modern GLM Setup
 #include <glm/glm.hpp>
 #include <glm/ext/matrix_transform.hpp>
 #include <glm/ext/matrix_clip_space.hpp>
 #include <glm/gtc/type_ptr.hpp>
 
-
-// ============================================================================
-// CROSS-PLATFORM OPENGL ES 3.0 FUNCTION POINTER RESOLUTION (WINDOWS/WEB)
-// ============================================================================
-#if defined(SDL_PLATFORM_WIN32) || defined(__EMSCRIPTEN__)
-// VAO Function Layout Profiles
-typedef void (GL_APIENTRY *PFNGLGENVERTEXARRAYSOESPROC) (GLsizei n, GLuint *arrays);
-typedef void (GL_APIENTRY *PFNGLBINDVERTEXARRAYOESPROC) (GLuint array);
-typedef void (GL_APIENTRY *PFNGLDELETEVERTEXARRAYSOESPROC) (GLsizei n, const GLuint *arrays);
-
-// Core VBO / Vertex Attribute Pipeline Function Profiles
-typedef void (GL_APIENTRY *PFNGLGENBUFFERSPROC) (GLsizei n, GLuint *buffers);
-typedef void (GL_APIENTRY *PFNGLBINDBUFFERPROC) (GLenum target, GLuint buffer);
-typedef void (GL_APIENTRY *PFNGLBUFFERDATAPROC) (GLenum target, GLsizeiptr size, const void *data, GLenum usage);
-typedef void (GL_APIENTRY *PFNGLDELETEBUFFERSPROC) (GLsizei n, const GLuint *buffers);
-typedef void (GL_APIENTRY *PFNGLENABLEVERTEXATTRIBARRAYPROC) (GLuint index);
-typedef void (GL_APIENTRY *PFNGLVERTEXATTRIBPOINTERPROC) (GLuint index, GLint size, GLenum type, GLboolean normalized, GLsizei stride, const void *pointer);
-
-// GLES 3.0 Shader Pipeline Function Profiles
-typedef GLuint(GL_APIENTRY *PFNGLCREATESHADERPROC) (GLenum type);
-typedef void (GL_APIENTRY *PFNGLSHADERSOURCEPROC) (GLuint shader, GLsizei count, const GLchar *const *string, const GLint *length);
-typedef void (GL_APIENTRY *PFNGLCOMPILESHADERPROC) (GLuint shader);
-typedef GLuint(GL_APIENTRY *PFNGLCREATEPROGRAMPROC) (void);
-typedef void (GL_APIENTRY *PFNGLATTACHSHADERPROC) (GLuint program, GLuint shader);
-typedef void (GL_APIENTRY *PFNGLLINKPROGRAMPROC) (GLuint program);
-typedef void (GL_APIENTRY *PFNGLUSEPROGRAMPROC) (GLuint program);
-typedef void (GL_APIENTRY *PFNGLDELETESHADERPROC) (GLuint shader);
-typedef void (GL_APIENTRY *PFNGLDELETEPROGRAMPROC) (GLuint program);
-
-typedef GLint(GL_APIENTRY *PFNGLGETUNIFORMLOCATION_PROC) (GLuint program, const GLchar *name);
-typedef void (GL_APIENTRY *PFNGLUNIFORMMATRIX4FV_PROC) (GLint location, GLsizei count, GLboolean transpose, const GLfloat *value);
-
-typedef void (GL_APIENTRY *PFNGLCLEARPROC) (GLbitfield mask);
-typedef void (GL_APIENTRY *PFNGLCLEARCOLORPROC) (GLfloat red, GLfloat green, GLfloat blue, GLfloat alpha);
-typedef void (GL_APIENTRY *PFNGLDRAWELEMENTSPROC) (GLenum mode, GLsizei count, GLenum type, const void *indices);
-typedef void (GL_APIENTRY *PFNGLENABLEPROC) (GLenum cap);
-
-// Isolated pointer storage instances avoiding global name collisions
-static PFNGLGENVERTEXARRAYSOESPROC win_glGenVertexArrays = nullptr;
-static PFNGLBINDVERTEXARRAYOESPROC win_glBindVertexArray = nullptr;
-static PFNGLDELETEVERTEXARRAYSOESPROC win_glDeleteVertexArrays = nullptr;
-static PFNGLGENBUFFERSPROC win_glGenBuffers = nullptr;
-static PFNGLBINDBUFFERPROC win_glBindBuffer = nullptr;
-static PFNGLBUFFERDATAPROC win_glBufferData = nullptr;
-static PFNGLDELETEBUFFERSPROC win_glDeleteBuffers = nullptr;
-static PFNGLENABLEVERTEXATTRIBARRAYPROC win_glEnableVertexAttribArray = nullptr;
-static PFNGLVERTEXATTRIBPOINTERPROC win_glVertexAttribPointer = nullptr;
-
-static PFNGLCREATESHADERPROC win_glCreateShader = nullptr;
-static PFNGLSHADERSOURCEPROC win_glShaderSource = nullptr;
-static PFNGLCOMPILESHADERPROC win_glCompileShader = nullptr;
-static PFNGLCREATEPROGRAMPROC win_glCreateProgram = nullptr;
-static PFNGLATTACHSHADERPROC win_glAttachShader = nullptr;
-static PFNGLLINKPROGRAMPROC win_glLinkProgram = nullptr;
-static PFNGLUSEPROGRAMPROC win_glUseProgram = nullptr;
-static PFNGLDELETESHADERPROC win_glDeleteShader = nullptr;
-static PFNGLDELETEPROGRAMPROC win_glDeleteProgram = nullptr;
-static PFNGLGETUNIFORMLOCATION_PROC win_glGetUniformLocation = nullptr;
-static PFNGLUNIFORMMATRIX4FV_PROC win_glUniformMatrix4fv = nullptr;
-
-static PFNGLCLEARPROC win_glClear = nullptr;
-static PFNGLCLEARCOLORPROC win_glClearColor = nullptr;
-static PFNGLDRAWELEMENTSPROC win_glDrawElements = nullptr;
-static PFNGLENABLEPROC win_glEnable = nullptr;
-
-#define glGenVertexArrays win_glGenVertexArrays
-#define glBindVertexArray win_glBindVertexArray
-#define glDeleteVertexArrays win_glDeleteVertexArrays
-#define glGenBuffers win_glGenBuffers
-#define glBindBuffer win_glBindBuffer
-#define glBufferData win_glBufferData
-#define glDeleteBuffers win_glDeleteBuffers
-#define glEnableVertexAttribArray win_glEnableVertexAttribArray
-#define glVertexAttribPointer win_glVertexAttribPointer
-
-#define glCreateShader win_glCreateShader
-#define glShaderSource win_glShaderSource
-#define glCompileShader win_glCompileShader
-#define glCreateProgram win_glCreateProgram
-#define glAttachShader win_glAttachShader
-#define glLinkProgram win_glLinkProgram
-#define glUseProgram win_glUseProgram
-#define glDeleteShader win_glDeleteShader
-#define glDeleteProgram win_glDeleteProgram
-#define glGetUniformLocation win_glGetUniformLocation
-#define glUniformMatrix4fv win_glUniformMatrix4fv
-
-// Secure macro bounds translation targets
-#define glClear(mask)                 do { if(win_glClear) win_glClear(mask); } while(0)
-#define glClearColor(r, g, b, a)      do { if(win_glClearColor) win_glClearColor(r, g, b, a); } while(0)
-#define glDrawElements(m, c, t, i)    do { if(win_glDrawElements) win_glDrawElements(m, c, t, i); } while(0)
-#define glEnable(cap)                 do { if(win_glEnable) win_glEnable(cap); } while(0)
-
-
-inline void ResolveGLES3Extensions() {
-    win_glGenVertexArrays = (PFNGLGENVERTEXARRAYSOESPROC)SDL_GL_GetProcAddress("glGenVertexArrays");
-    if (!win_glGenVertexArrays) win_glGenVertexArrays = (PFNGLGENVERTEXARRAYSOESPROC)SDL_GL_GetProcAddress("glGenVertexArraysOES");
-
-    win_glBindVertexArray = (PFNGLBINDVERTEXARRAYOESPROC)SDL_GL_GetProcAddress("glBindVertexArray");
-    if (!win_glBindVertexArray) win_glBindVertexArray = (PFNGLBINDVERTEXARRAYOESPROC)SDL_GL_GetProcAddress("glBindVertexArrayOES");
-
-    win_glDeleteVertexArrays = (PFNGLDELETEVERTEXARRAYSOESPROC)SDL_GL_GetProcAddress("glDeleteVertexArrays");
-    if (!win_glDeleteVertexArrays) win_glDeleteVertexArrays = (PFNGLDELETEVERTEXARRAYSOESPROC)SDL_GL_GetProcAddress("glDeleteVertexArraysOES");
-
-    win_glGenBuffers = (PFNGLGENBUFFERSPROC)SDL_GL_GetProcAddress("glGenBuffers");
-    win_glBindBuffer = (PFNGLBINDBUFFERPROC)SDL_GL_GetProcAddress("glBindBuffer");
-    win_glBufferData = (PFNGLBUFFERDATAPROC)SDL_GL_GetProcAddress("glBufferData");
-    win_glDeleteBuffers = (PFNGLDELETEBUFFERSPROC)SDL_GL_GetProcAddress("glDeleteBuffers");
-    win_glEnableVertexAttribArray = (PFNGLENABLEVERTEXATTRIBARRAYPROC)SDL_GL_GetProcAddress("glEnableVertexAttribArray");
-    win_glVertexAttribPointer = (PFNGLVERTEXATTRIBPOINTERPROC)SDL_GL_GetProcAddress("glVertexAttribPointer");
-
-    win_glCreateShader = (PFNGLCREATESHADERPROC)SDL_GL_GetProcAddress("glCreateShader");
-    win_glShaderSource = (PFNGLSHADERSOURCEPROC)SDL_GL_GetProcAddress("glShaderSource");
-    win_glCompileShader = (PFNGLCOMPILESHADERPROC)SDL_GL_GetProcAddress("glCompileShader");
-    win_glCreateProgram = (PFNGLCREATEPROGRAMPROC)SDL_GL_GetProcAddress("glCreateProgram");
-    win_glAttachShader = (PFNGLATTACHSHADERPROC)SDL_GL_GetProcAddress("glAttachShader");
-    win_glLinkProgram = (PFNGLLINKPROGRAMPROC)SDL_GL_GetProcAddress("glLinkProgram");
-    win_glUseProgram = (PFNGLUSEPROGRAMPROC)SDL_GL_GetProcAddress("glUseProgram");
-    win_glDeleteShader = (PFNGLDELETESHADERPROC)SDL_GL_GetProcAddress("glDeleteShader");
-    win_glDeleteProgram = (PFNGLDELETEPROGRAMPROC)SDL_GL_GetProcAddress("glDeleteProgram");
-
-    win_glGetUniformLocation = (PFNGLGETUNIFORMLOCATION_PROC)SDL_GL_GetProcAddress("glGetUniformLocation");
-    win_glUniformMatrix4fv = (PFNGLUNIFORMMATRIX4FV_PROC)SDL_GL_GetProcAddress("glUniformMatrix4fv");
-
-    win_glClear = (PFNGLCLEARPROC)SDL_GL_GetProcAddress("glClear");
-    win_glClearColor = (PFNGLCLEARCOLORPROC)SDL_GL_GetProcAddress("glClearColor");
-    win_glDrawElements = (PFNGLDRAWELEMENTSPROC)SDL_GL_GetProcAddress("glDrawElements");
-    win_glEnable = (PFNGLENABLEPROC)SDL_GL_GetProcAddress("glEnable");
-}
-#else
-// Android and iOS map these natively at compile time via standard system symbols
-inline void ResolveGLES3Extensions() {}
-#endif
 // ============================================================================
 
 // Unified Engine Runtime States
@@ -201,7 +69,7 @@ struct MobileEngineContext
     // Public C API instances
     prc_context *prcCtx = nullptr;
     prc_api_data prcData = nullptr;
-    prc_api_product *productTreeRoot = nullptr;
+    prc_api_product *modelTreePRC = nullptr;
     prc_api_tess *surfaceTessArray = nullptr;
     prc_api_tess *lineTessArray = nullptr;
     uint32_t numSurfaceTess = 0;
@@ -213,6 +81,20 @@ struct MobileEngineContext
     GLuint ebo = 0;
     GLsizei indexCount = 0;
     GLuint shaderProgram = 0; // Modern GLES program handler reference
+
+    /* This viewers products */
+    Product *viewerProducts;
+    uint32_t numProducts;
+
+    /* Scene bounding box */
+    double bboxMin[3];
+    double bboxMax[3];
+
+    /* Camera */
+    static Camera viewerCamera;
+
+    /* UI */
+    uint8_t showExtraWireOverlays;
 
     // --- 3D Trackball Interaction Space ---
     bool isInteracting = false;
@@ -308,19 +190,420 @@ bool ResolveCrossPlatformAssetPath(const char *relativeAssetName, std::string &o
     return true;
 #endif
 }
+
+static void setCompanionVisibilityRecursive(Product *product, bool enabled)
+{
+    if (product == NULL)
+        return;
+
+    Product *companion = product->renderCompanion();
+    if (companion)
+        companion->setEnabled(enabled);
+
+    for (uint32_t i = 0; i < product->numChildren(); i++)
+    {
+        setCompanionVisibilityRecursive(product->children()[i], enabled);
+    }
+}
+
+void setShowExtraWireOverlays(MobileEngineContext *engine, bool enabled)
+{
+    engine->showExtraWireOverlays = enabled;
+
+    if (engine->viewerProducts != NULL && (engine->numProducts > 0))
+    {
+        setCompanionVisibilityRecursive(&engine->viewerProducts[0], enabled);
+    }
+}
+
+static void setBounds(prc_context *ctx, Product *app_child, prc_api_tess *tess,
+    Matrix4 matrix, uint8_t is_identity, Vector4 *minBound, Vector4 *maxBound)
+{
+    Vector4 min_bound;
+    Vector4 max_bound;
+
+    printf("setBounds: product=%s tess=%p type=%d bbox_min=[%g,%g,%g] bbox_max=[%g,%g,%g]\n",
+        app_child->name(),
+        (void *)tess,
+        tess != NULL ? (int)tess->type : -1,
+        tess != NULL ? tess->bounding_box_min[0] : 0.0,
+        tess != NULL ? tess->bounding_box_min[1] : 0.0,
+        tess != NULL ? tess->bounding_box_min[2] : 0.0,
+        tess != NULL ? tess->bounding_box_max[0] : 0.0,
+        tess != NULL ? tess->bounding_box_max[1] : 0.0,
+        tess != NULL ? tess->bounding_box_max[2] : 0.0);
+
+    /* A tessellation with no vertices has no box (all zeros, see
+       prc_api_tess): it bounds nothing, so it stays out of the scene's */
+    if (!tess->bound_box_initialized)
+    {
+        app_child->setBoundingBox(Vector4(0.0f), Vector4(0.0f));
+        return;
+    }
+
+    app_child->setBoundingBox(tess->bounding_box_min, tess->bounding_box_max);
+
+    /* Adjust the bounding boxes for the model by the matrix */
+    if (!is_identity)
+    {
+        min_bound = matrix * app_child->bboxMin();
+        max_bound = matrix * app_child->bboxMax();
+        app_child->setBoundingBox(min_bound, max_bound);
+    }
+
+    min_bound = app_child->bboxMin();
+    max_bound = app_child->bboxMax();
+
+    minBound->x = std::fmin(min_bound.x, minBound->x);
+    minBound->y = std::fmin(min_bound.y, minBound->y);
+    minBound->z = std::fmin(min_bound.z, minBound->z);
+
+    maxBound->x = std::fmax(max_bound.x, maxBound->x);
+    maxBound->y = std::fmax(max_bound.y, maxBound->y);
+    maxBound->z = std::fmax(max_bound.z, maxBound->z);
+}
+
+/* PRC_GRAPHICS_Removed (0x2000), as it appears in the high byte of a
+   behaviour field, behavior_bit_field2: a product or item that has been
+   removed and no longer appears (see prc_api_product). Adobe Acrobat does not
+   draw it or anything under it; the viewer loads it switched off, so it can
+   still be switched on from the model tree. */
+#define PRC_REMOVED_BYTE2 0x20
+
+static Matrix4 toMatrix4(const prc_api_transform &t)
+{
+    Matrix4 m = Matrix4(1.0f);
+
+    m.columns[0] = Vector4((float)t.matrix[0], (float)t.matrix[1], (float)t.matrix[2], (float)t.matrix[3]);
+    m.columns[1] = Vector4((float)t.matrix[4], (float)t.matrix[5], (float)t.matrix[6], (float)t.matrix[7]);
+    m.columns[2] = Vector4((float)t.matrix[8], (float)t.matrix[9], (float)t.matrix[10], (float)t.matrix[11]);
+    m.columns[3] = Vector4((float)t.matrix[12], (float)t.matrix[13], (float)t.matrix[14], (float)t.matrix[15]);
+    return m;
+}
+
+/* A part or representation item with a local coordinate system
+   (biased_local_coordinate_index) is placed by it within its parent's frame:
+   nanoPRC gives its vertices in that system's frame. Sets app_node's model
+   matrix to it, and folds it into matrix (for bounds); 1 if it has one. */
+static bool placeByLocalCoordinateSystem(prc_context *ctx, prc_api_data data, const prc_api_part *item,
+    Product *app_node, Matrix4 *matrix, uint8_t *is_identity)
+{
+    prc_api_transform own;
+    Matrix4 m;
+
+    if (item->biased_local_coordinate_index == 0 ||
+        prc_api_get_local_coordinate_system(ctx, data, item->tess_file_index,
+            item->biased_local_coordinate_index, &own) != 0 ||
+        own.is_identity)
+        return false;
+    m = toMatrix4(own);
+    app_node->setModel(m);
+    *matrix = *matrix * m;
+    *is_identity = 0;
+    return true;
+}
+
+void addRepItems(MobileEngineContext *engine, prc_api_part *api_part,
+    Product *app_product, Product *heap, uint32_t *product_count,
+    Vector4 *minBound, Vector4 *maxBound, uint8_t is_identity, Matrix4 matrix)
+{
+    uint32_t k;
+    prc_api_tess *tess;
+    prc_api_tess *tess_line;
+
+    app_product->createChildren(api_part->num_rep_items);
+
+    for (k = 0; k < api_part->num_rep_items; k++)
+    {
+        const prc_api_part *item = &api_part->rep_items[k];
+        Matrix4 item_matrix = matrix;
+        uint8_t item_identity = is_identity;
+        /* A removed item is loaded switched off, and kept out of the scene's
+           bounds, so the view fits what is drawn */
+        Vector4 removedMin = Vector4(FLT_MAX), removedMax = Vector4(-FLT_MAX);
+        bool removed = (item->behavior_bit_field2 & PRC_REMOVED_BYTE2) != 0;
+        Vector4 *itemMin = removed ? &removedMin : minBound;
+        Vector4 *itemMax = removed ? &removedMax : maxBound;
+
+        Product *app_child = app_product->getChildFromHeap(k, heap, product_count);
+        *product_count += 1;
+        app_child->setParent(app_product);
+        app_child->setName(api_part->rep_items[k].name);
+        app_child->setModel(Matrix4(1.0f));
+        placeByLocalCoordinateSystem(engine->prcCtx, engine->prcData, item,
+                                     app_child, &item_matrix, &item_identity);
+        if (removed)
+            app_child->setEnabled(false);
+        app_child->setBoundingBox(Vector4(0.0f), Vector4(0.0f));
+        if (api_part->rep_items[k].attributes.num_base_attributes > 0)
+        {
+            app_child->setAttributes(&api_part->rep_items[k].attributes);
+        }
+
+        /* Get the tessellation for this model (part) */
+        tess = prc_api_get_ri_tessellation(engine->prcCtx, api_part, k);
+        tess_line = prc_api_get_ri_line_tessellation(engine->prcCtx, api_part, k);
+
+        printf("addRepItems: rep_item=%s tess=%p tess_line=%p num_rep_items=%zu\n",
+            api_part->rep_items[k].name,
+            (void *)tess,
+            (void *)tess_line,
+            api_part->rep_items[k].num_rep_items);
+
+        if (tess != NULL)
+        {
+            setBounds(engine->prcCtx, app_child, tess, item_matrix, item_identity, itemMin,
+                itemMax);
+
+            /* Attach the model */
+            app_child->attach(engine->prcCtx, engine->prcData, tess);
+
+            if (tess_line != NULL && tess_line->type == PRC_API_TESS_3D_Wire_Extra)
+            {
+                Product *line_companion = &heap[*product_count];
+                *product_count += 1;
+
+                line_companion->setParent(app_child);
+                line_companion->setEnabled(engine->showExtraWireOverlays);
+                line_companion->setModel(Matrix4(1.0f));
+                line_companion->setBoundingBox(app_child->bboxMin(), app_child->bboxMax());
+                line_companion->attach(engine->prcCtx, engine->prcData, tess_line);
+
+                app_child->setRenderCompanion(line_companion);
+            }
+        }
+        if (api_part->rep_items[k].num_rep_items > 0)
+        {
+            /* This is a recursive case */
+            addRepItems(engine, api_part->rep_items + k, app_child, heap,
+                product_count, itemMin, itemMax, item_identity, item_matrix);
+        }
+    }
+}
+
+/* A recursive method that will go through the tree that is provided by nanoPRC and
+   convert it to the tree that is used by this application */
+void convertTree(MobileEngineContext *engine, prc_api_product *api_product,
+    Product *app_product, Product *heap, uint32_t *product_count,
+    Vector4 *minBound, Vector4 *maxBound, uint8_t *font_atlas_created)
+{
+    uint8_t has_tess = prc_api_model_item_is_part(engine->prcCtx, api_product);
+    prc_api_tess *tess;
+    prc_api_transform location = api_product->location;
+    uint32_t num_children;
+    uint32_t k;
+    Matrix4 matrix = Matrix4(1.0f);
+    uint8_t include_part;
+    uint32_t start_index;
+    uint32_t num_markups = prc_api_model_item_number_of_markups(engine->prcCtx, api_product);
+    uint8_t has_part = api_product->part != NULL;
+
+    app_product->setName(api_product->name);
+    app_product->setIsPartNode(false);
+    app_product->setPartNameSameAsProduct(false);
+    if (!location.is_identity)
+    {
+        /* Set the tranformation matrix in the model*/
+        matrix.columns[0] = Vector4((float)location.matrix[0], (float)location.matrix[1],
+            (float)location.matrix[2], (float)location.matrix[3]);
+        matrix.columns[1] = Vector4((float)location.matrix[4], (float)location.matrix[5],
+            (float)location.matrix[6], (float)location.matrix[7]);
+        matrix.columns[2] = Vector4((float)location.matrix[8], (float)location.matrix[9],
+            (float)location.matrix[10], (float)location.matrix[11]);
+        matrix.columns[3] = Vector4((float)location.matrix[12], (float)location.matrix[13],
+            (float)location.matrix[14], (float)location.matrix[15]);
+
+        app_product->setModel(matrix);
+    }
+    else
+    {
+        app_product->setModel(Matrix4(1.0f));
+    }
+
+    if (api_product->attributes.num_base_attributes > 0)
+    {
+        app_product->setAttributes(&api_product->attributes);
+    }
+    *product_count += 1;
+
+    /* Special yoga pose if we have a part */
+    include_part = (has_part != 0) &&
+        (api_product->part->num_rep_items > 0 || api_product->part->tess != NULL);
+    start_index = include_part ? 1 : 0;
+
+    if (api_product->num_children > 0 || include_part)
+    {
+        num_children = api_product->num_children + include_part;
+        app_product->createChildren(num_children); /* Get num_children ptr to ptrs */
+
+        if (include_part)
+        {
+            /* Get the part child and set the parent as the product */
+            Product *app_child = app_product->getChildFromHeap(0, heap, product_count);
+            app_child->setParent(app_product);
+            app_child->setName(api_product->part->name);
+            app_child->setIsPartNode(true);
+            app_child->setPartNameSameAsProduct(api_product->part->name_same_as_product != 0);
+            app_child->setModel(Matrix4(1.0f));
+
+            /* The part can carry its own local coordinate system, and be
+               removed, as its items can (see addRepItems) */
+            Matrix4 part_matrix = matrix;
+            uint8_t part_identity = location.is_identity;
+            Vector4 partRemovedMin = Vector4(FLT_MAX), partRemovedMax = Vector4(-FLT_MAX);
+            Vector4 *partMin = minBound, *partMax = maxBound;
+
+            placeByLocalCoordinateSystem(engine->prcCtx, engine->prcData,
+                api_product->part, app_child, &part_matrix, &part_identity);
+            if (api_product->part->behavior_bit_field2 & PRC_REMOVED_BYTE2)
+            {
+                app_child->setEnabled(false);
+                partMin = &partRemovedMin;
+                partMax = &partRemovedMax;
+            }
+
+            if (api_product->part->attributes.num_base_attributes > 0)
+            {
+                app_child->setAttributes(&api_product->part->attributes);
+            }
+            *product_count += 1;
+
+            printf("convertTree: part=%s direct_tess=%p num_rep_items=%zu\n",
+                api_product->part->name,
+                (void *)api_product->part->tess,
+                api_product->part->num_rep_items);
+
+            if (api_product->part->tess != NULL)
+            {
+                setBounds(engine->prcCtx, app_child, api_product->part->tess, part_matrix,
+                    part_identity, partMin, partMax);
+                app_child->attach(engine->prcCtx, engine->prcData, api_product->part->tess);
+            }
+
+            if (api_product->part->num_rep_items > 0)
+            {
+                /* Add the RI items as children of the part child Product (app_child) */
+                addRepItems(engine, api_product->part, app_child, heap, product_count,
+                    partMin, partMax, part_identity, part_matrix);
+            }
+        }
+
+        /* Now go through the children that this may have beyond the part we just added.
+           If we have a "3D PMI" product that is when the markups are stuffed */
+        for (size_t i = 0; i < api_product->num_children; i++)
+        {
+            Product *app_child = app_product->getChildFromHeap(i + start_index, heap, product_count); /* Note no + after this as it occurs in convertTree */
+            app_child->setParent(app_product);
+            convertTree(engine, api_product->children + i, app_child, heap,
+                product_count, minBound, maxBound, font_atlas_created);
+        }
+    }
+
+    if (num_markups > 0)
+    {
+        /* This should be essentially a "3D PMI" node with layout tessellations as children */
+        app_product->createChildren(num_markups); /* Get num_markups ptr to ptrs */
+
+        for (k = 0; k < num_markups; k++)
+        {
+            /* If it has both graphics and text primitives we will create a
+             * parent and then two children, one for the graphics and one for
+             * the text. If it has only graphics or only text, we will not create
+             * the parent */
+            tess = prc_api_get_markup_tessellation(engine->prcCtx, api_product, k);
+            if (tess == NULL)
+            {
+                /* No tessellation resolved for this markup (e.g. an invalid or
+                   unresolved biased_index_tessellation in the file). Still
+                   create a tree node for consistency, but skip geometry/bounds
+                   since there is nothing to read -- dereferencing a NULL tess
+                   here would crash. */
+                Product *app_child = app_product->getChildFromHeap(k, heap, product_count);
+                *product_count += 1;
+                app_child->setParent(app_product);
+                app_child->setName(api_product->markup[k].name);
+                app_child->setModel(Matrix4(1.0f));
+                continue;
+            }
+            uint8_t needs_parent = (tess->num_line_primitives > 0);
+
+            if (needs_parent)
+            {
+                /* Create the parent for this markup */
+                Product *app_markup_parent = app_product->getChildFromHeap(k, heap, product_count);
+                *product_count += 1;
+
+                app_markup_parent->createChildren(2);
+                app_markup_parent->setParent(app_product);
+                app_markup_parent->setName(api_product->markup[k].name);
+                app_markup_parent->setModel(Matrix4(1.0f));
+                setBounds(engine->prcCtx, app_markup_parent, tess, matrix, location.is_identity, minBound,
+                    maxBound);
+
+                /* Set the the markup (non-text) child */
+                Product *app_child = app_markup_parent->getChildFromHeap(0, heap, product_count);
+                *product_count += 1;
+                app_child->setParent(app_markup_parent);
+
+                /* Append a _1 to the name */
+                std::string markup_name = std::string(api_product->markup[k].name) + "_1";
+                app_child->setName(markup_name.c_str());
+
+                app_child->setModel(Matrix4(1.0f));
+                setBounds(engine->prcCtx, app_child, tess, matrix, location.is_identity, minBound,
+                    maxBound);
+                app_child->attach(engine->prcCtx, engine->prcData, tess);
+            }
+            else if (tess->num_line_primitives > 0)
+            {
+                Product *app_child = app_product->getChildFromHeap(k, heap, product_count);
+                *product_count += 1;
+                app_child->setParent(app_product);
+
+                /* Get the tessellation for this model (part) */
+                tess = prc_api_get_markup_tessellation(engine->prcCtx, api_product, k);
+                app_child->setName(api_product->markup[k].name);
+                app_child->setModel(Matrix4(1.0f));
+                setBounds(engine->prcCtx, app_child, tess, matrix, location.is_identity, minBound,
+                    maxBound);
+
+                /* Just a single child for this markup */
+                if (tess->num_line_primitives > 0)
+                {
+                    app_child->attach(engine->prcCtx, engine->prcData, tess);
+                }
+            }
+            else if (tess->num_line_primitives == 0)
+            {
+                /* No geometry for this markup, but we still want to create a node for it in the tree */
+                Product *app_child = app_product->getChildFromHeap(k, heap, product_count);
+                *product_count += 1;
+                app_child->setParent(app_product);
+                app_child->setName(api_product->markup[k].name);
+                app_child->setModel(Matrix4(1.0f));
+                setBounds(engine->prcCtx, app_child, tess, matrix, location.is_identity, minBound,
+                    maxBound);
+                /* Just don't attach it though */
+            }
+        }
+    }
+}
+
 void ProcessPRCGeometry(MobileEngineContext *engine)
 {
     int code;
+    uint32_t numParts = 0, numProducts = 0, numMarkups = 0;
+
     if (!engine || engine->state != EngineState::ParsingDataStructure)
         return;
-    uint32_t numParts = 0, numProducts = 0, numMarkups = 0;
+
     if (prc_api_prep_model_tree(engine->prcCtx, engine->prcData, &numParts,
         &numProducts, &numMarkups) < 0)
     {
         engine->state = EngineState::ErrorState;
         return;
     }
-    if (prc_api_create_model_tree(engine->prcCtx, engine->prcData, &engine->productTreeRoot,
+    if (prc_api_create_model_tree(engine->prcCtx, engine->prcData, &engine->modelTreePRC,
         numParts, numProducts, numMarkups) < 0)
     {
         engine->state = EngineState::ErrorState;
@@ -328,7 +611,7 @@ void ProcessPRCGeometry(MobileEngineContext *engine)
     }
     engine->state = EngineState::ExtractingTessellation;
     uint32_t numExactGeom = 0;
-    if (prc_api_get_number_tessellations(engine->prcCtx, engine->prcData, engine->productTreeRoot,
+    if (prc_api_get_number_tessellations(engine->prcCtx, engine->prcData, engine->modelTreePRC,
         &engine->numSurfaceTess, &engine->numLineTess, &numExactGeom, 0) < 0)
     {
         engine->state = EngineState::ErrorState;
@@ -353,7 +636,7 @@ void ProcessPRCGeometry(MobileEngineContext *engine)
         }
         tess.num_faces = nFaces;
         tess.tess_faces = new prc_api_face[nFaces];
-        code = prc_api_initialize_tessellation(engine->prcCtx, engine->prcData, engine->productTreeRoot, i,
+        code = prc_api_initialize_tessellation(engine->prcCtx, engine->prcData, engine->modelTreePRC, i,
             &engine->surfaceTessArray[i], engine->numLineTess > 0 ? &engine->lineTessArray[i] : NULL, &hasLineCompanion);
         if (hasLineCompanion && engine->numLineTess > 0)
         {
@@ -374,6 +657,125 @@ void ProcessPRCGeometry(MobileEngineContext *engine)
             }
         }
     }
+
+    Vector4 min_bound;
+    Vector4 max_bound;
+
+    max_bound.x = FLT_MIN;
+    max_bound.y = FLT_MIN;
+    max_bound.z = FLT_MIN;
+    min_bound.x = FLT_MAX;
+    min_bound.y = FLT_MAX;
+    min_bound.z = FLT_MAX;
+
+    /* Allocate 3x on the markups in case we have text and lines (parent plus
+       one for text and one for lines)*/
+    engine->numProducts = numProducts + numParts + 3 * numMarkups + engine->numLineTess;
+    engine->viewerProducts = new Product[engine->numProducts];
+    uint32_t product_index = 0;
+    uint8_t font_atlas_created = 0;
+
+    convertTree(engine, engine->modelTreePRC, &engine->viewerProducts[0],
+        engine->viewerProducts, &product_index, &min_bound, &max_bound, &font_atlas_created);
+
+    engine->bboxMin[0] = min_bound.x;
+    engine->bboxMin[1] = min_bound.y;
+    engine->bboxMin[2] = min_bound.z;
+    engine->bboxMax[0] = max_bound.x;
+    engine->bboxMax[1] = max_bound.y;
+    engine->bboxMax[2] = max_bound.z;
+
+    /* Lets get the camera views if we have any. Always add the viewer
+   default one in case all the other views are terrible */
+    uint32_t num_views = prc_api_get_number_of_view(engine->prcCtx, engine->prcData);
+
+    auto addDefaultView = [&]() {
+        /* Create a default view based on bounding box */
+        Vector3 max = Vector3(engine->bboxMax[0], engine->bboxMax[1], engine->bboxMax[2]);
+        Vector3 min = Vector3(engine->bboxMin[0], engine->bboxMin[1], engine->bboxMin[2]);
+        float diagonal = (max - min).length();
+        Vector3 center = Vector3((engine->bboxMax[0] + engine->bboxMin[0]) * 0.5f,
+            (engine->bboxMax[1] + engine->bboxMin[1]) * 0.5f,
+            (engine->bboxMax[2] + engine->bboxMin[2]) * 0.5f);
+
+        /* Position camera at a reasonable distance to see the entire object */
+        float distance = diagonal * 1.5f;
+
+        /* Create a standard isometric-style view similar to CAD applications
+           Pitch ~-30 degrees (looking down), Yaw ~45 degrees (from front-right) */
+        float pitch = -30.0f;
+        float yaw = 45.0f;
+        float roll = 0.0f;
+
+        /* Build rotation matrices matching Camera::update() convention */
+        double pitch_rad = mutil::radians((double)pitch);
+        double yaw_rad = mutil::radians((double)yaw);
+        double roll_rad = mutil::radians((double)roll);
+
+        /* These match the rotation order in Camera::update(): R_phi * R_theta * R_psi */
+        Matrix3 R_yaw = Matrix3(1, 0, 0,
+            0, std::cos(yaw_rad), -std::sin(yaw_rad),
+            0, std::sin(yaw_rad), std::cos(yaw_rad));
+
+        Matrix3 R_pitch = Matrix3(std::cos(pitch_rad), 0, std::sin(pitch_rad),
+            0, 1, 0,
+            -std::sin(pitch_rad), 0, std::cos(pitch_rad));
+
+        Matrix3 R_roll = Matrix3(std::cos(roll_rad), -std::sin(roll_rad), 0,
+            std::sin(roll_rad), std::cos(roll_rad), 0,
+            0, 0, 1);
+
+        Matrix3 R = R_roll * R_pitch * R_yaw;
+
+        /* Transform the camera's forward direction (+Z in camera space) by rotation */
+        Vector3 camera_forward = Vector3(R.columns[2].x, R.columns[2].y, R.columns[2].z);
+
+        /* Position camera behind the object (opposite of forward direction) */
+        Vector3 position = center - camera_forward * distance;
+
+        /* Build PRC camera matrix (column-major: 3x3 rotation + position) */
+        double default_matrix[12] = {
+            R.columns[0].x, R.columns[0].y, R.columns[0].z,
+            R.columns[1].x, R.columns[1].y, R.columns[1].z,
+            R.columns[2].x, R.columns[2].y, R.columns[2].z,
+            position.x, position.y, position.z
+        };
+
+        /* Center of orbit distance */
+        double camera_z_orbit = distance;
+        char default_name[] = "viewer default";
+
+        engine->viewerCamera.addView(default_matrix, camera_z_orbit,
+                                     static_cast<int>(num_views), default_name);
+    };
+
+    if (num_views > 0)
+    {
+        double *matrix;
+        double camera_z;
+        char *name;
+
+        engine->viewerCamera.setNumViews(num_views + 1);
+        for (uint32_t i = 0; i < num_views; i++)
+        {
+            code = prc_api_get_view(engine->prcCtx, engine->prcData, i, &name,
+                                    &matrix, &camera_z);
+            if (code < 0)
+            {
+                printf("Scene::load: prc_api_get_view failed\n");
+                exit(1);
+            }
+            engine->viewerCamera.addView(matrix, camera_z, i, name);
+        }
+
+        addDefaultView();
+    }
+    else
+    {
+        engine->viewerCamera.setNumViews(1);
+        addDefaultView();
+    }
+
     engine->state = EngineState::MarshallingToGPU;
 }
 
@@ -469,7 +871,7 @@ void CleanEngineResources(MobileEngineContext *engine)
         prc_api_release_data(engine->prcCtx, engine->prcData,
             engine->surfaceTessArray, engine->numSurfaceTess,
             engine->lineTessArray, engine->numLineTess,
-            nullptr, 0, engine->productTreeRoot);
+            nullptr, 0, engine->modelTreePRC);
         if (engine->surfaceTessArray)
             SDL_free(engine->surfaceTessArray);
         if (engine->lineTessArray)

@@ -4,8 +4,17 @@ project(mobile_viewer CXX)
 set(CMAKE_CXX_STANDARD 14)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-set(MOBILE_VIEWER_SOURCES 
+set(MOBILE_VIEWER_SOURCES
+    "src/camera.cpp"
+    "src/texture.cpp"
+    "src/product.cpp"
     "src/main.cpp"
+    "../thirdparty/imgui/imgui.cpp"
+	"../thirdparty/imgui/imgui_draw.cpp"
+	"../thirdparty/imgui/imgui_widgets.cpp"
+	"../thirdparty/imgui/imgui_tables.cpp"
+	"../thirdparty/imgui/backends/imgui_impl_sdl3.cpp"
+	"../thirdparty/imgui/backends/imgui_impl_opengl3.cpp"
 )
 
 # Branch target compilation rules dynamically based on configuration tags
@@ -106,5 +115,9 @@ add_subdirectory(
     "${CMAKE_CURRENT_SOURCE_DIR}/../thirdparty/glm" 
     "${CMAKE_CURRENT_BINARY_DIR}/glm_build"
 )
+
+target_include_directories(mobile_viewer PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../thirdparty/MatrixUtil/MatrixUtil/include)
+target_include_directories(mobile_viewer PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../thirdparty/imgui)
+
 target_include_directories(mobile_viewer PRIVATE "src")
 target_link_libraries(mobile_viewer PRIVATE glm::glm-header-only)

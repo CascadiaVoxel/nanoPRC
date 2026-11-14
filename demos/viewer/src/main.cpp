@@ -457,7 +457,9 @@ static void initSDL()
 #endif
 }
 
-static SDL_Window *createWindow(Config &config)
+/* show is false in batch mode: the frame is drawn and read offscreen, so
+   the window never needs to appear */
+static SDL_Window *createWindow(Config &config, bool show)
 {
     SDL_Window *window = SDL_CreateWindow(
         "nanoprc",
@@ -481,7 +483,8 @@ static SDL_Window *createWindow(Config &config)
         SDL_SetWindowPosition(window, SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED);
     }
 
-    SDL_ShowWindow(window);
+    if (show)
+        SDL_ShowWindow(window);
 
     return window;
 }
@@ -576,7 +579,7 @@ int main(int argc, char *argv[])
 
     initSDL();
 
-    SDL_Window *window = createWindow(config);
+    SDL_Window *window = createWindow(config, !batchMode);
     SDL_GLContext gl = createGLContext(config, window);
 
     SDL_GL_SetSwapInterval(1); // Force vsync
@@ -869,6 +872,30 @@ static void run(Config &config, SDL_Window *window, const char *file, bool headl
     {
         printf("Batch mode: loaded '%s' � performing single-frame render and exiting.\n", file);
 
+        /* The frame is drawn into an offscreen framebuffer of the window's
+           size and read from there. The window's own pixels are undefined
+           wherever another window covers it, or while it is hidden or
+           minimised (OpenGL's pixel ownership test), so batch mode never
+           shows the window and never reads it. */
+        GLuint captureFbo = 0, captureColour = 0, captureDepth = 0;
+        glGenFramebuffers(1, &captureFbo);
+        glGenRenderbuffers(1, &captureColour);
+        glGenRenderbuffers(1, &captureDepth);
+        glBindRenderbuffer(GL_RENDERBUFFER, captureColour);
+        glRenderbufferStorage(GL_RENDERBUFFER, GL_RGBA8, w, h);
+        glBindRenderbuffer(GL_RENDERBUFFER, captureDepth);
+        glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH24_STENCIL8, w, h);
+        glBindRenderbuffer(GL_RENDERBUFFER, 0);
+        glBindFramebuffer(GL_FRAMEBUFFER, captureFbo);
+        glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_RENDERBUFFER, captureColour);
+        glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_STENCIL_ATTACHMENT, GL_RENDERBUFFER, captureDepth);
+        if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE)
+        {
+            printf("Batch mode: the offscreen framebuffer could not be made\n");
+            exit(1);
+        }
+        _scene.setOutputFramebuffer(captureFbo);
+
         // Ensure viewport and clear state are correct for a single frame
         glViewport(0, 0, w, h);
         glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
@@ -904,6 +931,9 @@ static void run(Config &config, SDL_Window *window, const char *file, bool headl
             stride += (stride % 4) ? (4 - stride % 4) : 0; // Align to 4 bytes
             unsigned char *pixels = new unsigned char[stride * h];
 
+            glBindFramebuffer(GL_READ_FRAMEBUFFER, captureFbo);
+            glReadBuffer(GL_COLOR_ATTACHMENT0);
+            glPixelStorei(GL_PACK_ALIGNMENT, 4); // matches stride
             glReadPixels(0, 0, w, h, GL_RGB, GL_UNSIGNED_BYTE, pixels);
 
             // Flip image vertically (OpenGL's origin is bottom-left, image formats use top-left)
@@ -927,7 +957,11 @@ static void run(Config &config, SDL_Window *window, const char *file, bool headl
             delete[] flipped;
         }
 
-        SDL_GL_SwapWindow(window);
+        _scene.setOutputFramebuffer(0);
+        glBindFramebuffer(GL_FRAMEBUFFER, 0);
+        glDeleteFramebuffers(1, &captureFbo);
+        glDeleteRenderbuffers(1, &captureColour);
+        glDeleteRenderbuffers(1, &captureDepth);
 
         // Clean up GL resources the same way interactive shutdown would
         releaseTextures();

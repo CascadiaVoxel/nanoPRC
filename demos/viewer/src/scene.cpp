@@ -269,7 +269,7 @@ void Scene::render(Camera *camera)
 
 #ifdef __APPLE__
     /* Fallback path for stricter macOS drivers: render directly to default FBO. */
-    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    glBindFramebuffer(GL_FRAMEBUFFER, _outputFramebuffer);
     glViewport(0, 0, _width, _height);
     glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
     glClear(GL_DEPTH_BUFFER_BIT | GL_COLOR_BUFFER_BIT);
@@ -362,7 +362,7 @@ void Scene::render(Camera *camera)
     }
 
     /* Composite render */
-    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    glBindFramebuffer(GL_FRAMEBUFFER, _outputFramebuffer);
     glViewport(0, 0, _width, _height);
     glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
 
@@ -1306,7 +1306,7 @@ Scene::Scene() : _products(nullptr), _nproducts(0),
                  _enableToneMapping(true), _enableMotion(true),
                  _showExtraWireOverlays(true),
                  _width(0), _height(0), _textRenderer(nullptr),
-                 _renderWidth(0), _renderHeight(0)
+                 _renderWidth(0), _renderHeight(0), _outputFramebuffer(0)
 {
 }
 

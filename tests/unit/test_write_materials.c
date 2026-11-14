@@ -1125,7 +1125,12 @@ write_herit_file(prc_context *ctx)
      which 0: as written (every ancestor has the writer's default style, no flags);
      which 1: the root styled blue, with ParentHeritColor;
      which 2: the root blue and the node below it green, both with the flag;
-     which 3: the root styled blue, without the flag.
+     which 3: the root styled blue, without the flag;
+     which 4: the root styled blue, with ChildHeritColor;
+     which 5: the root blue with ParentHeritColor, the node below it green
+              with ChildHeritColor;
+     which 6: the root blue and the node below it green, both with
+              ChildHeritColor.
    Also returns the green and blue items' colours, to show which is which. */
 static void
 herit_case(prc_context *ctx, int which, float red_out[3], float green_out[3], float blue_out[3])
@@ -1176,18 +1181,21 @@ herit_case(prc_context *ctx, int which, float red_out[3], float green_out[3], fl
     PRC_ASSERT(chain[0]->base_with_graphics->graphics_content.biased_index_of_line_style > 0);
     for (k = 0; k < n; k++)
         PRC_ASSERT_EQ(chain[k]->base_with_graphics->graphics_content.behavior_bit_field1 &
-                      PRC_GRAPHICS_ParentHeritColor, 0);
+                      (PRC_GRAPHICS_ParentHeritColor | PRC_GRAPHICS_ChildHeritColor), 0);
 
     if (which >= 1)
     {
         chain[n - 1]->base_with_graphics->graphics_content.biased_index_of_line_style = blue_style;
-        if (which != 3)
+        if (which == 1 || which == 2 || which == 5)
             chain[n - 1]->base_with_graphics->graphics_content.behavior_bit_field1 |= PRC_GRAPHICS_ParentHeritColor;
+        else if (which == 4 || which == 6)
+            chain[n - 1]->base_with_graphics->graphics_content.behavior_bit_field1 |= PRC_GRAPHICS_ChildHeritColor;
     }
-    if (which == 2)
+    if (which == 2 || which == 5 || which == 6)
     {
         chain[n - 2]->base_with_graphics->graphics_content.biased_index_of_line_style = green_style;
-        chain[n - 2]->base_with_graphics->graphics_content.behavior_bit_field1 |= PRC_GRAPHICS_ParentHeritColor;
+        chain[n - 2]->base_with_graphics->graphics_content.behavior_bit_field1 |=
+            which == 2 ? PRC_GRAPHICS_ParentHeritColor : PRC_GRAPHICS_ChildHeritColor;
     }
 
     for (k = 0; k < 4; k++)
@@ -1210,27 +1218,36 @@ herit_case(prc_context *ctx, int which, float red_out[3], float green_out[3], fl
    - the root styled blue with ParentHeritColor: blue;
    - the root blue and the node below it green, both flagged: blue, the
      highest flagged ancestor;
-   - the root styled blue without the flag: the item's own red.
-   The last case is what the rule before nanoPRC #143 got wrong (it took the
+   - the root styled blue without the flag: the item's own red;
+   - the root styled blue with ChildHeritColor: blue;
+   - the root blue with ParentHeritColor, the node below it green with
+     ChildHeritColor: green, the lowest ChildHeritColor node, which a higher
+     ParentHeritColor does not override;
+   - both with ChildHeritColor: green, the lowest.
+   The fourth case is what the rule before nanoPRC #143 got wrong (it took the
    topmost style); the second and third are what #143 alone gets wrong (it
-   kept the lowest style found). */
+   kept the lowest style found); the last three are what #183 alone gets
+   wrong (it ignored ChildHeritColor). */
 static void
 test_parent_herit_colour(prc_context *ctx)
 {
     static const float red[3] = { 1.0f, 0.0f, 0.0f };
     static const float green[3] = { 0.0f, 1.0f, 0.0f };
     static const float blue[3] = { 0.0f, 0.0f, 1.0f };
-    const float *expect[4];
+    const float *expect[7];
     float r[3], g[3], b[3];
     int k, c;
 
-    printf("  sub-case: an ancestor with ParentHeritColor overrides the item's colour\n");
+    printf("  sub-case: an ancestor with ParentHeritColor or ChildHeritColor overrides the item's colour\n");
     expect[0] = red;
     expect[1] = blue;
     expect[2] = blue;
     expect[3] = red;
+    expect[4] = blue;
+    expect[5] = green;
+    expect[6] = green;
     write_herit_file(ctx);
-    for (k = 0; k < 4; k++)
+    for (k = 0; k < 7; k++)
     {
         herit_case(ctx, k, r, g, b);
         for (c = 0; c < 3; c++)

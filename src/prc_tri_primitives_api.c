@@ -2434,6 +2434,7 @@ prc_api_helper_get_style_index_from_leaf(prc_context *ctx, prc_data *data,
     int32_t *style_unbiased_index, uint32_t *file_index)
 {
     uint32_t done = 0;
+    uint8_t child_herit_found = 0;
     *style_unbiased_index = -1;
     *file_index = 0;
     prc_misc_entity_reference *entity_reference = NULL;
@@ -2475,16 +2476,23 @@ prc_api_helper_get_style_index_from_leaf(prc_context *ctx, prc_data *data,
             }
         }
 #endif
-        /* A node's own style wins over its ancestors', unless an ancestor sets
-           ParentHeritColor; then the highest such ancestor wins (ISO 14739-1,
-           GraphicsContent behavior_bit_field). The walk runs upwards, so a
-           flagged ancestor replaces whatever was found below it. */
-        if (style->base_with_graphics->graphics_content.biased_index_of_line_style > 0 &&
+        /* ISO 14739-1, GraphicsContent behavior_bit_field: the lowest node that
+           sets ChildHeritColor gives the colour to everything below it; failing
+           that, the highest node that sets ParentHeritColor does; failing that,
+           a node keeps its own style. The walk runs upwards, so the first
+           ChildHeritColor node reached is the lowest, and once it is found no
+           node above it changes the result; before that, a ParentHeritColor
+           ancestor replaces whatever was found below it. */
+        if (!child_herit_found &&
+            style->base_with_graphics->graphics_content.biased_index_of_line_style > 0 &&
             (*style_unbiased_index == -1 ||
-             (style->base_with_graphics->graphics_content.behavior_bit_field1 & PRC_GRAPHICS_ParentHeritColor)))
+             (style->base_with_graphics->graphics_content.behavior_bit_field1 &
+              (PRC_GRAPHICS_ParentHeritColor | PRC_GRAPHICS_ChildHeritColor))))
         {
             *file_index = style->base_with_graphics->base.file_index;
             *style_unbiased_index = style->base_with_graphics->graphics_content.biased_index_of_line_style - 1;
+            if (style->base_with_graphics->graphics_content.behavior_bit_field1 & PRC_GRAPHICS_ChildHeritColor)
+                child_herit_found = 1;
         }
 
         /* Check on the references */

@@ -116,6 +116,28 @@ static Texture *loadTexture(prc_api_texture *texture)
     return tex;
 }
 
+/* True when a texture's alpha (the last channel of a 2- or 4-channel image)
+   takes a value between clear and opaque somewhere. A texture that is only
+   clear or opaque is a cutout: the shader discards its clear texels and it can
+   draw with the opaque geometry. One that is partly clear has to blend, with
+   the transparent geometry. */
+static bool textureHasPartialAlpha(const prc_api_texture &texture)
+{
+    uint32_t ch = texture.num_channels;
+    size_t n, k;
+
+    if (!texture.data || (ch != 2 && ch != 4))
+        return false;
+    n = (size_t)texture.width * texture.height;
+    for (k = 0; k < n; k++)
+    {
+        unsigned char a = texture.data[k * ch + ch - 1];
+        if (a != 0 && a != 255)
+            return true;
+    }
+    return false;
+}
+
 void releaseTextures()
 {
     for (auto &p : textureMap)
@@ -905,6 +927,11 @@ void Product::attach(prc_context *ctx, prc_api_data data, const prc_api_tess *te
 
             /* Load the image texture here */
             _material[i].diffuseTexture->load(texture);
+
+            /* A partly clear texture draws in the transparent pass, which
+               blends and writes no depth, so what is behind it shows */
+            if (textureHasPartialAlpha(texture))
+                _hasTransparency = true;
         }
 
         prc_api_vertex *face_vertices = NULL;

@@ -353,6 +353,9 @@ void main()
         {
             vec4 texel = uMaterial.hasDiffuseMap ? texture(uMaterial.diffuseMap, TexCoords)
                                                  : vec4(uMaterial.diffuse, 1.0);
+            /* A fully clear texel draws nothing, and writes no depth */
+            if (uMaterial.hasDiffuseMap && texel.a < 0.5 / 255.0)
+                discard;
             color = texel.rgb;
             alpha = texel.a * uMaterial.alpha;
         }
@@ -438,7 +441,12 @@ void main()
     //color = vec3(alpha, uMaterial.alpha, alpha * uMaterial.alpha);
 
      //  FragColor = vec4(boostShadedColor(color), alpha * uMaterial.alpha);
-     FragColor = vec4(color, uMaterial.alpha);
+    /* The texture's alpha, as the fullbright path takes it: a fully clear
+       texel draws nothing, and writes no depth, so a label or a slice shows
+       what is behind its clear areas */
+    if (uMaterial.hasDiffuseMap && alphaDiffuse < 0.5 / 255.0)
+        discard;
+    FragColor = vec4(color, clamp(alpha * uMaterial.alpha, 0.0, 1.0));
 
     return;
 }

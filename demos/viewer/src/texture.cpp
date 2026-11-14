@@ -90,6 +90,14 @@ void Texture::load(const prc_api_texture &texture, bool isFontAtlas)
             //printf("  Applied grayscale swizzle (RED to RGB)\n");
         }
     }
+    else if (texture.num_channels == 2)
+    {
+        // Grayscale with alpha: RED is luminance, GREEN is alpha
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_SWIZZLE_R, GL_RED);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_SWIZZLE_G, GL_RED);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_SWIZZLE_B, GL_RED);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_SWIZZLE_A, GL_GREEN);
+    }
 
     glPixelStoref(GL_UNPACK_ALIGNMENT, 1);
     glTexImage2D(GL_TEXTURE_2D, 0, internalformat, texture.width, texture.height, 0, format, GL_UNSIGNED_BYTE, texture.data);

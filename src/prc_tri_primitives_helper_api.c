@@ -176,9 +176,10 @@ prc_api_helper_set_vertex_style(prc_context *ctx,
         vertex_out->vertices[vertex_out_pos].diffuse[1] = style_color[1];
         vertex_out->vertices[vertex_out_pos].diffuse[2] = style_color[2];
 
-        vertex_out->vertices[vertex_out_pos].tint[0] = 1;
-        vertex_out->vertices[vertex_out_pos].tint[1] = 1;
-        vertex_out->vertices[vertex_out_pos].tint[2] = 1;
+        /* A colour style's ambient is the colour, as the face's material gives it */
+        vertex_out->vertices[vertex_out_pos].tint[0] = vertex_out->vertices[vertex_out_pos].diffuse[0];
+        vertex_out->vertices[vertex_out_pos].tint[1] = vertex_out->vertices[vertex_out_pos].diffuse[1];
+        vertex_out->vertices[vertex_out_pos].tint[2] = vertex_out->vertices[vertex_out_pos].diffuse[2];
         vertex_out->vertices[vertex_out_pos].specular[0] = 0;
         vertex_out->vertices[vertex_out_pos].specular[1] = 0;
         vertex_out->vertices[vertex_out_pos].specular[2] = 0;
@@ -267,9 +268,10 @@ prc_api_helper_set_vertex_style_from_face_ref(prc_context *ctx,
             vertex_out->vertices[vertex_out_pos].specular[0] = 1.0f;
             vertex_out->vertices[vertex_out_pos].specular[1] = 1.0f;
             vertex_out->vertices[vertex_out_pos].specular[2] = 1.0f;
-            vertex_out->vertices[vertex_out_pos].tint[0] = 1;
-            vertex_out->vertices[vertex_out_pos].tint[1] = 1;
-            vertex_out->vertices[vertex_out_pos].tint[2] = 1;
+            /* A colour style's ambient is the colour, as the face's material gives it */
+            vertex_out->vertices[vertex_out_pos].tint[0] = vertex_out->vertices[vertex_out_pos].diffuse[0];
+            vertex_out->vertices[vertex_out_pos].tint[1] = vertex_out->vertices[vertex_out_pos].diffuse[1];
+            vertex_out->vertices[vertex_out_pos].tint[2] = vertex_out->vertices[vertex_out_pos].diffuse[2];
             vertex_out->vertices[vertex_out_pos].emissive[0] = 0;
             vertex_out->vertices[vertex_out_pos].emissive[0] = 0;
             vertex_out->vertices[vertex_out_pos].emissive[0] = 0;
@@ -292,9 +294,10 @@ prc_api_helper_set_vertex_style_from_face_ref(prc_context *ctx,
             vertex_out->vertices[vertex_out_pos].specular[0] = 1.0f;
             vertex_out->vertices[vertex_out_pos].specular[1] = 1.0f;
             vertex_out->vertices[vertex_out_pos].specular[2] = 1.0f;
-            vertex_out->vertices[vertex_out_pos].tint[0] = 1;
-            vertex_out->vertices[vertex_out_pos].tint[1] = 1;
-            vertex_out->vertices[vertex_out_pos].tint[2] = 1;
+            /* A colour style's ambient is the colour, as the face's material gives it */
+            vertex_out->vertices[vertex_out_pos].tint[0] = vertex_out->vertices[vertex_out_pos].diffuse[0];
+            vertex_out->vertices[vertex_out_pos].tint[1] = vertex_out->vertices[vertex_out_pos].diffuse[1];
+            vertex_out->vertices[vertex_out_pos].tint[2] = vertex_out->vertices[vertex_out_pos].diffuse[2];
             vertex_out->vertices[vertex_out_pos].emissive[0] = 0;
             vertex_out->vertices[vertex_out_pos].emissive[0] = 0;
             vertex_out->vertices[vertex_out_pos].emissive[0] = 0;
@@ -397,9 +400,10 @@ prc_api_helper_set_tri_style(prc_context *ctx,
         vertex_out->vertices[vertex_out_pos].diffuse[1] = style_color[1];
         vertex_out->vertices[vertex_out_pos].diffuse[2] = style_color[2];
 
-        vertex_out->vertices[vertex_out_pos].tint[0] = 1;
-        vertex_out->vertices[vertex_out_pos].tint[1] = 1;
-        vertex_out->vertices[vertex_out_pos].tint[2] = 1;
+        /* A colour style's ambient is the colour, as the face's material gives it */
+        vertex_out->vertices[vertex_out_pos].tint[0] = vertex_out->vertices[vertex_out_pos].diffuse[0];
+        vertex_out->vertices[vertex_out_pos].tint[1] = vertex_out->vertices[vertex_out_pos].diffuse[1];
+        vertex_out->vertices[vertex_out_pos].tint[2] = vertex_out->vertices[vertex_out_pos].diffuse[2];
         vertex_out->vertices[vertex_out_pos].specular[0] = 0;
         vertex_out->vertices[vertex_out_pos].specular[1] = 0;
         vertex_out->vertices[vertex_out_pos].specular[2] = 0;

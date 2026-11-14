@@ -140,7 +140,7 @@ typedef struct prc_api_vertex_s
     int32_t style_index; /* Biased index for when we are finding and splitting vertices */
     int32_t style_file_index; /* File index for when we are finding and splitting vertices */
     float diffuse[3]; /* This will be used for the diffuse color if there is a style */
-    float tint[3];    /* This will be used for the tint color if there is a style */
+    float tint[3];    /* The ambient colour if there is a style: a material's ambient, or a colour style's colour, as the face's material gives it */
     float specular[3]; /* This will be used for the specular color if there is a style */
     float emissive[3]; /* This will be used for the emissive color if there is a style */
     float shininess; /* This will be used for the shininess if there is a style */

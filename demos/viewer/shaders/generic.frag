@@ -66,10 +66,18 @@ uniform int uDebugMode;
 
 const float kShadowBias = 0.002;
 const float kNormalEpsilon = 1e-5;
-const float kDiffuseStrength = 1.15;
+/* Set so a lit 0.75 grey draws about mid-grey, as Adobe Acrobat draws it */
+const float kDiffuseStrength = 0.45;
 const float kSpecularStrength = 0.65;
 const float kShadedSaturation = 1.03;
 const float kShadedGamma = 0.99;
+
+/* Colours in a PRC file, a texture or the settings are display (sRGB) values;
+   light them as linear values, which the compositor's gamma turns back. */
+vec3 toLinear(vec3 c)
+{
+    return pow(max(c, vec3(0.0)), vec3(2.2));
+}
 
 float getSpecularPower(float shininess)
 {
@@ -268,7 +276,7 @@ void main()
             float glyphCoverage = tex.a;
             
             // Vertex color contains the desired text color
-            vec3 textColor = Color * uMaterial.tint;
+            vec3 textColor = toLinear(Color * uMaterial.tint);
             
             // Use glyph coverage as the alpha for the text color
             FragColor = vec4(textColor, glyphCoverage * uMaterial.alpha);
@@ -278,7 +286,7 @@ void main()
         {
             // LINE RENDERING: Plain color (no texture)
             //FragColor = vec4(Color * uMaterial.tint, uMaterial.alpha);
-            FragColor = vec4(Color, 1.0);
+            FragColor = vec4(toLinear(Color), 1.0);
         }
 		return;
 	}
@@ -356,7 +364,7 @@ void main()
             /* A fully clear texel draws nothing, and writes no depth */
             if (uMaterial.hasDiffuseMap && texel.a < 0.5 / 255.0)
                 discard;
-            color = texel.rgb;
+            color = toLinear(texel.rgb);
             alpha = texel.a * uMaterial.alpha;
         }
 
@@ -371,6 +379,8 @@ void main()
 
         /* Compute ambient color */
         float cosTheta = max(dot(normal, vec3(0.0, 1.0, 0.0)), 0.0);
+        /* The sky colours, as set, are the ambient light's strength, the
+           level the lighting defaults were tuned to; not decoded */
         vec3 ambient = mix(uSkyColorHorizon, uSkyColorZenith, cosTheta);
 
         vec3 diffuseContrib = VDiffuseColor;
@@ -378,6 +388,9 @@ void main()
         float shininess = VShininess;
         
         /* Compute lighting */
+        /* The ambient term is formed from the colours as stored: a material's
+           ambient colour is usually dark (30 of 255 by default), and decoded it
+           all but removes the light that shows a shaded side */
         vec3 ambientTerm = ambient * VMaterialTint * uAmbientWeight;
         vec3 diffuseTerm = calcDirDiffuse(uDirLight, normal, diffuseContrib);
         diffuseTerm += calcPointDiffuse(uPointLight, normal, FragPos,
@@ -403,17 +416,20 @@ void main()
 
     /* Compute ambient color */
     float cosTheta = max(dot(normal, vec3(0.0, 1.0, 0.0)), 0.0);
+    /* The sky colours, as set, are the ambient light's strength; not decoded */
     vec3 ambient = mix(uSkyColorHorizon, uSkyColorZenith, cosTheta) * 0.42; // Keep some depth without washing out color
 
     /* Sample textures */
-    vec3 diffuseContrib = uMaterial.hasDiffuseMap ? texture(uMaterial.diffuseMap, TexCoords).rgb : uMaterial.diffuse;
-    vec3 specularContrib = uMaterial.hasSpecularMap ? texture(uMaterial.specularMap, TexCoords).rgb : uMaterial.specular;
+    vec3 diffuseStored = uMaterial.hasDiffuseMap ? texture(uMaterial.diffuseMap, TexCoords).rgb : uMaterial.diffuse;
+    vec3 diffuseContrib = toLinear(diffuseStored);
+    vec3 specularContrib = toLinear(uMaterial.hasSpecularMap ? texture(uMaterial.specularMap, TexCoords).rgb : uMaterial.specular);
     float alphaDiffuse = uMaterial.hasDiffuseMap ? texture(uMaterial.diffuseMap, TexCoords).a : 1.0;
     float alphaSpecular = uMaterial.hasSpecularMap ? texture(uMaterial.specularMap, TexCoords).a : 1.0;
     float alpha = min(alphaDiffuse, alphaSpecular);
     
     /* Compute lighting */
-    vec3 ambientTerm = ambient * Color * diffuseContrib * uAmbientWeight;
+    /* The ambient term from the colours as stored, as in the vertex-material path */
+    vec3 ambientTerm = ambient * Color * diffuseStored * uAmbientWeight;
     vec3 diffuseTerm = calcDirDiffuse(uDirLight, normal, diffuseContrib);
     diffuseTerm += calcPointDiffuse(uPointLight, normal, FragPos,
         diffuseContrib);
@@ -424,7 +440,7 @@ void main()
 
     /* Final color.  Tint is ambient */
     //vec3 color = 0.1 * uMaterial.tint + ambientTerm + diffuseTerm * Color + specularTerm;
-    vec3 color = ambientTerm + diffuseTerm * Color + specularTerm;
+    vec3 color = ambientTerm + diffuseTerm * toLinear(Color) + specularTerm;
 
 	// TEMPORARY DEBUG - replace with this line:
    // color = gl_FrontFacing ? vec3(1.0, 0.0, 0.0) : vec3(0.0, 0.0, 1.0);

@@ -28,6 +28,13 @@ uniform mat4 uView;
 uniform mat4 uProjection;
 uniform mat4 uLightSpaceMatrix;
 
+/* Colours in a PRC file, a texture or the settings are display (sRGB) values;
+   light them as linear values, which the compositor's gamma turns back. */
+vec3 toLinear(vec3 c)
+{
+    return pow(max(c, vec3(0.0)), vec3(2.2));
+}
+
 void main()
 {
     vec4 worldPos = uModel * vec4(aPos, 1.0);
@@ -36,10 +43,10 @@ void main()
     Normal = normalize(mat3(transpose(inverse(uModel))) * aNormal);
     TexCoords = aTexCoords;
     Color = aColor;
-    VDiffuseColor = aDiffuseColor;
+    VDiffuseColor = toLinear(aDiffuseColor);
     VMaterialTint = aMaterialTint;
-    VSpecularColor = aSpecularColor;
-    VEmissiveColor = aEmissiveColor;
+    VSpecularColor = toLinear(aSpecularColor);
+    VEmissiveColor = toLinear(aEmissiveColor);
     VShininess = aShininess;
     VAlpha = aAlpha;
 

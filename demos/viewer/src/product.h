@@ -37,7 +37,9 @@ struct MeshSpec
 };
 
 static constexpr Vector3 kObjectColor_emissive = Vector3(0.0f, 0.0f, 0.0f);
-static constexpr Vector3 kObjectColor_diffuse = Vector3(0.1f, 0.1f, 0.1f);
+/* A face with no material takes its colour from its vertices, which the
+   shader multiplies by this; white leaves that colour as it is */
+static constexpr Vector3 kObjectColor_diffuse = Vector3(1.0f, 1.0f, 1.0f);
 static constexpr Vector3 kObjectColor_specular = Vector3(0.8f, 0.8f, 0.8f);
 static constexpr Vector3 kObjectColor_tint = Vector3(0.0f, 0.0f, 0.0f);
 

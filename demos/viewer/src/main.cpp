@@ -844,7 +844,7 @@ static void run(Config &config, SDL_Window *window, const char *file, bool headl
     Bloom *bloom = _scene.bloom();
     Compositor *compositor = _scene.compositor();
 
-    _scene.enableBloom() = config.getBool("Postprocess.bloom_enable", true);
+    _scene.enableBloom() = config.getBool("Postprocess.bloom_enable", false);
     bloom->filterRadius() = clamp(config.getFloat("Postprocess.bloom_radius", 0.005f), 0.0f, 0.025f);
     bloom->strength() = clamp(config.getFloat("Postprocess.bloom_strength", 0.2f), 0.0f, 1.0f);
 

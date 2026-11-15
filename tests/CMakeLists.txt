@@ -211,3 +211,8 @@ add_executable(test_has_vertex_colors tests/unit/test_has_vertex_colors.c)
 target_link_libraries(test_has_vertex_colors prc_static)
 target_include_directories(test_has_vertex_colors PRIVATE tests)
 add_test(NAME test_has_vertex_colors COMMAND test_has_vertex_colors)
+
+add_executable(test_polyline_point tests/unit/test_polyline_point.c)
+target_link_libraries(test_polyline_point prc_static)
+target_include_directories(test_polyline_point PRIVATE tests)
+add_test(NAME test_polyline_point COMMAND test_polyline_point)

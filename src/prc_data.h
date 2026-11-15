@@ -3175,6 +3175,10 @@ struct prc_topo_face_s
     prc_ptr_topology *loops;
     prc_unsigned_int neighbor_index;
     uint8_t is_synthetic; /* Used so that we know when we created one from an ANA or ISO compressed object */
+    /* Set only for a compressed AnaPlane face: when every loop is degenerate,
+       trim by the convex hull of the loops' points rather than leaving the
+       plane, which stores no extent of its own, untrimmed */
+    uint8_t hull_if_loops_degenerate;
 };
 
 /* Table 189 */

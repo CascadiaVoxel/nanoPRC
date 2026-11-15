@@ -31,4 +31,10 @@ int prc_next_ref_number(prc_context *ctx, const prc_nano_brep_compressed_data *c
 int prc_ref_number_is_stored(prc_unsigned_int number_refs, uint32_t iso_count, uint32_t ana_count,
     uint32_t number);
 
+/* One PolyLinePoint (Table 282): a Vector3D, or a Vector2D when the curve is
+   2D. Internal to the parser; declared here only so
+   tests/unit/test_polyline_point.c can reach it. */
+void prc_parse_polyline_point(prc_context *ctx, prc_bit_state *bit_state,
+    uint8_t is_3d, prc_polyline_point *data);
+
 #endif

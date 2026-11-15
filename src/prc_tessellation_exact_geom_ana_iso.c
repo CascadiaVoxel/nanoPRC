@@ -2817,6 +2817,7 @@ prc_tessellate_compressed_face(prc_context *ctx, prc_data *data, uint32_t shell_
         synthetic_face.tag = PRC_TYPE_TOPO_Face;
         synthetic_face.index_of_outer_loop = -1;
         synthetic_face.number_of_loops = ana_face->trim_loop_count;
+        synthetic_face.hull_if_loops_degenerate = 1;
 
         /* The plane is stored as its unit normal alone; its origin is the
            first vertex of the loop (ISO 14739-1, PRC_HCG_AnaPlane), so the

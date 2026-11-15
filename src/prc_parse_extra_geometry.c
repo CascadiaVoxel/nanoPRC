@@ -3701,7 +3701,7 @@ prc_parse_crv_parabola(prc_context *ctx, prc_bit_state *bit_state,
 }
 
 /* Table 282 PolyLinePoint */
-static void
+void
 prc_parse_polyline_point(prc_context *ctx, prc_bit_state *bit_state,
     uint8_t is_3d, prc_polyline_point *data)
 {
@@ -3711,7 +3711,10 @@ prc_parse_polyline_point(prc_context *ctx, prc_bit_state *bit_state,
     }
     else
     {
+        /* A Vector2D, two doubles (Table 283). Reading only x left every
+           later field one double out of step */
         data->point_2d.x = prc_bitread_double(ctx, bit_state);
+        data->point_2d.y = prc_bitread_double(ctx, bit_state);
     }
 }
 

@@ -36,6 +36,7 @@ option(NANOPRC_ENABLE_BREP "Enable B-Rep write facility (Phase 2)" OFF)
 option(NANOPRC_BUILD_DEMOS "Build nanoPRC demo executables" ON)
 option(NANOPRC_BUILD_TESTS "Build nanoPRC tests" ON)
 option(NANOPRC_BUILD_SDL "Build SDL dependency (needed for viewer demos)" ON)
+option(NANOPRC_BUILD_CONVERTERS "Build the OBJ, PLY and glTF/GLB converters in tools/ (git submodules)" OFF)
 option(NANOPRC_ENABLE_WINDOWS_GAMEINPUT "Enable SDL GameInput integration on Windows (requires gameinput.h)" OFF)
 
 if (NANOPRC_BUILD_DEMOS AND NOT NANOPRC_BUILD_SDL)
@@ -186,6 +187,19 @@ endif()
 # Only build desktop demos and tests if we aren't testing the mobile viewer layout natively
 if (NANOPRC_BUILD_DEMOS AND NOT PRC_BUILDING_FOR_MOBILE AND NOT NANOPRC_BUILD_MOBILE_VIEWER)
 	add_subdirectory(demos)
+endif()
+
+# The converters (prc_obj_rw, prc_ply_rw, prc_glb_rw) are git submodules under tools/. Each builds
+# against the nano_prc target defined above and never contains nanoPRC itself, so the submodules do
+# not nest. A clone without them still configures: a missing one is reported and skipped.
+if (NANOPRC_BUILD_CONVERTERS AND NOT PRC_BUILDING_FOR_MOBILE AND NOT NANOPRC_BUILD_MOBILE_VIEWER)
+	foreach(converter prc_obj_rw prc_ply_rw prc_glb_rw)
+		if (EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/tools/${converter}/CMakeLists.txt)
+			add_subdirectory(tools/${converter})
+		else()
+			message(WARNING "NANOPRC_BUILD_CONVERTERS: tools/${converter} is empty; run git submodule update --init --recursive tools")
+		endif()
+	endforeach()
 endif()
 
 if (NANOPRC_BUILD_TESTS AND NOT PRC_BUILDING_FOR_MOBILE AND NOT NANOPRC_BUILD_MOBILE_VIEWER)

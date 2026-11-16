@@ -3394,6 +3394,20 @@ prc_api_get_exact_geometry_tessellation_vertices(prc_context *ctx, prc_api_data 
         /* Set the reserved data */
         face_out->reserved = (void *)wire;
     }
+    else if (tess_type == PRC_EXACT_GEOM_UNKNOWN)
+    {
+        /* A face the exact-geometry code did not tessellate (a surface type
+           it does not handle, a multi-connex body, or a compressed AnaPlane
+           whose loops bound no area): an empty face, so the part's other
+           faces still draw and the caller's tessellation numbering stays in
+           step. This used to fail the whole call, and the viewer with it. */
+        prc_api_initialize_face(ctx, face_out);
+        prc_api_initialize_texture(ctx, &face_out->texture);
+        face_out->face_vertices.vertices = NULL;
+        face_out->face_vertices.num_vertices = 0;
+        face_out->face_vertices.capacity = 0;
+        face_out->is_exact_geom_wire = 0;
+    }
     else
     {
         prc_error(ctx, PRC_API_ERROR_PARAMETER,
@@ -6730,7 +6744,14 @@ prc_api_get_graphics_primitive(prc_context *ctx, prc_api_data data_in,
             return code;
         }
 
-        if (tess->shells[shell_index_out].shell_faces[face_index_out].is_exact_geom_wire)
+        if (tess->shells[shell_index_out].shell_faces[face_index_out].reserved == NULL)
+        {
+            /* An empty face (one the exact-geometry code did not tessellate) */
+            graphics_object->type = PRC_API_TRIANGLES;
+            graphics_object->num_indices = 0;
+            graphics_object->indices = NULL;
+        }
+        else if (tess->shells[shell_index_out].shell_faces[face_index_out].is_exact_geom_wire)
         {
             prc_internal_api_wire *wire = (prc_internal_api_wire *)tess->shells[shell_index_out].shell_faces[face_index_out].reserved;
             graphics_object->type = wire[graphics_index].type;

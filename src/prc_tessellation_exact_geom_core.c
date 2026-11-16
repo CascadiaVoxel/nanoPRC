@@ -364,9 +364,34 @@ prc_sample_loop(prc_context *ctx, prc_nano_brep_ref_data *brep_ref_data,
        This includes the last point of the last coedge being the first point
        of the first coedge. We will maintain that point. */
        /* Each coedge has one redundant point. */
-    loop_samples->num_samples = total_samples - num_coedges + 1;
-    loop_samples->samples = (prc_vec3 *)prc_calloc(ctx, loop_samples->num_samples, sizeof(prc_vec3));
-    if (loop_samples->samples != NULL)
+    /* A degenerate loop's edges do not chain, so an edge's end is not the
+       next edge's start and dropping it would lose a corner: in a loop
+       whose references read 0, 0, 0, 3 every edge starts at the same vertex
+       and the others exist only as ends. Keep every sample of such a loop,
+       ends included; it is never traced as an outline, only used for the
+       points it references (prc_hull_loop_of_degenerate_plane). */
+    if (*loop_degenerate)
+    {
+        uint32_t pos = 0;
+
+        loop_samples->num_samples = total_samples;
+        loop_samples->samples = (prc_vec3 *)prc_calloc(ctx, total_samples, sizeof(prc_vec3));
+        if (loop_samples->samples != NULL)
+        {
+            for (j = 0; j < num_coedges; j++)
+            {
+                memcpy(&loop_samples->samples[pos], coedge_samples[j].samples,
+                    sizeof(prc_vec3) * coedge_samples[j].num_samples);
+                pos += coedge_samples[j].num_samples;
+            }
+        }
+    }
+    else
+    {
+        loop_samples->num_samples = total_samples - num_coedges + 1;
+        loop_samples->samples = (prc_vec3 *)prc_calloc(ctx, loop_samples->num_samples, sizeof(prc_vec3));
+    }
+    if (loop_samples->samples != NULL && !*loop_degenerate)
     {
         uint32_t pos = 0;
         for (j = 0; j < num_coedges; j++)
@@ -4709,6 +4734,115 @@ prc_map_loops_to_surface(prc_context *ctx, prc_topo_face *topo_face, uint8_t ori
     return 0;
 }
 
+/* The convex hull of every sample of a face's loops, as one closed loop, in
+   the plane's own frame. Used for a compressed AnaPlane face whose loops are
+   all degenerate (their edges do not chain into a closed outline): an
+   AnaPlane stores no extent of its own, only its normal and its loops, so
+   the plane untrimmed has no bounds at all. Adobe Acrobat draws the convex
+   hull of the points such a loop references, discarding the edges and their
+   order; the hull of the samples is the same shape, since straight edges
+   sample only at their ends. Returns the number of hull points written into
+   *out (closed: the first point repeated at the end), or 0 when the points
+   are collinear and bound no area. */
+static int
+prc_hull_loop_of_degenerate_plane(prc_context *ctx, const prc_surf_plane *plane,
+    const prc_loop_samples *loops, uint32_t num_loops, prc_loop_samples *out)
+{
+    prc_vec3 origin = plane->transform.translation;
+    prc_vec3 ax = plane->transform.rotation[0];
+    prc_vec3 ay = plane->transform.rotation[1];
+    uint32_t total = 0, n = 0, i, k, h = 0, lower;
+    prc_vec2 *pts, *hull;
+
+    memset(out, 0, sizeof(*out));
+    for (k = 0; k < num_loops; k++)
+        total += loops[k].num_samples;
+    if (total < 3)
+        return 0;
+
+    pts = (prc_vec2 *)prc_calloc(ctx, total, sizeof(prc_vec2));
+    hull = (prc_vec2 *)prc_calloc(ctx, 2 * total + 1, sizeof(prc_vec2));
+    if (pts == NULL || hull == NULL)
+    {
+        prc_free(ctx, pts);
+        prc_free(ctx, hull);
+        prc_error(ctx, PRC_ERROR_MEMORY, "Failed in allocation prc_hull_loop_of_degenerate_plane\n");
+        return PRC_ERROR_MEMORY;
+    }
+    for (k = 0; k < num_loops; k++)
+    {
+        for (i = 0; i < loops[k].num_samples; i++)
+        {
+            prc_vec3 d;
+            d.x = loops[k].samples[i].x - origin.x;
+            d.y = loops[k].samples[i].y - origin.y;
+            d.z = loops[k].samples[i].z - origin.z;
+            pts[n].x = d.x * ax.x + d.y * ax.y + d.z * ax.z;
+            pts[n].y = d.x * ay.x + d.y * ay.y + d.z * ay.z;
+            n++;
+        }
+    }
+
+    /* Andrew's monotone chain: sort by x then y, then build the lower and
+       upper chains; the result runs anticlockwise in the plane's frame */
+    for (i = 1; i < n; i++)
+    {
+        prc_vec2 p = pts[i];
+        k = i;
+        while (k > 0 && (pts[k - 1].x > p.x || (pts[k - 1].x == p.x && pts[k - 1].y > p.y)))
+        {
+            pts[k] = pts[k - 1];
+            k--;
+        }
+        pts[k] = p;
+    }
+    for (i = 0; i < n; i++)
+    {
+        while (h >= 2 &&
+            (hull[h - 1].x - hull[h - 2].x) * (pts[i].y - hull[h - 2].y) -
+            (hull[h - 1].y - hull[h - 2].y) * (pts[i].x - hull[h - 2].x) <= 0.0)
+            h--;
+        hull[h++] = pts[i];
+    }
+    lower = h + 1;
+    for (i = n - 1; i-- > 0;)
+    {
+        while (h >= lower &&
+            (hull[h - 1].x - hull[h - 2].x) * (pts[i].y - hull[h - 2].y) -
+            (hull[h - 1].y - hull[h - 2].y) * (pts[i].x - hull[h - 2].x) <= 0.0)
+            h--;
+        hull[h++] = pts[i];
+    }
+    prc_free(ctx, pts);
+
+    /* h counts the first point twice (it closes the chain); fewer than four
+       means fewer than three distinct corners, which bound no area */
+    if (h < 4)
+    {
+        prc_free(ctx, hull);
+        return 0;
+    }
+
+    out->samples = (prc_vec3 *)prc_calloc(ctx, h, sizeof(prc_vec3));
+    if (out->samples == NULL)
+    {
+        prc_free(ctx, hull);
+        prc_error(ctx, PRC_ERROR_MEMORY, "Failed in allocation prc_hull_loop_of_degenerate_plane\n");
+        return PRC_ERROR_MEMORY;
+    }
+    for (i = 0; i < h; i++)
+    {
+        out->samples[i].x = origin.x + hull[i].x * ax.x + hull[i].y * ay.x;
+        out->samples[i].y = origin.y + hull[i].x * ax.y + hull[i].y * ay.y;
+        out->samples[i].z = origin.z + hull[i].x * ax.z + hull[i].y * ay.z;
+    }
+    out->num_samples = h;
+    out->is_outer_loop = 1;
+    prc_free(ctx, hull);
+    return (int)h;
+}
+
+
 int
 prc_tessellate_surface(prc_context *ctx, prc_data *data, uint32_t shell_index,
     uint32_t face_index, prc_topo_face *topo_face,
@@ -4850,6 +4984,35 @@ prc_tessellate_surface(prc_context *ctx, prc_data *data, uint32_t shell_index,
                 prc_free(ctx, loop_samples);
                 loop_samples = new_loop_samples;
                 num_loops = new_num_loops;
+            }
+            else if (topo_face->hull_if_loops_degenerate &&
+                surface.surface_type == PRC_TYPE_SURF_Plane && surface.surf_plane != NULL)
+            {
+                /* Every loop of a compressed AnaPlane face is degenerate: trim by
+                   the convex hull of their points, or draw nothing if they bound
+                   no area, never the plane untrimmed */
+                prc_loop_samples hull_loop;
+                int hull_count = prc_hull_loop_of_degenerate_plane(ctx, surface.surf_plane,
+                    loop_samples, num_loops, &hull_loop);
+                for (k = 0; k < num_loops; k++)
+                {
+                    if (loop_samples[k].samples != NULL)
+                        prc_free(ctx, loop_samples[k].samples);
+                    if (loop_samples[k].uv_samples != NULL)
+                        prc_free(ctx, loop_samples[k].uv_samples);
+                }
+                if (hull_count <= 0)
+                {
+                    prc_free(ctx, loop_samples);
+                    prc_free(ctx, loop_degenerate);
+                    if (hull_count < 0)
+                        return hull_count;
+                    /* No area: the face draws nothing, as an unknown surface does */
+                    data->exact_geom_tess_part[data->exact_geom_tess_part_count].shells[shell_index].faces[face_index].type = PRC_EXACT_GEOM_UNKNOWN;
+                    return 0;
+                }
+                loop_samples[0] = hull_loop;
+                num_loops = 1;
             }
             else
             {

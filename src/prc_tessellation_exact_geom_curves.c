@@ -827,59 +827,194 @@ prc_evaluate_ellipse(prc_context *ctx, void *params, double input)
     return output;
 }
 
-/* Evaluate a helix at a single point */
+/* Evaluate a 1D math function (ISO 14739-1, PRC_TYPE_MATH_FCT_1D and its
+   five kinds) at param. A missing or unknown function evaluates to 0;
+   fractions and combinations nest, so depth bounds the recursion */
+static double
+prc_evaluate_math_fct_1d(const prc_math_fct_1d *fct, double param, int depth)
+{
+    uint32_t i;
+    double output = 0.0;
+
+    if (fct == NULL || depth > 32)
+        return 0.0;
+
+    switch (fct->tag)
+    {
+    case PRC_TYPE_MATH_FCT_1D_Polynom:
+        if (fct->polynom != NULL && fct->polynom->coefficients != NULL)
+        {
+            /* Horner's rule: coefficient[i] multiplies param to the power i */
+            for (i = fct->polynom->number_of_coefficients; i > 0; i--)
+                output = output * param + fct->polynom->coefficients[i - 1];
+        }
+        break;
+    case PRC_TYPE_MATH_FCT_1D_Trigonometric:
+        if (fct->trigonometric != NULL)
+            output = fct->trigonometric->dc_offset + fct->trigonometric->amplitude *
+                cos(param * fct->trigonometric->freq - fct->trigonometric->phase);
+        break;
+    case PRC_TYPE_MATH_FCT_1D_Fraction:
+        if (fct->fraction != NULL)
+        {
+            double denominator = prc_evaluate_math_fct_1d(&fct->fraction->denominator, param, depth + 1);
+            if (denominator != 0.0)
+                output = prc_evaluate_math_fct_1d(&fct->fraction->numerator, param, depth + 1) / denominator;
+        }
+        break;
+    case PRC_TYPE_MATH_FCT_1D_ArctanCos:
+        if (fct->arctancos != NULL)
+            output = atan(fct->arctancos->amplitude *
+                cos(param * fct->arctancos->frequency + fct->arctancos->phase)) * fct->arctancos->a;
+        break;
+    case PRC_TYPE_MATH_FCT_1D_Combination:
+        if (fct->combination != NULL && fct->combination->coefficients != NULL)
+        {
+            for (i = 0; i < fct->combination->number_of_coefficients; i++)
+                output += fct->combination->coefficients[i].coefficient *
+                    prc_evaluate_math_fct_1d(&fct->combination->coefficients[i].function, param, depth + 1);
+        }
+        break;
+    default:
+        break;
+    }
+    return output;
+}
+
+/* Coefficient i of a polynomial law, 0 if it has fewer */
+static double
+prc_helix_law_coefficient(const prc_math_fct_1d *law, uint32_t i)
+{
+    if (law->tag != PRC_TYPE_MATH_FCT_1D_Polynom || law->polynom == NULL ||
+        law->polynom->coefficients == NULL || i >= law->polynom->number_of_coefficients)
+        return 0.0;
+    return law->polynom->coefficients[i];
+}
+
+/* Unit vector, or fallback when v has no length */
+static prc_vec3
+prc_helix_unit(prc_vec3 v, prc_vec3 fallback)
+{
+    double len = sqrt(v.x * v.x + v.y * v.y + v.z * v.z);
+
+    if (len <= 1e-12)
+        return fallback;
+    v.x /= len;
+    v.y /= len;
+    v.z /= len;
+    return v;
+}
+
+/* Evaluate a helix at a single point. Both sub-types build a point in a
+   local frame and place it by transform_point(o, X, Z, p) = o + p.x X +
+   p.y (Z x X) + p.z Z, the definition pdf-issues #853 proposes for the
+   function the clause calls without defining.
+   Type 0: o is start projected onto the axis, Z the axis direction, and X
+   runs from o to start. TRUE turns clockwise seen from +Z, so the branches
+   are exchanged against the pseudocode, as Adobe Acrobat draws it (#853).
+   With start on the axis X has no direction; it is then Z x (1, 0, 0), or
+   Z x (0, 1, 0) for an axis along x, which starts a +z helix along +y as
+   Acrobat does.
+   Type 1: o is start, Z is unit_z, and X is unit_u made orthogonal to Z:
+   Acrobat draws a type 1 helix whose unit_u is not orthogonal to unit_z as
+   the same curve as one whose unit_u is (#853). TRUE follows the
+   pseudocode as written, as Acrobat does for this sub-type. */
 static prc_vec3
 prc_evaluate_helix(prc_context *ctx, void *params, double input)
 {
     prc_vec3 output;
     prc_crv_helix01 *helix = (prc_crv_helix01 *)params;
-    uint8_t type = helix->type;
+    prc_vec3 o, x_axis, y_axis, z_axis, local;
+    prc_vec3 unit_x = { 1.0, 0.0, 0.0 };
+    prc_vec3 unit_y = { 0.0, 1.0, 0.0 };
+    prc_vec3 unit_z = { 0.0, 0.0, 1.0 };
+    double radius, angle;
 
-    if (type == 0)
+    if (helix->type == 0)
     {
-        double radius_evolution = helix->type0_helix.radius;
-        double radius;
-        double pitch = helix->type0_helix.pitch;
-        prc_vec3 origin, z_axis, start, origin_on_axis, b, x_axis;
-        double temp1;
+        prc_vec3 origin, to_start;
+        double along;
 
         origin.x = helix->type0_helix.origin_0;
         origin.y = helix->type0_helix.origin_1;
         origin.z = helix->type0_helix.origin_2;
-
         z_axis.x = helix->type0_helix.direction_0;
         z_axis.y = helix->type0_helix.direction_1;
         z_axis.z = helix->type0_helix.direction_2;
+        z_axis = prc_helix_unit(z_axis, unit_z);
 
-        start = helix->start;
+        /* origin_on_axis: start projected onto the axis */
+        to_start.x = helix->start.x - origin.x;
+        to_start.y = helix->start.y - origin.y;
+        to_start.z = helix->start.z - origin.z;
+        along = to_start.x * z_axis.x + to_start.y * z_axis.y + to_start.z * z_axis.z;
+        o.x = origin.x + along * z_axis.x;
+        o.y = origin.y + along * z_axis.y;
+        o.z = origin.z + along * z_axis.z;
 
-        /* Project the start onto the z axis which is defined
-           by the origin and direction */
-        origin_on_axis = prc_project_point_onto_line(ctx, start, origin, z_axis);
-
-        prc_vec_sub(start, origin_on_axis, &x_axis);
-        radius = prc_vec_length_sqrt(x_axis) + input * radius_evolution;
-
-        if (helix->orientation == 1)
+        x_axis.x = helix->start.x - o.x;
+        x_axis.y = helix->start.y - o.y;
+        x_axis.z = helix->start.z - o.z;
+        radius = sqrt(x_axis.x * x_axis.x + x_axis.y * x_axis.y + x_axis.z * x_axis.z);
+        if (radius > 1e-12)
         {
-            output.x = radius * cos(input);
-            output.y = radius * sin(input);
-            output.z = pitch * input;
+            x_axis.x /= radius;
+            x_axis.y /= radius;
+            x_axis.z /= radius;
         }
         else
         {
-            output.x = radius * cos(-input);
-            output.y = radius * sin(-input);
-            output.z = pitch * input;
+            prc_vec_cross(z_axis, fabs(z_axis.x) > 0.9 ? unit_y : unit_x, &x_axis);
+            x_axis = prc_helix_unit(x_axis, unit_x);
         }
+        radius += input * helix->type0_helix.radius;
+        angle = helix->orientation ? -input : input;
+        local.x = radius * cos(angle);
+        local.y = radius * sin(angle);
+        local.z = helix->type0_helix.pitch * input;
     }
     else
     {
-        /* Todo implement this */
-        output.x = 0;
-        output.y = 0;
-        output.z = 0;
+        const prc_type1_helix_data *t1 = &helix->type1_helix;
+        double r1 = prc_helix_law_coefficient(&t1->radius_law, 0);
+        double r2 = prc_helix_law_coefficient(&t1->radius_law, 1);
+        double a1 = prc_helix_law_coefficient(&t1->theta_law, 0);
+        double a2 = prc_helix_law_coefficient(&t1->theta_law, 1);
+        double param = input;
+        double dot;
+
+        o = helix->start;
+        z_axis.x = t1->unit_z0;
+        z_axis.y = t1->unit_z1;
+        z_axis.z = t1->unit_z2;
+        z_axis = prc_helix_unit(z_axis, unit_z);
+        x_axis.x = t1->unit_u0;
+        x_axis.y = t1->unit_u1;
+        x_axis.z = t1->unit_u2;
+        dot = x_axis.x * z_axis.x + x_axis.y * z_axis.y + x_axis.z * z_axis.z;
+        x_axis.x -= dot * z_axis.x;
+        x_axis.y -= dot * z_axis.y;
+        x_axis.z -= dot * z_axis.z;
+        if (x_axis.x * x_axis.x + x_axis.y * x_axis.y + x_axis.z * x_axis.z <= 1e-24)
+            prc_vec_cross(z_axis, fabs(z_axis.x) > 0.9 ? unit_y : unit_x, &x_axis);
+        x_axis = prc_helix_unit(x_axis, unit_x);
+
+        /* The clause's formula, as written */
+        if (r1 + r2 != 0.0)
+            param = (param / (r1 + r2)) * 2.0;
+        radius = r1;
+        if (a2 != a1)
+            radius = r1 + (param - a1) * (r2 - r1) / (a2 - a1);
+        angle = helix->orientation ? param : -param;
+        local.x = radius * cos(angle);
+        local.y = radius * sin(angle);
+        local.z = prc_evaluate_math_fct_1d(&t1->z_law, param, 0);
     }
+
+    prc_vec_cross(z_axis, x_axis, &y_axis);
+    output.x = o.x + local.x * x_axis.x + local.y * y_axis.x + local.z * z_axis.x;
+    output.y = o.y + local.x * x_axis.y + local.y * y_axis.y + local.z * z_axis.y;
+    output.z = o.z + local.x * x_axis.z + local.y * y_axis.z + local.z * z_axis.z;
 
     if (helix->has_transform && !helix->exact_geom_transform.is_identity)
     {

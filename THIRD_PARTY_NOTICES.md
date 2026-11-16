@@ -23,10 +23,6 @@ The components below retain their own upstream licenses and are used as third-pa
 ## Mobile/WASM Viewer
 - **GLM** is licensed under the MIT license. Copyright (c) 2005 - G-Truc Creation
 
-## OBJ Export Demo
-
-- **stb_image_write** (`demos/obj_export/src/stb_image_write.h`) is by Sean Barrett, available under the MIT License or the Unlicense (public domain), at the user's choice. See https://github.com/nothings/stb; the license text is at the end of the file.
-
 ---
 
 If you redistribute binaries or source bundles, include the relevant upstream license texts for these dependencies.

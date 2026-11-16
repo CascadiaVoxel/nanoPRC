@@ -62,9 +62,17 @@ nanoPRC includes several source-code demonstrations that showcase how to use the
 | demos/viewer | A basic 3D interactive viewer to display PRC models |
 | demos/json_export | A utility to create a JSON dump from a PRC model |
 | demos/stl_export | A utility to create binary STL mesh files from a PRC model |
-| demos/obj_export | A utility to create OBJ files from a PRC model with MTL and textures |
 | demos/teapot_write | A utility to generate a PRC file of the Utah teapot from 32 bicubic NURBS patches, demonstrating the write API below |
 | demos/stl_import | A utility to import binary or ASCII STL mesh files into PRC/PDF, with vertex welding and automatic multi-part detection |
+
+Conversion to and from other mesh formats is in three companion repositories, each built on this library's
+public API:
+
+| Repository | Description |
+|--------|-------------|
+| [prc_obj_rw](https://github.com/t3dr0/prc_obj_rw) | OBJ export (with MTL and textures) and OBJ import into PRC/PDF |
+| [prc_ply_rw](https://github.com/t3dr0/prc_ply_rw) | PLY export and import, and mesh2ply, which converts OFF and PLY meshes to clean binary PLY |
+| [prc_glb_rw](https://github.com/t3dr0/prc_glb_rw) | glTF/GLB export and import |
 
 ### Writing PRC files
 
@@ -161,7 +169,8 @@ and the writer prints the switches in use on stderr.
 | `PRC_DIAG_ABLATE_DUMP_DIR` | Each section's bytes before deflate also written to this directory, for entropy coders tried outside nanoPRC |
 
 Because they act at `prc_api_write_prc_file`/`prc_api_write_prc_buffer`, any writer built on the public
-API (`nano_prc_stl_import`, the OBJ and PLY importers) can be measured unchanged. See
+API (`nano_prc_stl_import`, and the OBJ, PLY and glTF importers in the companion repositories) can be measured
+unchanged. See
 `src/prc_write_ablate.h` for the details of each.
 
 ### Deterministic Unzipped-Section Fuzzing

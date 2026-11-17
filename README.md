@@ -48,6 +48,10 @@ The build process in the case of windows is done by opening the solution file in
 
 Executables are built to the `bin` directory and libraries to the `lib` directory from within the build directory.
 
+The OBJ, PLY and glTF/GLB converters (see below) are git submodules under `tools/` and are not built by
+default. To build them with the library, configure with `-DNANOPRC_BUILD_CONVERTERS=ON`; their executables land in the
+same `bin` directory.
+
 In the case of Linux, your milage may vary. 
 See https://wiki.libsdl.org/SDL3/README-linux#build-dependencies for the dependencies needed for the demo viewer and your flavor of Linux.  The dependencies for just the library are very limited. You will need to make sure you have cmake installed. After the cmake .. command above, you will run make in the build directory to compile the code.  The viewer has been succesfully built and run on WSL.
 
@@ -73,6 +77,9 @@ public API:
 | [prc_obj_rw](https://github.com/t3dr0/prc_obj_rw) | OBJ export (with MTL and textures) and OBJ import into PRC/PDF |
 | [prc_ply_rw](https://github.com/t3dr0/prc_ply_rw) | PLY export and import, and mesh2ply, which converts OFF and PLY meshes to clean binary PLY |
 | [prc_glb_rw](https://github.com/t3dr0/prc_glb_rw) | glTF/GLB export and import |
+
+Each is also included here as a git submodule under `tools/`, pinned to a tagged release, and built with the library
+when `NANOPRC_BUILD_CONVERTERS` is ON (see Building).
 
 ### Writing PRC files
 

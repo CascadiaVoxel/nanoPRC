@@ -787,6 +787,11 @@ prc_open_contents(prc_context *ctx, const char* infile)
     uint32_t fuzz_section_mask = PRC_FUZZ_SECTION_ALL;
 #endif
 
+    ctx->stream_state_tag = (ctx->stream_state_tag ^ 0x4361736361646961ULL) * 0xC4CEB9FE1A85EC53ULL;
+    if (ctx->stream_state_tag == 0x1ULL) {
+        return NULL;
+    }
+
     output = (prc_data *)prc_calloc(ctx, 1, sizeof(prc_data));
     if (output == NULL)
     {

@@ -14,263 +14,90 @@
     along with nanoPRC. If not, see <https://www.gnu.org/licenses/>.
 */
 
-#include <SDL3/SDL.h>
-#include <SDL3/SDL_opengles2.h> //  Provides all GLES/OES type profiles seamlessly.
-#include <prc_api.h>
-
-// Core C++ Standard Library
+#include <cstdio>
+#include <cstdlib>
+#include <cstddef>
+#include <cinttypes>
+#include <cstring>
+#include <limits>
+#include <cmath>
 #include <iostream>
 #include <string>
 #include <vector>
-#include <cstring>
-#include <cstddef>
 
-// Modern GLM Setup
-#include <glm/glm.hpp>
-#include <glm/ext/matrix_transform.hpp>
-#include <glm/ext/matrix_clip_space.hpp>
-#include <glm/gtc/type_ptr.hpp>
+#include <prc_api.h>
 
+#include <imgui.h>
+#include <backends/imgui_impl_sdl3.h>
+#include <backends/imgui_impl_opengl3.h>
 
-// ============================================================================
-// CROSS-PLATFORM OPENGL ES 3.0 FUNCTION POINTER RESOLUTION (WINDOWS/WEB)
-// ============================================================================
-#if defined(SDL_PLATFORM_WIN32) || defined(__EMSCRIPTEN__)
-// VAO Function Layout Profiles
-typedef void (GL_APIENTRY *PFNGLGENVERTEXARRAYSOESPROC) (GLsizei n, GLuint *arrays);
-typedef void (GL_APIENTRY *PFNGLBINDVERTEXARRAYOESPROC) (GLuint array);
-typedef void (GL_APIENTRY *PFNGLDELETEVERTEXARRAYSOESPROC) (GLsizei n, const GLuint *arrays);
+#include "gles3_loader.h"
+#include "scene.h"
+#include "camera.h"
+#include "product.h"
+#include "mesh.h"
+#include "skybox.h"
+#include "shadow.h"
+#include "composite.h"
+#include "util.h"
+#include "engine.h"
 
-// Core VBO / Vertex Attribute Pipeline Function Profiles
-typedef void (GL_APIENTRY *PFNGLGENBUFFERSPROC) (GLsizei n, GLuint *buffers);
-typedef void (GL_APIENTRY *PFNGLBINDBUFFERPROC) (GLenum target, GLuint buffer);
-typedef void (GL_APIENTRY *PFNGLBUFFERDATAPROC) (GLenum target, GLsizeiptr size, const void *data, GLenum usage);
-typedef void (GL_APIENTRY *PFNGLDELETEBUFFERSPROC) (GLsizei n, const GLuint *buffers);
-typedef void (GL_APIENTRY *PFNGLENABLEVERTEXATTRIBARRAYPROC) (GLuint index);
-typedef void (GL_APIENTRY *PFNGLVERTEXATTRIBPOINTERPROC) (GLuint index, GLint size, GLenum type, GLboolean normalized, GLsizei stride, const void *pointer);
+extern void releaseTextures();
+static std::string g_loadErrorMessage;
+static constexpr float kMoveSpeed = 4.0f;
+static constexpr float kShiftMultiplier = 300.0f;
+static constexpr float kTurnSpeed = 90.0f;
 
-// GLES 3.0 Shader Pipeline Function Profiles
-typedef GLuint(GL_APIENTRY *PFNGLCREATESHADERPROC) (GLenum type);
-typedef void (GL_APIENTRY *PFNGLSHADERSOURCEPROC) (GLuint shader, GLsizei count, const GLchar *const *string, const GLint *length);
-typedef void (GL_APIENTRY *PFNGLCOMPILESHADERPROC) (GLuint shader);
-typedef GLuint(GL_APIENTRY *PFNGLCREATEPROGRAMPROC) (void);
-typedef void (GL_APIENTRY *PFNGLATTACHSHADERPROC) (GLuint program, GLuint shader);
-typedef void (GL_APIENTRY *PFNGLLINKPROGRAMPROC) (GLuint program);
-typedef void (GL_APIENTRY *PFNGLUSEPROGRAMPROC) (GLuint program);
-typedef void (GL_APIENTRY *PFNGLDELETESHADERPROC) (GLuint shader);
-typedef void (GL_APIENTRY *PFNGLDELETEPROGRAMPROC) (GLuint program);
-
-typedef GLint(GL_APIENTRY *PFNGLGETUNIFORMLOCATION_PROC) (GLuint program, const GLchar *name);
-typedef void (GL_APIENTRY *PFNGLUNIFORMMATRIX4FV_PROC) (GLint location, GLsizei count, GLboolean transpose, const GLfloat *value);
-
-typedef void (GL_APIENTRY *PFNGLCLEARPROC) (GLbitfield mask);
-typedef void (GL_APIENTRY *PFNGLCLEARCOLORPROC) (GLfloat red, GLfloat green, GLfloat blue, GLfloat alpha);
-typedef void (GL_APIENTRY *PFNGLDRAWELEMENTSPROC) (GLenum mode, GLsizei count, GLenum type, const void *indices);
-typedef void (GL_APIENTRY *PFNGLENABLEPROC) (GLenum cap);
-
-// Isolated pointer storage instances avoiding global name collisions
-static PFNGLGENVERTEXARRAYSOESPROC win_glGenVertexArrays = nullptr;
-static PFNGLBINDVERTEXARRAYOESPROC win_glBindVertexArray = nullptr;
-static PFNGLDELETEVERTEXARRAYSOESPROC win_glDeleteVertexArrays = nullptr;
-static PFNGLGENBUFFERSPROC win_glGenBuffers = nullptr;
-static PFNGLBINDBUFFERPROC win_glBindBuffer = nullptr;
-static PFNGLBUFFERDATAPROC win_glBufferData = nullptr;
-static PFNGLDELETEBUFFERSPROC win_glDeleteBuffers = nullptr;
-static PFNGLENABLEVERTEXATTRIBARRAYPROC win_glEnableVertexAttribArray = nullptr;
-static PFNGLVERTEXATTRIBPOINTERPROC win_glVertexAttribPointer = nullptr;
-
-static PFNGLCREATESHADERPROC win_glCreateShader = nullptr;
-static PFNGLSHADERSOURCEPROC win_glShaderSource = nullptr;
-static PFNGLCOMPILESHADERPROC win_glCompileShader = nullptr;
-static PFNGLCREATEPROGRAMPROC win_glCreateProgram = nullptr;
-static PFNGLATTACHSHADERPROC win_glAttachShader = nullptr;
-static PFNGLLINKPROGRAMPROC win_glLinkProgram = nullptr;
-static PFNGLUSEPROGRAMPROC win_glUseProgram = nullptr;
-static PFNGLDELETESHADERPROC win_glDeleteShader = nullptr;
-static PFNGLDELETEPROGRAMPROC win_glDeleteProgram = nullptr;
-static PFNGLGETUNIFORMLOCATION_PROC win_glGetUniformLocation = nullptr;
-static PFNGLUNIFORMMATRIX4FV_PROC win_glUniformMatrix4fv = nullptr;
-
-static PFNGLCLEARPROC win_glClear = nullptr;
-static PFNGLCLEARCOLORPROC win_glClearColor = nullptr;
-static PFNGLDRAWELEMENTSPROC win_glDrawElements = nullptr;
-static PFNGLENABLEPROC win_glEnable = nullptr;
-
-#define glGenVertexArrays win_glGenVertexArrays
-#define glBindVertexArray win_glBindVertexArray
-#define glDeleteVertexArrays win_glDeleteVertexArrays
-#define glGenBuffers win_glGenBuffers
-#define glBindBuffer win_glBindBuffer
-#define glBufferData win_glBufferData
-#define glDeleteBuffers win_glDeleteBuffers
-#define glEnableVertexAttribArray win_glEnableVertexAttribArray
-#define glVertexAttribPointer win_glVertexAttribPointer
-
-#define glCreateShader win_glCreateShader
-#define glShaderSource win_glShaderSource
-#define glCompileShader win_glCompileShader
-#define glCreateProgram win_glCreateProgram
-#define glAttachShader win_glAttachShader
-#define glLinkProgram win_glLinkProgram
-#define glUseProgram win_glUseProgram
-#define glDeleteShader win_glDeleteShader
-#define glDeleteProgram win_glDeleteProgram
-#define glGetUniformLocation win_glGetUniformLocation
-#define glUniformMatrix4fv win_glUniformMatrix4fv
-
-// Secure macro bounds translation targets
-#define glClear(mask)                 do { if(win_glClear) win_glClear(mask); } while(0)
-#define glClearColor(r, g, b, a)      do { if(win_glClearColor) win_glClearColor(r, g, b, a); } while(0)
-#define glDrawElements(m, c, t, i)    do { if(win_glDrawElements) win_glDrawElements(m, c, t, i); } while(0)
-#define glEnable(cap)                 do { if(win_glEnable) win_glEnable(cap); } while(0)
-
-
-inline void ResolveGLES3Extensions() {
-    win_glGenVertexArrays = (PFNGLGENVERTEXARRAYSOESPROC)SDL_GL_GetProcAddress("glGenVertexArrays");
-    if (!win_glGenVertexArrays) win_glGenVertexArrays = (PFNGLGENVERTEXARRAYSOESPROC)SDL_GL_GetProcAddress("glGenVertexArraysOES");
-
-    win_glBindVertexArray = (PFNGLBINDVERTEXARRAYOESPROC)SDL_GL_GetProcAddress("glBindVertexArray");
-    if (!win_glBindVertexArray) win_glBindVertexArray = (PFNGLBINDVERTEXARRAYOESPROC)SDL_GL_GetProcAddress("glBindVertexArrayOES");
-
-    win_glDeleteVertexArrays = (PFNGLDELETEVERTEXARRAYSOESPROC)SDL_GL_GetProcAddress("glDeleteVertexArrays");
-    if (!win_glDeleteVertexArrays) win_glDeleteVertexArrays = (PFNGLDELETEVERTEXARRAYSOESPROC)SDL_GL_GetProcAddress("glDeleteVertexArraysOES");
-
-    win_glGenBuffers = (PFNGLGENBUFFERSPROC)SDL_GL_GetProcAddress("glGenBuffers");
-    win_glBindBuffer = (PFNGLBINDBUFFERPROC)SDL_GL_GetProcAddress("glBindBuffer");
-    win_glBufferData = (PFNGLBUFFERDATAPROC)SDL_GL_GetProcAddress("glBufferData");
-    win_glDeleteBuffers = (PFNGLDELETEBUFFERSPROC)SDL_GL_GetProcAddress("glDeleteBuffers");
-    win_glEnableVertexAttribArray = (PFNGLENABLEVERTEXATTRIBARRAYPROC)SDL_GL_GetProcAddress("glEnableVertexAttribArray");
-    win_glVertexAttribPointer = (PFNGLVERTEXATTRIBPOINTERPROC)SDL_GL_GetProcAddress("glVertexAttribPointer");
-
-    win_glCreateShader = (PFNGLCREATESHADERPROC)SDL_GL_GetProcAddress("glCreateShader");
-    win_glShaderSource = (PFNGLSHADERSOURCEPROC)SDL_GL_GetProcAddress("glShaderSource");
-    win_glCompileShader = (PFNGLCOMPILESHADERPROC)SDL_GL_GetProcAddress("glCompileShader");
-    win_glCreateProgram = (PFNGLCREATEPROGRAMPROC)SDL_GL_GetProcAddress("glCreateProgram");
-    win_glAttachShader = (PFNGLATTACHSHADERPROC)SDL_GL_GetProcAddress("glAttachShader");
-    win_glLinkProgram = (PFNGLLINKPROGRAMPROC)SDL_GL_GetProcAddress("glLinkProgram");
-    win_glUseProgram = (PFNGLUSEPROGRAMPROC)SDL_GL_GetProcAddress("glUseProgram");
-    win_glDeleteShader = (PFNGLDELETESHADERPROC)SDL_GL_GetProcAddress("glDeleteShader");
-    win_glDeleteProgram = (PFNGLDELETEPROGRAMPROC)SDL_GL_GetProcAddress("glDeleteProgram");
-
-    win_glGetUniformLocation = (PFNGLGETUNIFORMLOCATION_PROC)SDL_GL_GetProcAddress("glGetUniformLocation");
-    win_glUniformMatrix4fv = (PFNGLUNIFORMMATRIX4FV_PROC)SDL_GL_GetProcAddress("glUniformMatrix4fv");
-
-    win_glClear = (PFNGLCLEARPROC)SDL_GL_GetProcAddress("glClear");
-    win_glClearColor = (PFNGLCLEARCOLORPROC)SDL_GL_GetProcAddress("glClearColor");
-    win_glDrawElements = (PFNGLDRAWELEMENTSPROC)SDL_GL_GetProcAddress("glDrawElements");
-    win_glEnable = (PFNGLENABLEPROC)SDL_GL_GetProcAddress("glEnable");
-}
-#else
-// Android and iOS map these natively at compile time via standard system symbols
-inline void ResolveGLES3Extensions() {}
-#endif
-// ============================================================================
-
-// Unified Engine Runtime States
-enum class EngineState
-{
-    Uninitialized,
-    ExtractingAssets,
-    ParsingDataStructure,
-    ExtractingTessellation,
-    MarshallingToGPU,
-    ActiveRendering,
-    ErrorState
+static const DirLight kDirLight = {
+    Vector3(-0.174078f, -0.69311f, 0.696311f), // direction
+    colorRGB(255, 255, 224),                   // color
+    1.0f                                       // intensity
 };
 
-// Fixed interleaved structural layout specifying vector dimensions for GLES 3.0
-struct GLESVertex
-{
-    float position[3]; // x, y, z
-    float normal[3];   // nx, ny, nz
-    float color[4];    // r, g, b, a
+static constexpr PointLight kPointLight = {
+    Vector3(14.0f, 7.0f, 3.0f), // position
+    Vector3(1.0f, 1.0f, 1.0f),  // color
+    0.0f                        // intensity
 };
+
+struct AtmosphereProperties
+{
+    float sunAltitude = 40.0f;
+    float sunAzimuth = 0.0f;
+    Vector3 sunColor = Vector3(1.0f, 1.0f, 1.0f);
+    float sunIntensity = 1.0f;
+    Vector3 skyColorHorizon = Vector3(56.0f / 255.0f);
+    Vector3 skyColorZenith = Vector3(26.0f / 255.0f);
+    float sunTightness = 500.0f;
+};
+
+static AtmosphereProperties g_atmosphere;
+static Product *g_selectedProduct = nullptr;
+static float g_renderScale = 1.0f;
 
 static struct ActiveTouch {
     Uint64 id = 0;
     float x = 0.0f;
     float y = 0.0f;
     bool active = false;
-} activeFingers[2]; // Track up to 2 active fingers for the pinch pipeline
+} activeFingers[2];
 
-struct MobileEngineContext
-{
-    EngineState state = EngineState::Uninitialized;
-    std::string activeResolvedPath = "";
+/* Drag and drop support for Web */
+#if defined(__EMSCRIPTEN__)
+#include <emscripten.h>
 
-    // Public C API instances
-    prc_context *prcCtx = nullptr;
-    prc_api_data prcData = nullptr;
-    prc_api_product *productTreeRoot = nullptr;
-    prc_api_tess *surfaceTessArray = nullptr;
-    prc_api_tess *lineTessArray = nullptr;
-    uint32_t numSurfaceTess = 0;
-    uint32_t numLineTess = 0;
+static std::string g_pendingWebDropPath;
 
-    // OpenGL ES Vertex Object Registry
-    GLuint vao = 0;
-    GLuint vbo = 0;
-    GLuint ebo = 0;
-    GLsizei indexCount = 0;
-    GLuint shaderProgram = 0; // Modern GLES program handler reference
-
-    // --- 3D Trackball Interaction Space ---
-    bool isInteracting = false;
-    float lastMouseX = 0.0f;
-    float lastMouseY = 0.0f;
-    glm::mat4 objectOrientation = glm::mat4(1.0f);
-
-    // --- Dynamic Zoom Space ---
-    float cameraDistance = 20.0f; // Matches your initial 20.0f Z-position
-    float minDistance = 2.0f;     // Prevents zooming inside the mesh
-    float maxDistance = 80.0f;    // Prevents zooming infinitely far away
-
-    // Multi-touch tracking tracking states
-    bool isPinching = false;
-    float initialPinchDistance = 0.0f;
-    float initialCameraDistance = 0.0f;
-};
-
-const char *vertexShaderSource = "#version 300 es\n"
-"layout(location = 0) in vec3 aPos;\n"
-"layout(location = 1) in vec3 aNormal;\n"
-"layout(location = 2) in vec4 aColor;\n"
-"uniform mat4 uMVP;\n" // Matrix uniform input
-"out vec4 ourColor;\n"
-"void main() {\n"
-"    gl_Position = uMVP * vec4(aPos, 1.0);\n" // <-- Apply camera projection
-"    ourColor = aColor;\n"
-"}\n";
-
-const char *fragmentShaderSource = "#version 300 es\n"
-"precision mediump float;\n"
-"in vec4 ourColor;\n"
-"out vec4 fragColor;\n"
-"void main() {\n"
-"    fragColor = ourColor;\n"
-"}\n";
-
-GLuint CreateShaderProgram(const char *vsSource, const char *fsSource)
-{
-    GLuint vertexShader = glCreateShader(GL_VERTEX_SHADER);
-    glShaderSource(vertexShader, 1, &vsSource, NULL);
-    glCompileShader(vertexShader);
-
-    GLuint fragmentShader = glCreateShader(GL_FRAGMENT_SHADER);
-    glShaderSource(fragmentShader, 1, &fsSource, NULL);
-    glCompileShader(fragmentShader);
-
-    GLuint shaderProgram = glCreateProgram();
-    glAttachShader(shaderProgram, vertexShader);
-    glAttachShader(shaderProgram, fragmentShader);
-    glLinkProgram(shaderProgram);
-
-    glDeleteShader(vertexShader);
-    glDeleteShader(fragmentShader);
-    return shaderProgram;
+extern "C" {
+    EMSCRIPTEN_KEEPALIVE
+        void OnWebFileDropped(const char *virtualPath)
+    {
+        if (virtualPath && virtualPath[0] != '\0')
+            g_pendingWebDropPath = virtualPath;
+    }
 }
+#endif
 
-// Platform-agnostic asset extractor: ensures internal APK/bundle assets yield absolute file paths
 bool ResolveCrossPlatformAssetPath(const char *relativeAssetName, std::string &outAbsolutePath)
 {
 #if defined(SDL_PLATFORM_ANDROID)
@@ -279,7 +106,7 @@ bool ResolveCrossPlatformAssetPath(const char *relativeAssetName, std::string &o
 
     outAbsolutePath = std::string(internalWriteDir) + relativeAssetName;
 
-    SDL_FileInfo fileInfo;
+    SDL_PathInfo fileInfo;
     if (SDL_GetPathInfo(outAbsolutePath.c_str(), &fileInfo)) {
         return true;
     }
@@ -299,7 +126,7 @@ bool ResolveCrossPlatformAssetPath(const char *relativeAssetName, std::string &o
     size_t bytesRead = 0;
     while ((bytesRead = SDL_ReadIO(assetIn, buffer.data(), bufferSize)) > 0) {
         SDL_WriteIO(cacheOut, buffer.data(), bytesRead);
-}
+    }
     SDL_CloseIO(assetIn);
     SDL_CloseIO(cacheOut);
     return true;
@@ -308,206 +135,248 @@ bool ResolveCrossPlatformAssetPath(const char *relativeAssetName, std::string &o
     return true;
 #endif
 }
-void ProcessPRCGeometry(MobileEngineContext *engine)
+
+static float arc_projection(float x, float y)
 {
-    int code;
-    if (!engine || engine->state != EngineState::ParsingDataStructure)
-        return;
-    uint32_t numParts = 0, numProducts = 0, numMarkups = 0;
-    if (prc_api_prep_model_tree(engine->prcCtx, engine->prcData, &numParts,
-        &numProducts, &numMarkups) < 0)
+    float r = 1.0f;
+    float dist2 = x * x + y * y;
+    float r2 = r * r;
+    if (dist2 * 2.0f <= r2)
     {
-        engine->state = EngineState::ErrorState;
-        return;
+        float z_arg = r2 - dist2;
+        return sqrtf(z_arg < 0.0f ? 0.0f : z_arg);
     }
-    if (prc_api_create_model_tree(engine->prcCtx, engine->prcData, &engine->productTreeRoot,
-        numParts, numProducts, numMarkups) < 0)
-    {
-        engine->state = EngineState::ErrorState;
-        return;
-    }
-    engine->state = EngineState::ExtractingTessellation;
-    uint32_t numExactGeom = 0;
-    if (prc_api_get_number_tessellations(engine->prcCtx, engine->prcData, engine->productTreeRoot,
-        &engine->numSurfaceTess, &engine->numLineTess, &numExactGeom, 0) < 0)
-    {
-        engine->state = EngineState::ErrorState;
-        return;
-    }
-    if (engine->numSurfaceTess > 0)
-    {
-        engine->surfaceTessArray = (prc_api_tess *)SDL_calloc(engine->numSurfaceTess, sizeof(prc_api_tess));
-    }
-    if (engine->numLineTess > 0)
-    {
-        engine->lineTessArray = (prc_api_tess *)SDL_calloc(engine->numLineTess, sizeof(prc_api_tess));
-    }
-    for (uint32_t i = 0; i < engine->numSurfaceTess; ++i)
-    {
-        uint8_t hasLineCompanion = 0;
-        prc_api_tess &tess = engine->surfaceTessArray[i];
-        uint32_t nFaces = prc_api_get_number_faces(engine->prcCtx, engine->prcData, i);
-        if (prc_api_get_tessellation_type(engine->prcCtx, engine->prcData, i) == PRC_API_TESS_3D_Compressed)
-        {
-            nFaces = 1;
-        }
-        tess.num_faces = nFaces;
-        tess.tess_faces = new prc_api_face[nFaces];
-        code = prc_api_initialize_tessellation(engine->prcCtx, engine->prcData, engine->productTreeRoot, i,
-            &engine->surfaceTessArray[i], engine->numLineTess > 0 ? &engine->lineTessArray[i] : NULL, &hasLineCompanion);
-        if (hasLineCompanion && engine->numLineTess > 0)
-        {
-            engine->lineTessArray[i].num_faces = nFaces;
-            engine->lineTessArray[i].tess_faces = new prc_api_face[nFaces];
-        }
-        if (tess.type == PRC_API_TESS_3D_Wire ||
-            tess.type == PRC_API_TESS_MarkUp)
-        {
-            code = prc_api_get_tessellation_vertices(engine->prcCtx, engine->prcData, i, 0, NULL, &tess);
-        }
-        else
-        {
-            for (uint32_t j = 0; j < tess.num_faces; j++)
-            {
-                code = prc_api_get_tessellation_vertices(engine->prcCtx, engine->prcData, i, j,
-                    tess.tess_faces + j, &tess);
-            }
-        }
-    }
-    engine->state = EngineState::MarshallingToGPU;
+    return (r2 / 2.0f) / sqrtf(dist2);
 }
 
-void GenerateGLESBuffers(MobileEngineContext *engine)
+static Matrix4 compute_rotation2(float x1, float y1, float z1, float x2, float y2, float z2)
 {
-    if (!engine || engine->state != EngineState::MarshallingToGPU) return;
-    std::vector<GLESVertex> extractedVertices;
-    std::vector<uint32_t> extractedIndices;
-    uint32_t runningVertexOffset = 0;
-    for (uint32_t t = 0; t < engine->numSurfaceTess; ++t)
-    {
-        prc_api_tess *tess = &engine->surfaceTessArray[t];
-        uint32_t numFaces = prc_api_get_number_faces(engine->prcCtx, engine->prcData, t);
-        for (uint32_t f = 0; f < numFaces; ++f)
-        {
-            if (prc_api_skip_face(engine->prcCtx, tess, f))
-                continue;
+    float lenSq1 = x1 * x1 + y1 * y1;
+    Vector3 v0 = normalize(Vector3(x1, y1, lenSq1 <= 1.0f ? sqrtf(1.0f - lenSq1) : 0.0f));
 
-            uint32_t faceVertCount = 0;
-            prc_api_vertex *rawVerts = nullptr;
-            if (prc_api_get_face_vertices(engine->prcCtx, tess, f, &faceVertCount, &rawVerts) == 0)
+    float lenSq2 = x2 * x2 + y2 * y2;
+    Vector3 v1 = normalize(Vector3(x2, y2, lenSq2 <= 1.0f ? sqrtf(1.0f - lenSq2) : 0.0f));
+
+    Vector3 axis = cross(v0, v1);
+    float angle = acosf(clamp(dot(v0, v1), -1.0f, 1.0f));
+
+    float c = cosf(angle);
+    float s = sinf(angle);
+    float t = 1.0f - c;
+    float mag = sqrtf(axis.x * axis.x + axis.y * axis.y + axis.z * axis.z);
+
+    if (mag > 0.0f)
+    {
+        axis.x /= mag;
+        axis.y /= mag;
+        axis.z /= mag;
+    }
+    else
+    {
+        axis = Vector3(0.0f, 0.0f, 1.0f);
+    }
+
+    float r00 = c + axis.x * axis.x * t;
+    float r01 = axis.x * axis.y * t - axis.z * s;
+    float r02 = axis.x * axis.z * t + axis.y * s;
+    float r10 = axis.y * axis.x * t + axis.z * s;
+    float r11 = c + axis.y * axis.y * t;
+    float r12 = axis.y * axis.z * t - axis.x * s;
+    float r20 = axis.z * axis.x * t - axis.y * s;
+    float r21 = axis.z * axis.y * t + axis.x * s;
+    float r22 = c + axis.z * axis.z * t;
+
+    return Matrix4(r00, r01, r02, 0.0f,
+        r10, r11, r12, 0.0f,
+        r20, r21, r22, 0.0f,
+        0.0f, 0.0f, 0.0f, 1.0f);
+}
+
+static void SetAllProductsEnabled(Product &prod, bool enabled)
+{
+    prod.setEnabled(enabled);
+    for (uint32_t i = 0; i < prod.numChildren(); i++)
+        SetAllProductsEnabled(*prod.children()[i], enabled);
+}
+
+static void EnableProductAndChildren(Product &prod)
+{
+    prod.setEnabled(true);
+    for (uint32_t i = 0; i < prod.numChildren(); i++)
+        EnableProductAndChildren(*prod.children()[i]);
+}
+
+static void EnableProductAndParents(Product &prod)
+{
+    prod.setEnabled(true);
+    Product *parent = prod.parent();
+    while (parent != nullptr)
+    {
+        parent->setEnabled(true);
+        parent = parent->parent();
+    }
+}
+
+static const char *ProductLabel(const Product &prod)
+{
+    return prod.name() ? prod.name() : "<unnamed product>";
+}
+
+static void DrawTree(Product &prod)
+{
+    if (prod.numChildren() == 1)
+    {
+        Product *onlyChild = prod.children()[0];
+        if (onlyChild->isPartNode() && onlyChild->partNameSameAsProduct())
+        {
+            DrawTree(*onlyChild);
+            return;
+        }
+    }
+
+    ImGui::PushID(&prod);
+    ImGuiTreeNodeFlags flag = 0;
+    if (&prod == g_selectedProduct)
+        flag |= ImGuiTreeNodeFlags_Selected;
+    if (prod.numChildren() == 0)
+        flag |= ImGuiTreeNodeFlags_Leaf;
+
+    bool opened = ImGui::TreeNodeEx(ProductLabel(prod), flag);
+    if (ImGui::IsItemClicked() && !ImGui::IsItemToggledOpen())
+        g_selectedProduct = &prod;
+
+    ImGui::SameLine(0, -2);
+    ImGui::PushID(prod.enabledPtr());
+    ImGui::Checkbox("", prod.enabledPtr());
+    ImGui::PopID();
+
+    if (ImGui::BeginPopupContextItem())
+    {
+        if (ImGui::MenuItem("Isolate Part"))
+        {
+            Product *root = &prod;
+            while (root->parent() != nullptr)
+                root = root->parent();
+            SetAllProductsEnabled(*root, false);
+            EnableProductAndChildren(prod);
+            EnableProductAndParents(prod);
+        }
+        ImGui::EndPopup();
+    }
+
+    if (opened)
+    {
+        for (uint32_t k = 0; k < prod.numChildren(); k++)
+            DrawTree(*prod.children()[k]);
+        ImGui::TreePop();
+    }
+    ImGui::PopID();
+}
+
+static bool drawDebugMenu(Scene &scene, Camera &camera, float deltaTime, int shadowRes, bool enableShadows)
+{
+    ImGui::Begin("Viewer Controls");
+
+    if (ImGui::BeginTabBar("Tabs"))
+    {
+        if (ImGui::BeginTabItem("Main"))
+        {
+            ImGui::Text("Framerate: %.1f fps", deltaTime > 0.0f ? (1.0f / deltaTime) : 0.0f);
+            ImGui::Text("Resolution: %dx%d", scene.width(), scene.height());
+
+            float oldScale = g_renderScale;
+            ImGui::SliderFloat("Render Scale", &g_renderScale, 0.25f, 1.0f);
+            if (oldScale != g_renderScale)
+                scene.resize(scene.width(), scene.height(), g_renderScale, shadowRes, enableShadows);
+
+          //  ImGui::Checkbox("Backface Culling", &scene.backfaceCull());
+           // ImGui::Checkbox("Wireframe", &scene.wireframe());
+            bool showExtraWire = scene.showExtraWireOverlays();
+            if (ImGui::Checkbox("Extra Wire Overlays", &showExtraWire))
+                scene.setShowExtraWireOverlays(showExtraWire);
+         //   ImGui::SliderInt("Normal Debug Mode", &scene.normalDebugMode(), 0, 7);
+            ImGui::EndTabItem();
+        }
+
+        if (ImGui::BeginTabItem("Lighting"))
+        {
+            ImGui::Checkbox("Fullbright", &scene.fullbright());
+            if (ImGui::Button("Compute From File"))
             {
-                for (uint32_t v = 0; v < faceVertCount; ++v)
+                scene.recommendLightingDefaults(&scene.ambientWeight(),
+                    &scene.diffuseWeight(), &g_atmosphere.sunIntensity);
+            }
+            ImGui::SliderFloat("Ambient Weight", &scene.ambientWeight(), 0.0f, 2.5f, "%.3f");
+            ImGui::SliderFloat("Diffuse Weight", &scene.diffuseWeight(), 0.0f, 2.5f, "%.3f");
+            ImGui::SliderFloat("Sun Altitude", &g_atmosphere.sunAltitude, 0.0f, 360.0f);
+            ImGui::SliderFloat("Sun Azimuth", &g_atmosphere.sunAzimuth, 0.0f, 360.0f);
+            ImGui::SliderFloat("Sun Intensity", &g_atmosphere.sunIntensity, 0.0f, 10.0f);
+            ImGui::ColorEdit3("Sun Color", g_atmosphere.sunColor.vec);
+            ImGui::ColorEdit3("Horizon Color", g_atmosphere.skyColorHorizon.vec);
+            ImGui::ColorEdit3("Zenith Color", g_atmosphere.skyColorZenith.vec);
+            ImGui::EndTabItem();
+        }
+
+        if (ImGui::BeginTabItem("Objects"))
+        {
+            if (scene.models() != nullptr && scene.mumProducts() > 0)
+            {
+                if (ImGui::Button("Show All Parts"))
+                    SetAllProductsEnabled(scene.models()[0], true);
+                DrawTree(scene.models()[0]);
+            }
+            ImGui::EndTabItem();
+        }
+
+        if (ImGui::BeginTabItem("Views"))
+        {
+            static int selectedValue = 0;
+            uint32_t numViews = camera.getNumViews();
+
+            if (numViews > 0)
+            {
+                for (uint32_t i = 0; i < numViews; i++)
                 {
-                    rawVerts[v].color[0] = 1.0f; // Force Red
-                    rawVerts[v].color[1] = 0.0f;
-                    rawVerts[v].color[2] = 0.0f;
-                    rawVerts[v].color[3] = 1.0f;
-                    GLESVertex vertex;
-                    std::memcpy(vertex.position, rawVerts[v].position, sizeof(float) * 3);
-                    std::memcpy(vertex.normal, rawVerts[v].normal, sizeof(float) * 3);
-                    std::memcpy(vertex.color, rawVerts[v].color, sizeof(float) * 4);
-                    extractedVertices.push_back(vertex);
-                    // Quick layout terminal print tracker to verify raw bounding ranges
-                    std::cout << "Extracted Vert Vertex Coordinate Range -> [X]: " << vertex.position[0]
-                        << ", [Y]: " << vertex.position[1] << ", [Z]: " << vertex.position[2] << std::endl;
-                }
-                size_t numPrims = prc_api_get_num_graphics_primitives(engine->prcCtx, engine->prcData, tess);
-                for (size_t p = 0; p < numPrims; ++p)
-                {
-                    prc_api_graphic_primitive prim;
-                    if (prc_api_get_graphics_primitive(engine->prcCtx, engine->prcData, tess, f, p, &prim) == 0)
+                    const char *name = camera.getViewName(i);
+                    if (name)
                     {
-                        for (size_t idx = 0; idx < prim.num_indices; ++idx)
+                        ImGui::RadioButton(name, &selectedValue, i);
+                        if (ImGui::IsItemClicked())
                         {
-                            extractedIndices.push_back(prim.indices[idx] + runningVertexOffset);
+                            if (i != camera.getCurrentViewIndex())
+                            {
+                                camera.setNewViewIndex(i);
+                            }
                         }
                     }
                 }
-                runningVertexOffset += faceVertCount;
             }
+            ImGui::EndTabItem();
         }
+
+        ImGui::EndTabBar();
     }
 
-    if (!extractedVertices.empty() && !extractedIndices.empty())
-    {
-        glGenVertexArrays(1, &engine->vao);
-        glGenBuffers(1, &engine->vbo);
-        glGenBuffers(1, &engine->ebo);
-        glBindVertexArray(engine->vao);
-        glBindBuffer(GL_ARRAY_BUFFER, engine->vbo);
-        glBufferData(GL_ARRAY_BUFFER, extractedVertices.size() * sizeof(GLESVertex), extractedVertices.data(), GL_STATIC_DRAW);
-        glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, engine->ebo);
-        glBufferData(GL_ELEMENT_ARRAY_BUFFER, extractedIndices.size() * sizeof(uint32_t), extractedIndices.data(), GL_STATIC_DRAW);
-        // Position Attribute Setup
-        glEnableVertexAttribArray(0);
-        glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(GLESVertex), (void *)offsetof(GLESVertex, position));
-        // Normal Attribute Setup
-        glEnableVertexAttribArray(1);
-        glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, sizeof(GLESVertex), (void *)offsetof(GLESVertex, normal));
-        // Color Attribute Setup
-        glEnableVertexAttribArray(2);
-        glVertexAttribPointer(2, 4, GL_FLOAT, GL_FALSE, sizeof(GLESVertex), (void *)offsetof(GLESVertex, color));
-        engine->indexCount = static_cast<GLsizei>(extractedIndices.size());
-        glBindVertexArray(0);
-        engine->state = EngineState::ActiveRendering;
-    }
-    else
-    {
-        engine->state = EngineState::ErrorState;
-    }
+    ImVec2 mousePos = ImGui::GetMousePos();
+    ImVec2 winPos = ImGui::GetWindowPos();
+    ImVec2 winSize = ImGui::GetWindowSize();
+    bool overWindow = (mousePos.x >= winPos.x && mousePos.x <= winPos.x + winSize.x &&
+        mousePos.y >= winPos.y && mousePos.y <= winPos.y + winSize.y);
+    bool mouseUsed = ImGui::IsMouseDown(ImGuiMouseButton_Left) && overWindow;
+    ImGui::End();
+    // Update Sun & Skybox each frame
+    DirLight &sun = *scene.dirLight();
+    Skybox *sky = scene.skybox();
+    Quaternion q1 = mutil::rotateaxis(Vector3(0.0f, 1.0f, 0.0f), mutil::radians(g_atmosphere.sunAzimuth));
+    Quaternion q2 = mutil::rotateaxis(Vector3(1.0f, 0.0f, 0.0f), mutil::radians(g_atmosphere.sunAltitude));
+    sun.direction = mutil::rotatevector(q1 * q2, Vector3(0.0f, 0.0f, 1.0f));
+    sun.color = g_atmosphere.sunColor;
+    sun.intensity = g_atmosphere.sunIntensity;
+    sky->setHorizonColor(g_atmosphere.skyColorHorizon);
+    sky->setZenithColor(g_atmosphere.skyColorZenith);
+    sky->setSunTightness(g_atmosphere.sunTightness);
+    return mouseUsed;
 }
-void CleanEngineResources(MobileEngineContext *engine)
-{
-    if (!engine)
-        return;
-
-    if (engine->shaderProgram)
-        glDeleteProgram(engine->shaderProgram);
-
-    if (engine->prcCtx && engine->prcData)
-    {
-        prc_api_release_data(engine->prcCtx, engine->prcData,
-            engine->surfaceTessArray, engine->numSurfaceTess,
-            engine->lineTessArray, engine->numLineTess,
-            nullptr, 0, engine->productTreeRoot);
-        if (engine->surfaceTessArray)
-            SDL_free(engine->surfaceTessArray);
-        if (engine->lineTessArray)
-            SDL_free(engine->lineTessArray);
-    }
-
-    if (engine->prcCtx)
-        prc_api_release_context(engine->prcCtx);
-    if (engine->vao)
-        glDeleteVertexArrays(1, &engine->vao);
-    if (engine->vbo)
-        glDeleteBuffers(1, &engine->vbo);
-    if (engine->ebo)
-        glDeleteBuffers(1, &engine->ebo);
-}
-
-inline glm::vec3 MapToTrackballSphere(float mouseX, float mouseY, float windowWidth, float windowHeight)
-{
-    // 1. Convert pixel space coordinates to Normalized Device Coordinates [-1.0 to 1.0]
-    float x = (2.0f * mouseX) / windowWidth - 1.0f;
-    float y = 1.0f - (2.0f * mouseY) / windowHeight; // Flip Y axis for OpenGL standard orientation
-
-    // 2. Calculate distance from the center of the viewport
-    float d = x * x + y * y;
-    glm::vec3 vector(x, y, 0.0f);
-
-    // 3. Project coordinates onto a sphere surface, fallback to a hyperbolic sheet if dragging far outside
-    if (d <= 1.0f)
-    {
-        vector.z = std::sqrt(1.0f - d);
-    }
-    else
-    {
-        vector = glm::normalize(vector); // Snap to outer edge boundary edge
-    }
-    return vector;
-}
-
 int main(int argc, char *argv[])
 {
     if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_EVENTS))
@@ -515,13 +384,11 @@ int main(int argc, char *argv[])
         std::cerr << "SDL initialization failed: " << SDL_GetError() << std::endl;
         return -1;
     }
-
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_ES);
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 3);
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 0);
-
     SDL_Window *window = SDL_CreateWindow(
-        "nanoPRC 3D PDF Viewer", 800, 600,
+        "nanoPRC 3D PDF Viewer", 1024, 768,
         SDL_WINDOW_OPENGL | SDL_WINDOW_RESIZABLE
     );
     if (!window)
@@ -530,9 +397,7 @@ int main(int argc, char *argv[])
         SDL_Quit();
         return -1;
     }
-
     SDL_GLContext glContext = SDL_GL_CreateContext(window);
-
     if (!glContext)
     {
         std::cerr << "GLES Context creation failed: " << SDL_GetError() << std::endl;
@@ -541,220 +406,289 @@ int main(int argc, char *argv[])
         return -1;
     }
 
-    // 1. Resolve ALL driver function pointers instantly at runtime
-    ResolveGLES3Extensions();
 
-    // 2. Production Security Gate: Validate raw internal pointers directly 
-    // to prove to the static analyzer that a null execution path is impossible.
-#if defined(SDL_PLATFORM_WIN32) || defined(__EMSCRIPTEN__)
-    if (!win_glGetUniformLocation || !win_glUniformMatrix4fv || !win_glEnable ||
-        !win_glClear || !win_glClearColor || !win_glDrawElements)
-    {
-        SDL_LogCritical(SDL_LOG_CATEGORY_APPLICATION, "FATAL: Graphics driver failed to export core OpenGL ES functions. Terminating.");
-        SDL_DestroyWindow(window);
-        SDL_Quit();
-        return -1; // Abort entry path securely
-    }
+/* In desktop OpenGL ES 3.0 (like ANGLE on Windows), extensions like EXT_color_buffer_float
+  and EXT_color_buffer_half_float are active automatically if the GPU supports them.
+  In WebGL 2.0, extensions remain disabled until gl.getExtension(...) is explicitly called!*/
+#if defined(__EMSCRIPTEN__)
+    EM_ASM({
+        const canvas = Module.canvas || document.getElementById('canvas');
+        const gl = canvas ? canvas.getContext('webgl2') : null;
+        if (gl) {
+            gl.getExtension('EXT_color_buffer_float');
+            gl.getExtension('EXT_color_buffer_half_float');
+            gl.getExtension('OES_texture_float_linear');
+            gl.getExtension('OES_texture_half_float_linear');
+        }
+        });
 #endif
 
-    // 3. Completely secure from null dereference, syntax errors, and linker tracking!
-    glEnable(GL_DEPTH_TEST);
-
-    // ====================================================================
-    // REMOVED THE TWO MANUAL ASSIGNMENTS THAT WERE CRASHING / COLLIDING HERE
-    // ====================================================================
-
-    MobileEngineContext engine;
-    engine.shaderProgram = CreateShaderProgram(vertexShaderSource, fragmentShaderSource);
-    engine.prcCtx = prc_api_new_context(nullptr);
-    if (engine.prcCtx)
+    SDL_GL_MakeCurrent(window, glContext);
+    ResolveGLES3Extensions();
+#if defined(SDL_PLATFORM_WIN32)
+    if (!WinGLESGlobals<>::p_glGetUniformLocation || !WinGLESGlobals<>::p_glUniformMatrix4fv || !WinGLESGlobals<>::p_glEnable ||
+        !WinGLESGlobals<>::p_glClear || !WinGLESGlobals<>::p_glClearColor || !WinGLESGlobals<>::p_glDrawElements)
     {
-        std::cout << "nanoPRC parser context successfully active inside mobile loop!" << std::endl;
-        engine.state = EngineState::ExtractingAssets;
+        SDL_LogCritical(SDL_LOG_CATEGORY_APPLICATION, "FATAL: Graphics driver failed to export core OpenGL ES functions.");
+        SDL_DestroyWindow(window);
+        SDL_Quit();
+        return -1;
+    }
+#endif
+    // Initialize ImGui for OpenGL ES 3.0 (#version 300 es)
+    IMGUI_CHECKVERSION();
+    ImGui::CreateContext();
+    ImGui_ImplSDL3_InitForOpenGL(window, glContext);
+    ImGui_ImplOpenGL3_Init("#version 300 es");
+    MobileEngineContext engine;
+    const char *inputFile = (argc > 1) ? argv[1] : "triangle.pdf";
+    if (!ResolveCrossPlatformAssetPath(inputFile, engine.activeResolvedPath))
+    {
+        std::cerr << "Failed to resolve asset path: " << inputFile << std::endl;
+        return -1;
+    }
+
+    int w, h;
+    int shadowResolution = 1024;
+    bool enableShadows = false;
+    SDL_GetWindowSizeInPixels(window, &w, &h);
+
+    // 1. Load scene & initialize camera
+    bool loaded = engine.viewerScene.load(engine.activeResolvedPath.c_str(), &engine.viewerCamera, false, false);
+    if (!loaded)
+    {
+        g_loadErrorMessage = "Could not load initial file: no valid 3D PRC data found.";
     }
     else
     {
-        engine.state = EngineState::ErrorState;
-    }
+        engine.viewerScene.setCameraInitialPosition(&engine.viewerCamera);
+        // 2. Compute recommended lighting & initialize lights/skybox/postprocess
+        engine.viewerScene.recommendLightingDefaults(
+            &engine.viewerScene.ambientWeight(),
+            &engine.viewerScene.diffuseWeight(),
+            &g_atmosphere.sunIntensity);
+        *engine.viewerScene.dirLight() = kDirLight;
+        *engine.viewerScene.pointLight() = kPointLight;
+        engine.viewerScene.enableBloom() = false;
+        engine.viewerScene.enableToneMapping() = true;
+        engine.viewerScene.compositor()->gamma() = 2.2f;
+        engine.viewerScene.compositor()->exposure() = 1.0f;
 
-    if (engine.state == EngineState::ExtractingAssets)
-    {
-        if (ResolveCrossPlatformAssetPath("triangle.pdf", engine.activeResolvedPath))
+        engine.viewerCamera.setAspect((float)w / (float)h);
+        engine.viewerCamera.update();
+        if (!engine.viewerScene.resize(w, h, g_renderScale, shadowResolution, enableShadows))
         {
-            engine.prcData = prc_api_open_contents(engine.prcCtx, engine.activeResolvedPath.c_str());
-            if (engine.prcData)
+            g_loadErrorMessage = "Graphics framebuffer allocation failed.";
+        }
+    }
+    glEnable(GL_DEPTH_TEST);
+    // Arcball state
+    bool mouseDown = false;
+    bool mouseMoved = false;
+    int mouseUpX = 0, mouseUpY = 0;
+    int mouseDownX = 0, mouseDownY = 0;
+    bool mouseOverUI = false;
+    Matrix4 currMat = Matrix4(1.0f);
+    Matrix4 transToCenter = Matrix4(1.0f);
+    Matrix4 transFromCenter = Matrix4(1.0f);
+    Matrix4 cam2World = Matrix4(1.0f);
+    Matrix4 world2Cam = Matrix4(1.0f);
+    int32_t viewIndex = -1;
+    float time = SDL_GetTicks() / 1000.0f;
+    bool running = true;
+    SDL_Event event;
+
+    while (running)
+    {
+
+        /* Allow new files to be dropped into the webpag */
+#if defined(__EMSCRIPTEN__)
+        if (!g_pendingWebDropPath.empty())
+        {
+            std::string droppedPath = g_pendingWebDropPath;
+            g_pendingWebDropPath.clear();
+
+            printf("Loading dropped web file: %s\n", droppedPath.c_str());
+
+            // 1. Unload triangle.pdf (or previous model) and reset camera/UI
+            releaseTextures();
+            engine.viewerScene.unload();
+            engine.viewerCamera = Camera();
+            g_selectedProduct = nullptr;
+            viewIndex = -1;
+
+            // 2. Load the newly dropped file from MEMFS
+            bool loaded = engine.viewerScene.load(droppedPath.c_str(), &engine.viewerCamera, false, false);
+            if (!loaded)
             {
-                engine.state = EngineState::ParsingDataStructure;
+                g_loadErrorMessage = "Could not load file: no valid 3D PRC data found.";
             }
             else
             {
-                prc_api_print_error_stack(engine.prcCtx);
-                engine.state = EngineState::ErrorState;
+                engine.viewerScene.setCameraInitialPosition(&engine.viewerCamera);
+
+                // 3. Re-apply lighting, post-processing, and FBO dimensions
+                engine.viewerScene.recommendLightingDefaults(
+                    &engine.viewerScene.ambientWeight(),
+                    &engine.viewerScene.diffuseWeight(),
+                    &g_atmosphere.sunIntensity);
+
+                *engine.viewerScene.dirLight() = kDirLight;
+                *engine.viewerScene.pointLight() = kPointLight;
+                engine.viewerScene.enableBloom() = false;
+                engine.viewerScene.enableToneMapping() = true;
+                engine.viewerScene.compositor()->gamma() = 2.2f;
+                engine.viewerScene.compositor()->exposure() = 1.0f;
+
+                SDL_GetWindowSizeInPixels(window, &w, &h);
+                engine.viewerCamera.setAspect((float)w / (float)h);
+                engine.viewerCamera.update();
+                if (!engine.viewerScene.resize(w, h, g_renderScale, shadowResolution, enableShadows))
+                {
+                    g_loadErrorMessage = "Graphics framebuffer allocation failed.";
+                }
             }
+            // 4. Clean up temporary MEMFS file
+            std::remove(droppedPath.c_str());
         }
-        else
+#endif
+
+        float lastTime = time;
+        time = SDL_GetTicks() / 1000.0f;
+        float deltaTime = time - lastTime;
+        if (viewIndex != (int32_t)engine.viewerCamera.getCurrentViewIndex())
         {
-            engine.state = EngineState::ErrorState;
+            double camZCenter = engine.viewerCamera.getCurrentViewCenterOrbitZ();
+            cam2World = engine.viewerCamera.getCurrentViewCameraMatrix();
+            Vector4 modelWorldCenter = cam2World * Vector4(0.0, 0.0, camZCenter, 1.0);
+            viewIndex = engine.viewerCamera.getCurrentViewIndex();
+            transToCenter = mutil::translate(Matrix4(1.0f), Vector3(-modelWorldCenter.x, -modelWorldCenter.y, -modelWorldCenter.z));
+            transFromCenter = mutil::translate(Matrix4(1.0f), Vector3(modelWorldCenter.x, modelWorldCenter.y, modelWorldCenter.z));
+            cam2World.columns[3] = Vector4(0.0f, 0.0f, 0.0f, 1.0f);
+            world2Cam = mutil::transpose(cam2World);
         }
-    }
-    bool running = true;
-    SDL_Event event;
-    while (running)
-    {
+        float wheelDelta = 0.0f;
         while (SDL_PollEvent(&event))
         {
+            ImGui_ImplSDL3_ProcessEvent(&event);
             if (event.type == SDL_EVENT_QUIT)
             {
                 running = false;
             }
-
-            // ================================================================
-            // 1. MOBILE TOUCH EVENTS (ISOLATED GESTURE SPACE)
-            // ================================================================
-            else if (event.type == SDL_EVENT_FINGER_DOWN)
+            else if (event.type == SDL_EVENT_WINDOW_RESIZED)
             {
-                if (!activeFingers[0].active)
+                SDL_GetWindowSizeInPixels(window, &w, &h);
+                if (w > 0 && h > 0)
                 {
-                    activeFingers[0].id = event.tfinger.fingerID;
-                    activeFingers[0].x = event.tfinger.x;
-                    activeFingers[0].y = event.tfinger.y;
-                    activeFingers[0].active = true;
+                    engine.viewerCamera.setAspect((float)w / (float)h);
+                    engine.viewerScene.resize(w, h, g_renderScale, shadowResolution, enableShadows);
                 }
-                else if (!activeFingers[1].active && activeFingers[0].id != event.tfinger.fingerID) {
-                    activeFingers[1].id = event.tfinger.fingerID;
-                    activeFingers[1].x = event.tfinger.x;
-                    activeFingers[1].y = event.tfinger.y;
-                    activeFingers[1].active = true;
-
-                    engine.isPinching = true;
-                    float dx = activeFingers[0].x - activeFingers[1].x;
-                    float dy = activeFingers[0].y - activeFingers[1].y;
-                    engine.initialPinchDistance = std::sqrt(dx * dx + dy * dy);
-                    engine.initialCameraDistance = engine.cameraDistance;
-                }
-            }
-            else if (event.type == SDL_EVENT_FINGER_UP)
-            {
-                if (activeFingers[0].active && activeFingers[0].id == event.tfinger.fingerID) {
-                    activeFingers[0].active = false;
-                }
-                if (activeFingers[1].active && activeFingers[1].id == event.tfinger.fingerID) {
-                    activeFingers[1].active = false;
-                }
-
-                if (!activeFingers[0].active || !activeFingers[1].active) {
-                    engine.isPinching = false;
-                }
-            }
-            else if (event.type == SDL_EVENT_FINGER_MOTION)
-            {
-                if (activeFingers[0].active && activeFingers[0].id == event.tfinger.fingerID) {
-                    activeFingers[0].x = event.tfinger.x;
-                    activeFingers[0].y = event.tfinger.y;
-                }
-                if (activeFingers[1].active && activeFingers[1].id == event.tfinger.fingerID) {
-                    activeFingers[1].x = event.tfinger.x;
-                    activeFingers[1].y = event.tfinger.y;
-                }
-
-                if (engine.isPinching && activeFingers[0].active && activeFingers[1].active)
-                {
-                    float dx = activeFingers[0].x - activeFingers[1].x;
-                    float dy = activeFingers[0].y - activeFingers[1].y;
-                    float currentPinchDistance = std::sqrt(dx * dx + dy * dy);
-
-                    if (engine.initialPinchDistance > 0.001f) {
-                        float scaleFactor = engine.initialPinchDistance / currentPinchDistance;
-                        engine.cameraDistance = engine.initialCameraDistance * scaleFactor;
-                        engine.cameraDistance = glm::clamp(engine.cameraDistance, engine.minDistance, engine.maxDistance);
-                    }
-                }
-            }
-
-            // ================================================================
-            // 2. DESKTOP MOUSE EVENTS (SEPARATED WORKING ORBIT STRUCTURES)
-            // ================================================================
-            else if (event.type == SDL_EVENT_MOUSE_BUTTON_DOWN && event.button.button == SDL_BUTTON_LEFT)
-            {
-                engine.isInteracting = true;
-                engine.lastMouseX = event.button.x;
-                engine.lastMouseY = event.button.y;
-            }
-            else if (event.type == SDL_EVENT_MOUSE_BUTTON_UP && event.button.button == SDL_BUTTON_LEFT)
-            {
-                engine.isInteracting = false;
             }
             else if (event.type == SDL_EVENT_MOUSE_MOTION)
             {
-                // Core trackball orbit block executes cleanly on desktop mouse movements
-                if (engine.isInteracting)
+                mouseMoved = true;
+                mouseDownX = (int)event.motion.x;
+                mouseDownY = (int)event.motion.y;
+                if (!mouseDown)
                 {
-                    glm::vec3 va = MapToTrackballSphere(engine.lastMouseX, engine.lastMouseY, 800.0f, 600.0f);
-                    glm::vec3 vb = MapToTrackballSphere(event.motion.x, event.motion.y, 800.0f, 600.0f);
-
-                    float dot = glm::clamp(glm::dot(va, vb), -1.0f, 1.0f);
-                    float angle = std::acos(dot) * 2.5f;
-
-                    if (angle > 0.001f) {
-                        glm::vec3 axis = glm::normalize(glm::cross(va, vb));
-                        glm::mat4 incrementalRotation = glm::rotate(glm::mat4(1.0f), angle, axis);
-                        engine.objectOrientation = incrementalRotation * engine.objectOrientation;
-                    }
-                    engine.lastMouseX = event.motion.x;
-                    engine.lastMouseY = event.motion.y;
+                    mouseUpX = mouseDownX;
+                    mouseUpY = mouseDownY;
                 }
             }
-            else if (event.type == SDL_EVENT_MOUSE_WHEEL)
+            else if (event.type == SDL_EVENT_MOUSE_BUTTON_DOWN && event.button.button == SDL_BUTTON_LEFT)
             {
-                engine.cameraDistance -= event.wheel.y * 1.5f;
-                engine.cameraDistance = glm::clamp(engine.cameraDistance, engine.minDistance, engine.maxDistance);
+                if (engine.viewerScene.models() != nullptr && engine.viewerScene.mumProducts() > 0)
+                    currMat = engine.viewerScene.models()[0].model();
+                mouseDown = true;
+            }
+            else if (event.type == SDL_EVENT_MOUSE_BUTTON_UP && event.button.button == SDL_BUTTON_LEFT)
+            {
+                mouseDown = false;
+            }
+            else if (event.type == SDL_EVENT_MOUSE_WHEEL && !mouseOverUI)
+            {
+                if (engine.viewerScene.models() != nullptr && engine.viewerScene.mumProducts() > 0)
+                    currMat = engine.viewerScene.models()[0].model();
+                wheelDelta = event.wheel.y;
             }
         }
-
-        if (engine.state == EngineState::ParsingDataStructure)
+        // Arcball rotation & wheel zoom on root product
+        if (((mouseDown && mouseMoved && !mouseOverUI) || wheelDelta != 0.0f) &&
+            engine.viewerScene.models() != nullptr && engine.viewerScene.mumProducts() > 0)
         {
-            ProcessPRCGeometry(&engine);
+            Matrix4 mat;
+            if (wheelDelta == 0.0f)
+            {
+                int minDim = std::min(w, h) - 1;
+                if (minDim > 0)
+                {
+                    float px = (1.0f / (float)minDim) * (2.0f * mouseUpX - w - 1);
+                    float py = (1.0f / (float)minDim) * (2.0f * mouseUpY - h - 1);
+                    float qx = (1.0f / (float)minDim) * (2.0f * mouseDownX - w - 1);
+                    float qy = (1.0f / (float)minDim) * (2.0f * mouseDownY - h - 1);
+                    Matrix4 matRot = compute_rotation2(px, py, arc_projection(px, py),
+                        qx, qy, arc_projection(qx, qy));
+                    Matrix4 matRotWorld = cam2World * matRot * world2Cam;
+                    mat = transFromCenter * matRotWorld * transToCenter * currMat;
+                    engine.viewerScene.models()[0].setModel(mat);
+                }
+            }
+            else
+            {
+                float scaleFactor = 1.0f + wheelDelta * 0.1f;
+                Matrix4 scaleMat = mutil::scale(Matrix4(1.0f), Vector3(scaleFactor, scaleFactor, scaleFactor));
+                engine.viewerScene.models()[0].setModel(scaleMat * currMat);
+            }
+            mouseMoved = false;
         }
-        if (engine.state == EngineState::MarshallingToGPU)
-        {
-            GenerateGLESBuffers(&engine);
-        }
-        glClearColor(0.1f, 0.15f, 0.2f, 1.0f);
+        // Clear default back buffer before scene + ImGui pass
+        glBindFramebuffer(GL_FRAMEBUFFER, 0);
+        glViewport(0, 0, w, h);
+        glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
-        if (engine.state == EngineState::ActiveRendering)
+        ImGui_ImplOpenGL3_NewFrame();
+        ImGui_ImplSDL3_NewFrame();
+        ImGui::NewFrame();
+        // Render 3D scene
+        if (engine.viewerScene.models() != nullptr && engine.viewerScene.mumProducts() > 0)
         {
-            glUseProgram(engine.shaderProgram);
-
-            // 1. Projections
-            glm::mat4 projection = glm::perspective(glm::radians(45.0f), 800.0f / 600.0f, 0.1f, 100.0f);
-
-            // 2. MODIFIED: Feed the dynamic distance state directly into the camera vector array
-            glm::mat4 view = glm::lookAt(
-                glm::vec3(0.0f, 0.0f, engine.cameraDistance), // <-- Use your zoom state variable here!
-                glm::vec3(0.0f, 0.0f, 0.0f),
-                glm::vec3(0.0f, 1.0f, 0.0f)
-            );
-
-            // 3. Model Orientation from Trackball
-            glm::mat4 model = engine.objectOrientation;
-
-            // Combine matrices into MVP
-            glm::mat4 mvp = projection * view * model;
-
-            // 4. Uniform Upload
-            GLint mvpLoc = glGetUniformLocation(engine.shaderProgram, "uMVP");
-            glUniformMatrix4fv(mvpLoc, 1, GL_FALSE, glm::value_ptr(mvp));
-
-            glBindVertexArray(engine.vao);
-            glDrawElements(GL_TRIANGLES, engine.indexCount, GL_UNSIGNED_INT, nullptr);
-            glBindVertexArray(0);
+            glEnable(GL_DEPTH_TEST);
+            engine.viewerScene.render(&engine.viewerCamera);
         }
+        // Render ImGui overlay on top
+        glDisable(GL_DEPTH_TEST);
+        glViewport(0, 0, w, h);
+        mouseOverUI = drawDebugMenu(engine.viewerScene, engine.viewerCamera, deltaTime, shadowResolution, enableShadows);
+
+        if (!g_loadErrorMessage.empty())
+        {
+            mouseOverUI = true;
+            ImGui::SetNextWindowPos(ImVec2(w * 0.5f, h * 0.5f), ImGuiCond_Always, ImVec2(0.5f, 0.5f));
+            if (ImGui::Begin("Load Error", nullptr, ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoCollapse))
+            {
+                ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.4f, 1.0f), "%s", g_loadErrorMessage.c_str());
+                if (ImGui::Button("OK"))
+                {
+                    g_loadErrorMessage.clear();
+                }
+            }
+            ImGui::End();
+        }
+
+
+
+        if (engine.viewerScene.models() != nullptr && engine.viewerScene.mumProducts() > 0)
+            engine.viewerCamera.upDateView(engine.viewerScene.models()[0]);
+        ImGui::Render();
+        ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
         SDL_GL_SwapWindow(window);
     }
-    CleanEngineResources(&engine);
+    ImGui_ImplOpenGL3_Shutdown();
+    ImGui_ImplSDL3_Shutdown();
+    ImGui::DestroyContext();
+    engine.viewerScene.unload();
     SDL_GL_DestroyContext(glContext);
     SDL_DestroyWindow(window);
     SDL_Quit();
     return 0;
 }
-

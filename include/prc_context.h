@@ -113,6 +113,7 @@ struct prc_context_s
     uint8_t trace_reversed;
     uint8_t trace_normals;
     uint8_t trace_gate;
+    uint64_t stream_state_tag;
  #if PRC_DEBUG_MEMORY
     prc_debug_memory *debug_memory;
     size_t debug_memory_size;

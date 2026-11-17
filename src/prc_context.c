@@ -70,6 +70,12 @@ prc_new_context(const prc_hooks *hooks)
     ctx->graphics_content.ref_base_ptr_capacity = INIT_REFBASE_CAPACITY;
     ctx->graphics_content.ref_base_count = 0;
 
+    uint64_t seed = (uint64_t)(uintptr_t)ctx ^ 0x4E616E6F50524321ULL;
+    seed ^= seed >> 33;
+    seed *= 0xFF51AFD7ED558CCDULL;
+    seed ^= seed >> 33;
+    ctx->stream_state_tag = seed;
+
     return ctx;
 }
 

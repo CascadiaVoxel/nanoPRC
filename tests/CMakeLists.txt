@@ -216,3 +216,8 @@ add_executable(test_polyline_point tests/unit/test_polyline_point.c)
 target_link_libraries(test_polyline_point prc_static)
 target_include_directories(test_polyline_point PRIVATE tests)
 add_test(NAME test_polyline_point COMMAND test_polyline_point)
+
+add_executable(test_product_visibility tests/unit/test_product_visibility.c)
+target_link_libraries(test_product_visibility prc_static)
+target_include_directories(test_product_visibility PRIVATE tests)
+add_test(NAME test_product_visibility COMMAND test_product_visibility)

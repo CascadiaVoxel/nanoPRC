@@ -486,9 +486,13 @@ bool Scene::addRepItems(prc_context *ctx, prc_api_data data, prc_api_part *api_p
         Matrix4 item_matrix = matrix;
         uint8_t item_identity = is_identity;
         /* A removed item is loaded switched off, and kept out of the scene's
-           bounds, so the view fits what is drawn */
+           bounds, so the view fits what is drawn. So is a hidden one that
+           holds geometry (visible, resolved by nanoPRC as Adobe Acrobat does);
+           a hidden set of items is not switched off itself, since an item
+           below it can still be shown, but its hidden items are. */
         Vector4 removedMin = Vector4(FLT_MAX), removedMax = Vector4(-FLT_MAX);
-        bool removed = (item->behavior_bit_field2 & PRC_REMOVED_BYTE2) != 0;
+        bool removed = (item->behavior_bit_field2 & PRC_REMOVED_BYTE2) != 0 ||
+            (!item->visible && item->num_rep_items == 0);
         Vector4 *itemMin = removed ? &removedMin : minBound;
         Vector4 *itemMax = removed ? &removedMax : maxBound;
 
@@ -635,7 +639,10 @@ bool Scene::convertTree(prc_context *ctx, prc_api_data data, prc_api_product *ap
             Vector4 *partMin = minBound, *partMax = maxBound;
 
             placeByLocalCoordinateSystem(ctx, data, api_product->part, app_child, &part_matrix, &part_identity);
-            if (api_product->part->behavior_bit_field2 & PRC_REMOVED_BYTE2)
+            /* Hidden, as for an item (see addRepItems), when the part holds
+               its geometry itself rather than in items */
+            if ((api_product->part->behavior_bit_field2 & PRC_REMOVED_BYTE2) ||
+                (!api_product->part->visible && api_product->part->num_rep_items == 0))
             {
                 app_child->setEnabled(false);
                 partMin = &partRemovedMin;

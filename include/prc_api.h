@@ -373,6 +373,11 @@ struct prc_api_part_s
     prc_api_entity_ref entity_ref;
     prc_api_object_style *RI_item_style_node; /* This is a pointer to the RI style tree leaf. We can traverse this backwards to get everything */
     prc_api_attributes attributes;
+    /** 1 if this part or representation item is shown, 0 if it is hidden or
+        removed, as worked out by prc_api_create_model_tree from the
+        behaviour fields along its path from the root (see
+        prc_api_product.visible). */
+    uint8_t visible;
 };
 
 typedef struct prc_api_markup_s
@@ -412,6 +417,26 @@ struct prc_api_product_s
         are not product occurrences. */
     uint8_t behavior_bit_field1;
     uint8_t behavior_bit_field2;
+    /** 1 if this node is shown, 0 if it is hidden or removed: the graphics
+        behaviour resolved along the path from the root, as Adobe Acrobat
+        resolves it, so a renderer need not. Set by prc_api_create_model_tree
+        for products, and for their parts and representation items
+        (prc_api_part.visible).
+
+        ISO 14739-1, 7.2.4.2 "GraphicsContent" and Table 34
+        "behavior_bit_field": where nodes on the path set ChildHeritShow
+        (0x0002), the lowest of them gives the value, its Show bit (0x0001);
+        otherwise, where nodes set ParentHeritShow (0x0004), the highest of
+        them gives it; a node with ChildHeritShow ignores its own
+        ParentHeritShow. Where no node on the path sets either, the node is
+        shown whatever its own Show bit: the standard gives the node's own
+        value there, but Adobe Acrobat draws such nodes, and many files
+        clear Show on every node. Removed (0x2000) anywhere on the path
+        hides the node.
+
+        This is the default visibility. A PDF 3D view can set the visibility
+        of nodes for itself, which is not applied here. */
+    uint8_t visible;
     prc_api_part *part;
     uint32_t num_markups;
     prc_api_markup *markup;

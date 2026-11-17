@@ -216,3 +216,8 @@ add_executable(test_polyline_point tests/unit/test_polyline_point.c)
 target_link_libraries(test_polyline_point prc_static)
 target_include_directories(test_polyline_point PRIVATE tests)
 add_test(NAME test_polyline_point COMMAND test_polyline_point)
+
+add_executable(test_prototype_chain_location tests/unit/test_prototype_chain_location.c)
+target_link_libraries(test_prototype_chain_location prc_static)
+target_include_directories(test_prototype_chain_location PRIVATE tests)
+add_test(NAME test_prototype_chain_location COMMAND test_prototype_chain_location)

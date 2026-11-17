@@ -5662,16 +5662,30 @@ uncompressed_done:
                        normal here, so the public flag has to say so. */
                     vertex_out->vertices[vertex_index].normal_set = 1;
 
-                    /* Either set the color for the vertex or use a texture or set a style */
-                    if (face_out->is_texture && prc_uv_index != PRC_COMPRESSED_TESS_NO_UV)
+                    /* This corner's own pair: a seam gives the duplicate a
+                       different UV. Set whenever the corner has one, as the
+                       first corner of each position is above, and not only
+                       when the whole face is textured: face_out stands for
+                       the whole mesh here, and in a mesh whose triangles are
+                       styled separately it is not textured when only some
+                       triangles are (examples/cube.pdf: one side of six has
+                       a picture, and every corner of that side is a split
+                       vertex, so its texture coordinates were all lost). A
+                       triangle whose style is not a texture has them cleared
+                       again where its style is set. */
+                    if (prc_uv_index != PRC_COMPRESSED_TESS_NO_UV)
                     {
-                        // This corner's own pair: a seam gives the duplicate a different UV
                         double raw_u = tess->uv_coordinates_3d[prc_uv_index * 2];
                         double raw_v = tess->uv_coordinates_3d[prc_uv_index * 2 + 1];
 
                         prc_internal_api_set_vertex_texture_coords(ctx, &vertex_out->vertices[vertex_index],
-                            raw_u, raw_v, face_out->texture.transform, face_out->texture.has_transform);
+                            raw_u, raw_v, face_out->texture.has_transform ? face_out->texture.transform : NULL,
+                            face_out->texture.has_transform);
+                    }
 
+                    /* Either set the color for the vertex or use a texture or set a style */
+                    if (face_out->is_texture && prc_uv_index != PRC_COMPRESSED_TESS_NO_UV)
+                    {
                         vertex_out->vertices[vertex_index].color[0] = 1.0;
                         vertex_out->vertices[vertex_index].color[1] = 1.0;
                         vertex_out->vertices[vertex_index].color[2] = 1.0;

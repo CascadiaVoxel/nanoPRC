@@ -3035,6 +3035,48 @@ prc_api_add_product_push(prc_context *ctx, prc_api_add_product_work **worklist,
     return 0;
 }
 
+/* The first product occurrence along product's prototype chain that has a
+   part definition, or NULL if none has one. *part_file_index is set to the
+   file structure that holds that occurrence, which its part index counts
+   in. file_index is the file structure that holds product. */
+static prc_asm_product_occurrence *
+prc_api_helper_prototype_with_part(prc_context *ctx, prc_api_data data,
+    prc_asm_product_occurrence *product, uint32_t file_index, uint32_t *part_file_index)
+{
+    prc_data *data_in = (prc_data *)data;
+    prc_asm_product_occurrence *step = product;
+    uint32_t step_file = file_index;
+    uint32_t guard;
+
+    for (guard = 0; guard < 1024; guard++)
+    {
+        prc_references_of_product_occurrence *refs = &step->references_product_occurrence;
+        uint32_t next_file = step_file;
+
+        if (refs->biased_index_prototype == 0)
+            return NULL;
+        if (refs->prototype_in_same_file_structure.flag == 0)
+        {
+            uint32_t biased = prc_api_helper_get_biased_file_index_from_unique_id(ctx, data,
+                refs->prototype_in_same_file_structure.unique_id);
+
+            if (biased == 0)
+                return NULL;
+            next_file = biased - 1;
+        }
+        if (!prc_api_helper_tree_index_ok(data_in, next_file, refs->biased_index_prototype, 0))
+            return NULL;
+        step = &data_in->file_struct[next_file].tree->products[refs->biased_index_prototype - 1];
+        step_file = next_file;
+        if (step->references_product_occurrence.biased_index_part != 0)
+        {
+            *part_file_index = step_file;
+            return step;
+        }
+    }
+    return NULL;
+}
+
 /* Capture the part style and pass it as parent to RI creation.
 
    Iterative (not recursive): the product-occurrence tree (prototype chains
@@ -3108,6 +3150,8 @@ prc_api_helper_add_product(prc_context *ctx, prc_api_data data, uint32_t num_fil
             prc_asm_parts_definition *part;
             uint32_t biased_file_index;
             uint32_t file_index = work_curr_file_index;
+            uint32_t part_file_index;
+            uint32_t biased_part_index;
             prc_asm_product_occurrence *prototype_product;
             prc_api_transform new_transform;
             uint8_t wants_cross_file_ref = 0;
@@ -3293,21 +3337,43 @@ prc_api_helper_add_product(prc_context *ctx, prc_api_data data, uint32_t num_fil
                product occurrences AND add the part if there is one. The carburetor
                for example has a tree that has this occur (which is a part and
                child product occurrences) */
-            if (product_refs->biased_index_part != 0)
+            part_file_index = file_index;
+            biased_part_index = product_refs->biased_index_part;
+
+            /* An occurrence with children of its own stops the walk above
+               at itself, so a part that only its prototype holds was never
+               reached. The prototype is the occurrence's template (ISO
+               14739-1, 7.2.x "PRC_TYPE_ASM_ProductOccurrence"), so take the
+               first part along its chain. In GS19090-011_3D.stream-70
+               (prc-db) 32 sub-assemblies hold their DATUM sets this way, and
+               Adobe Acrobat lists them in its tree. The counting pass,
+               prc_api_helper_count_items, already follows the prototype, so
+               the reserve holds room for this part and its items. */
+            if (biased_part_index == 0 && number_of_child_product_occurrences > 0 &&
+                !(wants_cross_file_ref && biased_file_index == 0))
             {
-                if (!prc_api_helper_tree_index_ok(data_in, file_index, product_refs->biased_index_part, 1))
+                prc_asm_product_occurrence *with_part = prc_api_helper_prototype_with_part(ctx, data,
+                    work_product, work_curr_file_index, &part_file_index);
+
+                if (with_part != NULL)
+                    biased_part_index = with_part->references_product_occurrence.biased_index_part;
+            }
+
+            if (biased_part_index != 0)
+            {
+                if (!prc_api_helper_tree_index_ok(data_in, part_file_index, biased_part_index, 1))
                 {
                     prc_error(ctx, PRC_ERROR_PARSE, "Part index past the end of the tree\n");
                     result = PRC_ERROR_PARSE;
                     goto cleanup;
                 }
-                part = &data_in->file_struct[file_index].tree->parts[product_refs->biased_index_part - 1];
+                part = &data_in->file_struct[part_file_index].tree->parts[biased_part_index - 1];
                 work_product_tree->part = &reserve->parts[reserve->part_index];
 
                 /* We may want to avoid adding this part if its name is null.
                    Capture the created part style so we can pass it to RIs. */
                 prc_api_object_style *part_style = prc_api_helper_add_part(ctx,
-                    work_product_tree->name, file_index,
+                    work_product_tree->name, part_file_index,
                     work_product_tree->part, part, work_parent_biased_style_index,
                     work_parent_biased_style_file_index, reserve, product_style);
                 if (part_style == NULL)
@@ -3327,7 +3393,7 @@ prc_api_helper_add_product(prc_context *ctx, prc_api_data data, uint32_t num_fil
 
                     for (k = 0; k < part->num_rep_items; k++)
                     {
-                        code = prc_api_helper_add_ri(ctx, file_index,
+                        code = prc_api_helper_add_ri(ctx, part_file_index,
                             &work_product_tree->part->rep_items[k],
                             &part->rep_items[k], work_parent_biased_style_index,
                             work_parent_biased_style_file_index, reserve, part_style);

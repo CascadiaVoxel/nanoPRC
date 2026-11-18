@@ -3186,6 +3186,56 @@ prc_api_helper_add_product(prc_context *ctx, prc_api_data data, uint32_t num_fil
                 prc_api_update_transform(ctx, &work_incoming_transform, &new_transform);
             }
 
+            /* An occurrence with children of its own ends the walk below
+               without drilling into its prototype, so a location that only
+               its prototype chain states was never applied. Take the first
+               location along that chain here. In 3D-PDF-Sample-Flashlight
+               (prc-db) LL_LED states none, and its prototype scales by
+               1/25.4 to cancel the 25.4 of LL_TOP above it; without it, the
+               LED assembly drew 25.4 times too large and hid the case. */
+            if (!chain_located && number_of_child_product_occurrences > 0 &&
+                product_refs->biased_index_prototype != 0)
+            {
+                prc_asm_product_occurrence *step = work_product;
+                uint32_t step_file = work_curr_file_index;
+                uint32_t guard;
+
+                for (guard = 0; guard < 1024; guard++)
+                {
+                    prc_references_of_product_occurrence *refs = &step->references_product_occurrence;
+                    uint32_t next_file = step_file;
+
+                    if (refs->biased_index_prototype == 0)
+                        break;
+                    if (refs->prototype_in_same_file_structure.flag == 0)
+                    {
+                        uint32_t biased = prc_api_helper_get_biased_file_index_from_unique_id(ctx, data,
+                            refs->prototype_in_same_file_structure.unique_id);
+
+                        if (biased == 0)
+                            break;
+                        next_file = biased - 1;
+                    }
+                    if (!prc_api_helper_tree_index_ok(data_in, next_file, refs->biased_index_prototype, 0))
+                        break;
+                    step = &data_in->file_struct[next_file].tree->products[refs->biased_index_prototype - 1];
+                    step_file = next_file;
+                    if (step->has_transform)
+                    {
+                        chain_located = 1;
+                        code = prc_api_set_transform(ctx, &new_transform, &step->location);
+                        if (code < 0)
+                        {
+                            prc_error(ctx, code, "Failed in prc_api_helper_add_items\n");
+                            result = code;
+                            goto cleanup;
+                        }
+                        prc_api_update_transform(ctx, &work_incoming_transform, &new_transform);
+                        break;
+                    }
+                }
+            }
+
             /* !(wants_cross_file_ref && biased_file_index == 0): don't follow
                a prototype reference whose target file structure couldn't be
                resolved (see the identical guard/comment in

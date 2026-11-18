@@ -75,7 +75,7 @@ public API:
 | Repository | Description |
 |--------|-------------|
 | [prc_obj_rw](https://github.com/t3dr0/prc_obj_rw) | OBJ export (with MTL and textures) and OBJ import into PRC/PDF |
-| [prc_ply_rw](https://github.com/t3dr0/prc_ply_rw) | PLY export and import, and mesh2ply, which converts OFF and PLY meshes to clean binary PLY |
+| [prc_ply_rw](https://github.com/t3dr0/prc_ply_rw) | PLY export and import; mesh2ply, which converts OFF and PLY meshes to clean binary PLY; and ply_colourise, which colours a PLY's vertices by their x, y or z coordinate |
 | [prc_glb_rw](https://github.com/t3dr0/prc_glb_rw) | glTF/GLB export and import |
 
 Each is also included here as a git submodule under `tools/`, pinned to a tagged release, and built with the library

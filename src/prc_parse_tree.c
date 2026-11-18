@@ -1745,7 +1745,7 @@ prc_parse_mkp_view(prc_context *ctx, prc_bit_state *bit_state, prc_mkp_view *dat
 static int
 prc_parse_product_information(prc_context *ctx, prc_bit_state *bit_state, prc_product_information *data)
 {
-    data->product_information_flags = prc_bitread_bit(ctx, bit_state);
+    data->unit_from_CAD_file = prc_bitread_bit(ctx, bit_state);
     data->unit = prc_bitread_double(ctx, bit_state);
     data->product_information_flags = prc_bitread_uint8(ctx, bit_state);
     data->product_load_status = prc_bitread_int32(ctx, bit_state);

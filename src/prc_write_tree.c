@@ -521,10 +521,8 @@ prc_write_product(prc_context *ctx, prc_bit_write_state *s, const prc_write_tree
 
     if (prc_bitwrite_uint8(ctx, s, 0) != 0) return -1; /* product_behavior */
 
-    /* ProductInformation: mirrors the parser's own field order exactly,
-       including its apparent bit-then-overwriting-uint8 quirk on
-       product_information_flags. */
-    if (prc_bitwrite_bit(ctx, s, 0) != 0) return -1;
+    /* ProductInformation (Table 62) */
+    if (prc_bitwrite_bit(ctx, s, 0) != 0) return -1;      /* unit_from_CAD_file */
     if (prc_bitwrite_double(ctx, s, 1.0) != 0) return -1; /* unit */
     if (prc_bitwrite_uint8(ctx, s, 0) != 0) return -1;    /* product_information_flags */
     if (prc_bitwrite_int32(ctx, s, 0) != 0) return -1;    /* product_load_status */

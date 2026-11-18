@@ -53,6 +53,7 @@ prc_parse_graphics_content(prc_context *ctx, prc_bit_state *bit_state, prc_graph
     data->biased_index_of_line_style = prc_bitread_uint32(ctx, bit_state);
     data->behavior_bit_field1 = prc_bitread_uint8(ctx, bit_state);
     data->behavior_bit_field2 = prc_bitread_uint8(ctx, bit_state);
+    data->is_set = 1;
     data->has_entity_ref = 0;
     return 0;
 }

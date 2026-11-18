@@ -1349,6 +1349,7 @@ prc_api_initialize_model_tree_parent(prc_context *ctx, prc_api_product *parent,
     parent->name = NULL;
     parent->behavior_bit_field1 = 0;
     parent->behavior_bit_field2 = 0;
+    parent->behavior_is_set = 0;
     parent->type = PRC_API_NODE_PRODUCT;
     parent->num_children = 0;
     parent->children = NULL;
@@ -1365,6 +1366,7 @@ prc_api_copy_node(prc_context *ctx, prc_api_product *des, prc_api_product *src)
     des->name = src->name;
     des->behavior_bit_field1 = src->behavior_bit_field1;
     des->behavior_bit_field2 = src->behavior_bit_field2;
+    des->behavior_is_set = src->behavior_is_set;
     des->type = src->type;
     des->num_children = src->num_children;
     des->children = src->children;
@@ -2351,6 +2353,7 @@ prc_api_helper_init_model_node(prc_context *ctx, prc_api_product *product,
     product->is_model = 1;
     product->behavior_bit_field1 = 0;
     product->behavior_bit_field2 = 0;
+    product->behavior_is_set = 0;
     len_name = (file_name != NULL) ? strlen((const char *)file_name)
                                     : strlen(default_model_name);
     product->name = (char *)prc_calloc(ctx, len_name + 1, sizeof(char));
@@ -2616,6 +2619,7 @@ prc_api_helper_add_ri(prc_context *ctx, uint32_t file_index, prc_api_part *api_p
         item.api_part->biased_layer_index = item.prc_ri->item_content.base.graphics_content.biased_layer_index;
         item.api_part->behavior_bit_field1 = item.prc_ri->item_content.base.graphics_content.behavior_bit_field1;
         item.api_part->behavior_bit_field2 = item.prc_ri->item_content.base.graphics_content.behavior_bit_field2;
+        item.api_part->behavior_is_set = item.prc_ri->item_content.base.graphics_content.is_set;
         item.api_part->has_inherited_style = item.prc_ri->item_content.style_inheritance.has_any_inheritance;
         item.api_part->color.has_inheritance = item.prc_ri->item_content.style_inheritance.color.has_inheritance;
         item.api_part->color.inherited_value = item.prc_ri->item_content.style_inheritance.color.inherited_value;
@@ -2705,6 +2709,7 @@ prc_api_helper_copy_product_details(prc_context *ctx, prc_api_data data,
     product_tree->location_set = !incoming_matrix.is_identity;
     product_tree->behavior_bit_field1 = 0;
     product_tree->behavior_bit_field2 = 0;
+    product_tree->behavior_is_set = 0;
     product_tree->is_model = 0;
     product_tree->type = PRC_API_NODE_PRODUCT;
     product_tree->num_children = 0;
@@ -3287,6 +3292,7 @@ prc_api_helper_add_product(prc_context *ctx, prc_api_data data, uint32_t num_fil
                    occurrences that use them are drawn */
                 work_product_tree->behavior_bit_field1 = item.product->base.graphics_content.behavior_bit_field1;
                 work_product_tree->behavior_bit_field2 = item.product->base.graphics_content.behavior_bit_field2;
+                work_product_tree->behavior_is_set = item.product->base.graphics_content.is_set;
             }
 
             /* We should be at the last prototype. At this point work on the child
@@ -3482,10 +3488,24 @@ typedef struct
     uint8_t removed;
 } prc_api_visibility_state;
 
+/* Where no flag decides, a representation item's own Show bit gives its
+   visibility (own_show 1), but a product occurrence is shown whatever its
+   own Show bit (own_show 0). is_set 0: the node's behaviour is the
+   section's starting value, which no entity wrote (clause 4.4); it counts as
+   Show with neither flag.
+
+   Checked in Adobe Acrobat Reader. Editing single graphics records in two
+   files: a body whose own record had Show clear was drawn once the record
+   was removed, so that it reused the starting value, and a solid that reused
+   it was hidden once given a record with Show clear; whether the body was
+   closed made no difference. Reader draws every node of private 00019,
+   among them a product occurrence written with Show clear and no flag and
+   the items below it. */
 static prc_api_visibility_state
-prc_api_visibility_step(prc_api_visibility_state s, uint8_t bits1, uint8_t bits2, uint8_t *visible)
+prc_api_visibility_step(prc_api_visibility_state s, uint8_t bits1, uint8_t bits2,
+    uint8_t is_set, uint8_t own_show, uint8_t *visible)
 {
-    uint32_t bits = (uint32_t)bits1 | ((uint32_t)bits2 << 8);
+    uint32_t bits = is_set ? ((uint32_t)bits1 | ((uint32_t)bits2 << 8)) : PRC_GRAPHICS_Show;
     int8_t shown = (bits & PRC_GRAPHICS_Show) ? 1 : 0;
 
     if (bits & PRC_GRAPHICS_Removed)
@@ -3501,7 +3521,7 @@ prc_api_visibility_step(prc_api_visibility_state s, uint8_t bits1, uint8_t bits2
     else if (s.parent >= 0)
         *visible = (uint8_t)s.parent;
     else
-        *visible = 1;
+        *visible = own_show ? (uint8_t)shown : 1;
     return s;
 }
 
@@ -3565,7 +3585,7 @@ prc_api_helper_set_visibility(prc_context *ctx, prc_api_product *root)
         {
             prc_api_product *p = item.product;
             prc_api_visibility_state s = prc_api_visibility_step(item.state,
-                p->behavior_bit_field1, p->behavior_bit_field2, &p->visible);
+                p->behavior_bit_field1, p->behavior_bit_field2, p->behavior_is_set, 0, &p->visible);
 
             if (p->part != NULL)
                 code = prc_api_visibility_push(ctx, &list, &size, &capacity, NULL, p->part, s);
@@ -3576,7 +3596,7 @@ prc_api_helper_set_visibility(prc_context *ctx, prc_api_product *root)
         {
             prc_api_part *part = item.part;
             prc_api_visibility_state s = prc_api_visibility_step(item.state,
-                part->behavior_bit_field1, part->behavior_bit_field2, &part->visible);
+                part->behavior_bit_field1, part->behavior_bit_field2, part->behavior_is_set, 1, &part->visible);
 
             for (k = 0; code == 0 && part->rep_items != NULL && k < part->num_rep_items; k++)
                 code = prc_api_visibility_push(ctx, &list, &size, &capacity, NULL, &part->rep_items[k], s);

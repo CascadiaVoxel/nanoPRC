@@ -13,6 +13,7 @@ in vec3 VSpecularColor;
 in vec3 VEmissiveColor;
 in float VShininess;
 in float VAlpha;
+in float VUvSet;
 
 struct DirLight
 {
@@ -386,6 +387,11 @@ void main()
         vec3 diffuseContrib = VDiffuseColor;
         vec3 specularContrib = VSpecularColor;
         float shininess = VShininess;
+
+        /* A textured triangle among materials: the texture gives its diffuse
+           colour, as it does on the material path below */
+        if (uMaterial.hasDiffuseMap && VUvSet > 0.5)
+            diffuseContrib = toLinear(texture(uMaterial.diffuseMap, TexCoords).rgb);
         
         /* Compute lighting */
         /* The ambient term is formed from the colours as stored: a material's

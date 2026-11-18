@@ -397,6 +397,11 @@ void Product::uploadGPU(uint32_t num_vertices, prc_api_vertex *vertices_in,
     glVertexAttribPointer(9, 1, GL_FLOAT, GL_FALSE, sizeof(prc_api_vertex), (void *)offsetof(prc_api_vertex, alpha));
     glEnableVertexAttribArray(9);
 
+    /* 1 where the vertex has texture coordinates: in a mesh whose triangles
+       carry their own materials, only some may be textured */
+    glVertexAttribPointer(10, 1, GL_UNSIGNED_BYTE, GL_FALSE, sizeof(prc_api_vertex), (void *)offsetof(prc_api_vertex, uv_set));
+    glEnableVertexAttribArray(10);
+
     //glVertexAttribPointer(9, 1, GL_UNSIGNED_BYTE, GL_FALSE, sizeof(prc_api_vertex), (void *)offsetof(prc_api_vertex, tri_has_material));
     //glEnableVertexAttribArray(9);
 

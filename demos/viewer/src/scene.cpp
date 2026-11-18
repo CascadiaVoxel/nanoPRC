@@ -371,6 +371,10 @@ void Scene::render(Camera *camera)
     _compositeShader->setEnableBloom(_enableBloom);
     _compositeShader->setBloomStrength(_bloom->strength());
     _compositeShader->setEnableToneMapping(_enableToneMapping);
+    /* Fullbright and wireframe colours are shown as they are, without tone
+       mapping or bloom */
+    _compositeShader->setFullbright(_fullbright);
+    _compositeShader->setWireframe(_wireframe);
 
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, _compositor->texture());

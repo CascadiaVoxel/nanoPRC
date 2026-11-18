@@ -2535,13 +2535,9 @@ prc_api_helper_get_style_index_from_leaf(prc_context *ctx, prc_data *data,
                         *file_index = entity_reference->content_entity_ref.base.base.file_index;
                         *style_unbiased_index = entity_reference->content_entity_ref.base.graphics_content.biased_index_of_line_style - 1;
 
-                        /* TODO deal with changes in local references too */
-                        if (entity_reference->content_entity_ref.index_of_local_coordinate != 0)
-                        {
-                            /* Throw an error for now so we catch this */
-                            prc_error(ctx, PRC_ERROR_INTERNAL, "Local coordinate system reference in entity reference is not supported in prc_api_helper_copy_product_details\n");
-                            return PRC_ERROR_INTERNAL;
-                        }
+                        /* A reference's local coordinate system is not
+                           applied, but its style is: failing here lost the
+                           whole tessellation for want of a placement */
                         break;
                     }
                 }

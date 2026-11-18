@@ -2724,33 +2724,46 @@ prc_api_helper_copy_product_details(prc_context *ctx, prc_api_data data,
     }
 
     /* Process the entity refs at this time, blowing away the current information
-       that a part or RI may have in terms of style and location */
-    if (product->entity_ref_count > 0)
+       that a part or RI may have in terms of style and location.
+
+       Each reference is taken in turn: entity_reference[k], not the first
+       one again. Its target is looked for in the file structure the
+       reference names (entity_ref_file_index), as the style walk in
+       prc_api_helper_get_style_index_from_leaf does, and its line style and
+       layer count in the file structure that holds the reference itself.
+       A reference whose file structure is not loaded is skipped, and the
+       rest are still taken. A reference's local coordinate system is not
+       applied, but its style is. In 00256 (private) 3,158 products carry
+       more than one reference each. In 3D_PDF_iPhone_Replacement.stream-171
+       (prc-db) 240 references carry a local coordinate system; the 239 of
+       them that place an item all name an identity matrix. */
+    if (product->entity_ref_count > 0 && product->entity_reference != NULL)
     {
         for (k = 0; k < product->entity_ref_count; k++)
         {
-            if (product->entity_reference->content_entity_ref.reference_data.ref_type == PRC_TYPE_MISC_ReferenceOnPRCBase)
+            prc_misc_entity_reference *eref = &product->entity_reference[k];
+
+            if (eref->content_entity_ref.reference_data.ref_type == PRC_TYPE_MISC_ReferenceOnPRCBase)
             {
-                if (!product->entity_reference->content_entity_ref.reference_data.non_topo_reference.flag)
+                uint32_t ref_index;
+
+                if (!eref->content_entity_ref.reference_data.non_topo_reference.flag)
                 {
                     biased_file_index = prc_api_helper_get_biased_file_index_from_unique_id(ctx, data,
-                        product->entity_reference->content_entity_ref.reference_data.non_topo_reference.different_unique_id);
-                    if (biased_file_index != 0)
+                        eref->content_entity_ref.reference_data.non_topo_reference.different_unique_id);
+                    if (biased_file_index == 0)
                     {
-                        entity_ref_file_index = biased_file_index - 1;
+                        /* The file structure it names is not loaded */
+                        continue;
                     }
-                    else
-                    {
-                        /* Something wrong here. Just get out of it */
-                        break;
-                    }
+                    entity_ref_file_index = biased_file_index - 1;
                 }
                 else
                 {
                     entity_ref_file_index = file_index;
                 }
 
-                uint32_t ref_index = product->entity_reference->content_entity_ref.reference_data.non_topo_reference.unique_id;
+                ref_index = eref->content_entity_ref.reference_data.non_topo_reference.unique_id;
 
                 /* Search through the reference items in ctx and see if we
                    need to update the style or location information based upon the reference item.
@@ -2759,30 +2772,23 @@ prc_api_helper_copy_product_details(prc_context *ctx, prc_api_data data,
                 {
                     prc_content_prc_ref_base *ref_base = (prc_content_prc_ref_base *)ctx->graphics_content.ref_base_ptr[j];
 
-                    if (ref_index == ref_base->unique_id && file_index == ref_base->file_index && ref_base->parent_is_RI)
+                    if (ref_index == ref_base->unique_id && entity_ref_file_index == ref_base->file_index &&
+                        ref_base->parent_is_RI)
                     {
-                        /* We have a match. Update the location and style information */
+                        /* We have a match. Update the style information */
                         prc_representation_item_content *ri_item = (prc_representation_item_content*) ref_base->parent;
 
-                        /* Update the style information based upon the reference. */
                         ri_item->base.graphics_content.has_entity_ref = 1;
                         ri_item->base.graphics_content.entity_ref.biased_index_of_line_style =
-                            product->entity_reference->content_entity_ref.base.graphics_content.biased_index_of_line_style;
+                            eref->content_entity_ref.base.graphics_content.biased_index_of_line_style;
                         ri_item->base.graphics_content.entity_ref.biased_layer_index =
-                            product->entity_reference->content_entity_ref.base.graphics_content.biased_layer_index;
+                            eref->content_entity_ref.base.graphics_content.biased_layer_index;
                         ri_item->base.graphics_content.entity_ref.behavior_bit_field1 =
-                            product->entity_reference->content_entity_ref.base.graphics_content.behavior_bit_field1;
+                            eref->content_entity_ref.base.graphics_content.behavior_bit_field1;
                         ri_item->base.graphics_content.entity_ref.behavior_bit_field2 =
-                            product->entity_reference->content_entity_ref.base.graphics_content.behavior_bit_field2;
-                        ri_item->base.graphics_content.entity_ref.file_index = entity_ref_file_index;
-
-                        /* TODO deal with changes in local references too */
-                        if (product->entity_reference->content_entity_ref.index_of_local_coordinate != 0)
-                        {
-                            /* Throw and error for now so we catch this */
-                            prc_error(ctx, PRC_ERROR_INTERNAL, "Local coordinate system reference in entity reference is not supported in prc_api_helper_copy_product_details\n");
-                            return PRC_ERROR_INTERNAL;
-                        }
+                            eref->content_entity_ref.base.graphics_content.behavior_bit_field2;
+                        ri_item->base.graphics_content.entity_ref.file_index =
+                            eref->content_entity_ref.base.base.file_index;
                         break;
                     }
                 }

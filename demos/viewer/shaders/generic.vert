@@ -10,6 +10,8 @@ layout (location = 6) in vec3 aSpecularColor;
 layout (location = 7) in vec3 aEmissiveColor;
 layout (location = 8) in float aShininess;
 layout (location = 9) in float aAlpha;
+/* 1 where the vertex has texture coordinates; 0 where the attribute is not set */
+layout (location = 10) in float aUvSet;
 
 out vec3 FragPos;
 out vec3 Normal;
@@ -22,6 +24,7 @@ out vec3 VSpecularColor;
 out vec3 VEmissiveColor;
 out float VShininess;
 out float VAlpha;
+out float VUvSet;
 
 uniform mat4 uModel;
 uniform mat4 uView;
@@ -49,6 +52,7 @@ void main()
     VEmissiveColor = toLinear(aEmissiveColor);
     VShininess = aShininess;
     VAlpha = aAlpha;
+    VUvSet = aUvSet;
 
     FragPosLightSpace = uLightSpaceMatrix * worldPos;
 

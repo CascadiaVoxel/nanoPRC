@@ -3471,11 +3471,128 @@ prc_api_helper_first_node(prc_context *ctx, prc_api_data data, uint32_t num_file
     return 0;
 }
 
+/* Visibility along a path from the root, as prc_api_product.visible
+   describes it: child is the Show value of the lowest node so far with
+   ChildHeritShow, parent that of the highest with ParentHeritShow, -1 where
+   no node has set it. */
+typedef struct
+{
+    int8_t child;
+    int8_t parent;
+    uint8_t removed;
+} prc_api_visibility_state;
+
+static prc_api_visibility_state
+prc_api_visibility_step(prc_api_visibility_state s, uint8_t bits1, uint8_t bits2, uint8_t *visible)
+{
+    uint32_t bits = (uint32_t)bits1 | ((uint32_t)bits2 << 8);
+    int8_t shown = (bits & PRC_GRAPHICS_Show) ? 1 : 0;
+
+    if (bits & PRC_GRAPHICS_Removed)
+        s.removed = 1;
+    if (bits & PRC_GRAPHICS_ChildHeritShow)
+        s.child = shown;
+    else if ((bits & PRC_GRAPHICS_FatherHeritShow) && s.parent < 0)
+        s.parent = shown;
+    if (s.removed)
+        *visible = 0;
+    else if (s.child >= 0)
+        *visible = (uint8_t)s.child;
+    else if (s.parent >= 0)
+        *visible = (uint8_t)s.parent;
+    else
+        *visible = 1;
+    return s;
+}
+
+typedef struct
+{
+    prc_api_product *product;
+    prc_api_part *part;
+    prc_api_visibility_state state;
+} prc_api_visibility_work;
+
+static int
+prc_api_visibility_push(prc_context *ctx, prc_api_visibility_work **list, uint32_t *size,
+    uint32_t *capacity, prc_api_product *product, prc_api_part *part, prc_api_visibility_state state)
+{
+    if (*size == *capacity)
+    {
+        uint32_t grown = *capacity * 2;
+        prc_api_visibility_work *bigger;
+
+        if (grown <= *capacity)
+            return PRC_ERROR_MEMORY;
+        bigger = (prc_api_visibility_work *)prc_realloc(ctx, *list,
+            (size_t)grown * sizeof(prc_api_visibility_work));
+        if (bigger == NULL)
+            return PRC_ERROR_MEMORY;
+        *list = bigger;
+        *capacity = grown;
+    }
+    (*list)[*size].product = product;
+    (*list)[*size].part = part;
+    (*list)[*size].state = state;
+    (*size)++;
+    return 0;
+}
+
+/* Sets visible on every product, part and representation item of the model
+   tree. Iterative, like the tree walk itself: the depth of the tree follows
+   the file. */
+static int
+prc_api_helper_set_visibility(prc_context *ctx, prc_api_product *root)
+{
+    prc_api_visibility_work *list;
+    uint32_t size = 0, capacity = 64;
+    prc_api_visibility_state start;
+    int code = 0;
+
+    start.child = -1;
+    start.parent = -1;
+    start.removed = 0;
+    list = (prc_api_visibility_work *)prc_malloc(ctx, capacity * sizeof(prc_api_visibility_work));
+    if (list == NULL)
+        return PRC_ERROR_MEMORY;
+    code = prc_api_visibility_push(ctx, &list, &size, &capacity, root, NULL, start);
+
+    while (code == 0 && size > 0)
+    {
+        prc_api_visibility_work item = list[--size];
+        size_t k;
+
+        if (item.product != NULL)
+        {
+            prc_api_product *p = item.product;
+            prc_api_visibility_state s = prc_api_visibility_step(item.state,
+                p->behavior_bit_field1, p->behavior_bit_field2, &p->visible);
+
+            if (p->part != NULL)
+                code = prc_api_visibility_push(ctx, &list, &size, &capacity, NULL, p->part, s);
+            for (k = 0; code == 0 && k < p->num_children; k++)
+                code = prc_api_visibility_push(ctx, &list, &size, &capacity, &p->children[k], NULL, s);
+        }
+        else
+        {
+            prc_api_part *part = item.part;
+            prc_api_visibility_state s = prc_api_visibility_step(item.state,
+                part->behavior_bit_field1, part->behavior_bit_field2, &part->visible);
+
+            for (k = 0; code == 0 && part->rep_items != NULL && k < part->num_rep_items; k++)
+                code = prc_api_visibility_push(ctx, &list, &size, &capacity, NULL, &part->rep_items[k], s);
+        }
+    }
+    prc_free(ctx, list);
+    return code;
+}
+
 PRC_EXPORT int
 prc_api_create_model_tree(prc_context *ctx, prc_api_data data,
     prc_api_product **product_tree_in, uint32_t num_parts, uint32_t num_products,
     uint32_t num_markups)
 {
+    int visibility_code;
+
     prc_api_child_reserve *reserve;
     prc_api_product *product_tree;
     int code;
@@ -3508,6 +3625,13 @@ prc_api_create_model_tree(prc_context *ctx, prc_api_data data,
 
     product_tree->reserved = (void *)reserve;
     *product_tree_in = product_tree;
+
+    visibility_code = prc_api_helper_set_visibility(ctx, product_tree);
+    if (visibility_code < 0)
+    {
+        prc_error(ctx, visibility_code, "Failed in prc_api_helper_set_visibility\n");
+        return visibility_code;
+    }
 
 #if 0
     prc_api_print_tree(ctx, product_tree, 0);

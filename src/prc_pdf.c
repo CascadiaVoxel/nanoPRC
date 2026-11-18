@@ -984,12 +984,18 @@ fail:
 /* Working from the object where the 3D stream is defined get the dictionary
    that has the views. Those entries could be all there or we could be
    referencing another object that has the entries. Use the xref object to
-   search and return them */
+   search and return them.
+
+   /VA is looked for only up to dict_end, where the stream's data begins: it
+   belongs to the 3D stream's dictionary (ISO 32000-1, 13.6.3 "3D Streams",
+   Table 300 "Entries in a 3D stream dictionary"). Searching on through the stream found "/VA" in
+   the compressed PRC bytes of files whose dictionary has none, and refused
+   the file when what followed was not an object reference. */
 static int
 pdf_get_view_array_prc(prc_context *ctx, prc_pdf_decrypt_params *decrypt_params,
     prc_pdf_head_xref *head_xref, prc_pdf_uncompressed_object_stream_list *stream_list,
-    uint8_t *pdf_buff_in, uint32_t size_in, uint8_t *ptr, uint32_t *num_views,
-    prc_pdf_view_array **views)
+    uint8_t *pdf_buff_in, uint32_t size_in, uint8_t *ptr, const uint8_t *dict_end,
+    uint32_t *num_views, prc_pdf_view_array **views)
 {
     int code;
     uint32_t object_ref_num = 0;
@@ -1009,8 +1015,10 @@ pdf_get_view_array_prc(prc_context *ctx, prc_pdf_decrypt_params *decrypt_params,
 
     *num_views = 0;
 
-    /* Read until we get /VA */
-    while (ptr < pdf_buff_in + size_in)
+    /* Read until we get /VA, within the dictionary */
+    if (dict_end > pdf_buff_in + size_in)
+        dict_end = pdf_buff_in + size_in;
+    while (ptr + PDF_VA_NAME_LEN <= dict_end)
     {
         if (strncmp((const char *)ptr, PDF_VA_NAME, PDF_VA_NAME_LEN) == 0)
         {
@@ -3125,10 +3133,11 @@ pdf_extract_prc_internal(prc_context *ctx, uint8_t *pdf_buff_in, uint32_t size_i
     else
     {
         /* This ptr is at the main 3D data or the View data of the Richmedia.
-           Lets see if we can get any of the view information */
+           Lets see if we can get any of the view information. The stream's
+           data begins at ptr_stream, which ends its dictionary. */
         code = pdf_get_view_array_prc(ctx, &decrypt_params, &head_xref,
                                       &stream_list, pdf_buff_in, size_in, ptr,
-                                      number_views, &cam_views);
+                                      ptr_stream, number_views, &cam_views);
         if (code < 0)
         {
             prc_error(ctx, code, "Did not get view array\n");

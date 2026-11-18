@@ -230,3 +230,8 @@ target_link_libraries(test_compressed_split_vertex_uv prc_static)
 target_include_directories(test_compressed_split_vertex_uv PRIVATE tests)
 target_compile_definitions(test_compressed_split_vertex_uv PRIVATE PRC_TEST_EXAMPLES_DIR="${PROJECT_SOURCE_DIR}/examples")
 add_test(NAME test_compressed_split_vertex_uv COMMAND test_compressed_split_vertex_uv)
+
+add_executable(test_pdf_view_array_scope tests/unit/test_pdf_view_array_scope.c)
+target_link_libraries(test_pdf_view_array_scope prc_static)
+target_include_directories(test_pdf_view_array_scope PRIVATE tests)
+add_test(NAME test_pdf_view_array_scope COMMAND test_pdf_view_array_scope)

@@ -1513,7 +1513,6 @@ prc_sample_compressed_curve(prc_context *ctx, prc_data *data,
             mid = curve_eval_func(ctx, curve_params, (t0 + t1) / 2.0);
 
             /* Evaluate the midpoint of the segment */
-            seg_mid;
             seg_mid.x = (p0.x + p1.x) / 2.0;
             seg_mid.y = (p0.y + p1.y) / 2.0;
             seg_mid.z = (p0.z + p1.z) / 2.0;
@@ -1892,7 +1891,6 @@ prc_sample_curve(prc_context *ctx, prc_content_wire_edge *curve,
                 mid = curve_eval_func(ctx, curve_params, (t0 + t1) / 2.0);
 
                 /* Evaluate the midpoint of the segment */
-                seg_mid;
                 seg_mid.x = (p0.x + p1.x) / 2.0;
                 seg_mid.y = (p0.y + p1.y) / 2.0;
                 seg_mid.z = (p0.z + p1.z) / 2.0;

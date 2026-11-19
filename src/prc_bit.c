@@ -76,6 +76,8 @@ prc_init_bit_state(prc_context *ctx, prc_bit_state *state, uint8_t *ptr, size_t 
         state->graphics_content.biased_index_of_line_style = 0;
         state->graphics_content.biased_layer_index = 0;
         state->graphics_content.has_entity_ref = 0;
+        /* The starting value of clause 4.4: nothing written yet */
+        state->graphics_content.is_set = 0;
        // ctx->reset_graphics_state = 0;
    // }
 #endif

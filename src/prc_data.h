@@ -1224,6 +1224,15 @@ struct prc_graphics_content_s
     prc_unsigned_int biased_index_of_line_style;
     uint8_t behavior_bit_field1;
     uint8_t behavior_bit_field2;
+    /* 1 when these values come from a GraphicsContent read from the file,
+       for this entity or for an earlier one in the same section that it
+       reuses through same_graphics; 0 when they are still the section's
+       starting value (clause 4.4, Current data values), which no entity has
+       written. Where no Show inheritance flag on its path decides, Adobe
+       Acrobat draws a representation item whose behaviour is the starting
+       value, and follows the item's own Show bit when it was written; a
+       product occurrence it draws either way (see prc_api_visibility_step). */
+    uint8_t is_set;
     uint8_t has_entity_ref;
     prc_content_entity_graphics_reference entity_ref;
 };

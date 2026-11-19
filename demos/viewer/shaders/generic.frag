@@ -356,6 +356,10 @@ void main()
         if (uVertexMaterial)
         {
             color = VDiffuseColor;
+            /* A textured triangle among materials shows its texture, as on
+               the lit path below */
+            if (uMaterial.hasDiffuseMap && VUvSet > 0.5)
+                color = toLinear(texture(uMaterial.diffuseMap, TexCoords).rgb);
             alpha = clamp(VAlpha * uMaterial.alpha, 0.0, 1.0);
         }
         else
@@ -398,6 +402,11 @@ void main()
            ambient colour is usually dark (30 of 255 by default), and decoded it
            all but removes the light that shows a shaded side */
         vec3 ambientTerm = ambient * VMaterialTint * uAmbientWeight;
+        /* A textured triangle takes its ambient term from the texture, as on
+           the material path below, so a side the sun does not reach still
+           shows its texture */
+        if (uMaterial.hasDiffuseMap && VUvSet > 0.5)
+            ambientTerm = ambient * texture(uMaterial.diffuseMap, TexCoords).rgb * uAmbientWeight;
         vec3 diffuseTerm = calcDirDiffuse(uDirLight, normal, diffuseContrib);
         diffuseTerm += calcPointDiffuse(uPointLight, normal, FragPos,
             diffuseContrib);

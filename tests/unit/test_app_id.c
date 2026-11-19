@@ -20,9 +20,36 @@
    writer is not recognised. */
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include "prc_test.h"
 #include "prc_api.h"
+#include "prc_context.h"
+#include "prc_data.h"
+
+/* The provenance tag and checksum are the first two words of the main
+   header's unique_id_file (see PRC_NANOPRC_FILE_MARK_TAG in prc_app_id.h).
+   This is a white-box test, so it reads them straight off the parsed header
+   rather than through the public API, which does not expose them. */
+#define PROVENANCE_TAG 0x9E3779B1u
+
+static uint32_t
+mark_tag(prc_api_data data)
+{
+    const prc_data *d = (const prc_data *)data;
+    if (d == NULL || d->header == NULL)
+        return 0;
+    return d->header->unique_id_file.unique_id0;
+}
+
+static uint32_t
+mark_checksum(prc_api_data data)
+{
+    const prc_data *d = (const prc_data *)data;
+    if (d == NULL || d->header == NULL)
+        return 0;
+    return d->header->unique_id_file.unique_id1;
+}
 
 /* Set by tests/CMakeLists.txt; the default is for a build run from the
    repository root. */
@@ -103,7 +130,56 @@ test_recognised(prc_context *ctx, const char *path)
     data = prc_api_open_contents(ctx, path);
     PRC_ASSERT_NOT_NULL(data);
     PRC_ASSERT_EQ(prc_api_written_by_nanoprc(ctx, data), 1);
+
+    printf("  sub-case: %s carries the provenance tag and a non-zero checksum\n", path);
+    PRC_ASSERT_EQ(mark_tag(data), PROVENANCE_TAG);
+    PRC_ASSERT(mark_checksum(data) != 0u);
     prc_api_release_data(ctx, data, NULL, 0, NULL, 0, NULL, 0, NULL);
+}
+
+/* The tag in the main header's unique_id_file, after "PRC", the two version
+   words -- it comes before unique_id_application, so the same offset minus
+   the 16-byte id. The checksum follows it. */
+#define MAIN_HEADER_FILE_ID_OFFSET (3 + 4 + 4)
+
+static void
+test_mark_survives_app_id_edit(prc_context *ctx, const uint8_t *buf, size_t size)
+{
+    uint8_t *edited;
+    prc_api_data data;
+    size_t i;
+    FILE *f;
+    static const char *EDITED_PATH = "test_app_id_edited.prc";
+
+    printf("  sub-case: the tag still identifies nanoPRC after the \"nanoPRC\" text is removed\n");
+    /* The tag is at the file-id offset; it is not the ASCII "nanoPRC". */
+    PRC_ASSERT_EQ((uint32_t)buf[MAIN_HEADER_FILE_ID_OFFSET] |
+        ((uint32_t)buf[MAIN_HEADER_FILE_ID_OFFSET + 1] << 8) |
+        ((uint32_t)buf[MAIN_HEADER_FILE_ID_OFFSET + 2] << 16) |
+        ((uint32_t)buf[MAIN_HEADER_FILE_ID_OFFSET + 3] << 24), PROVENANCE_TAG);
+
+    edited = (uint8_t *)malloc(size);
+    PRC_ASSERT_NOT_NULL(edited);
+    memcpy(edited, buf, size);
+    /* Blank every occurrence of the ASCII identifier, as someone hiding
+       nanoPRC's authorship might. */
+    for (i = 0; i + sizeof(APP_ID) <= size; i++)
+        if (memcmp(edited + i, APP_ID, sizeof(APP_ID)) == 0)
+            memset(edited + i, 0, sizeof(APP_ID));
+    PRC_ASSERT_EQ(count_app_id(edited, size), 0);
+
+    f = fopen(EDITED_PATH, "wb");
+    PRC_ASSERT_NOT_NULL(f);
+    PRC_ASSERT_EQ(fwrite(edited, 1, size, f), size);
+    fclose(f);
+    free(edited);
+
+    data = prc_api_open_contents(ctx, EDITED_PATH);
+    PRC_ASSERT_NOT_NULL(data);
+    PRC_ASSERT_EQ(mark_tag(data), PROVENANCE_TAG);
+    PRC_ASSERT_EQ(prc_api_written_by_nanoprc(ctx, data), 1);
+    prc_api_release_data(ctx, data, NULL, 0, NULL, 0, NULL, 0, NULL);
+    remove(EDITED_PATH);
 }
 
 static void
@@ -115,6 +191,7 @@ test_not_recognised(prc_context *ctx)
     data = prc_api_open_contents(ctx, PRC_TEST_EXAMPLES_DIR "/cube.pdf");
     PRC_ASSERT_NOT_NULL(data);
     PRC_ASSERT_EQ(prc_api_written_by_nanoprc(ctx, data), 0);
+    PRC_ASSERT(mark_tag(data) != PROVENANCE_TAG);
     prc_api_release_data(ctx, data, NULL, 0, NULL, 0, NULL, 0, NULL);
 
     printf("  sub-case: no data is not recognised\n");
@@ -136,6 +213,7 @@ main(void)
 
     PRC_ASSERT_EQ(write_triangle(ctx, &buf, &size), 0);
     test_written(ctx, buf, size);
+    test_mark_survives_app_id_edit(ctx, buf, size);
 
     f = fopen(PRC_PATH, "wb");
     PRC_ASSERT_NOT_NULL(f);

@@ -209,12 +209,17 @@ prc_write_main_header_bytes(uint8_t *out, uint32_t section_count, const uint32_t
 {
     uint8_t *p = out;
     uint32_t i;
+    uint32_t mark_checksum = prc_nanoprc_file_mark_checksum(section_count, section_offsets,
+        start_offset, end_offset);
 
     p[0] = 'P'; p[1] = 'R'; p[2] = 'C';
     p += PRC_WRITE_SIGNATURE_BYTES;
     p = prc_write_le_uint32(p, prc_write_diag_min_vers_for_read());
     p = prc_write_le_uint32(p, prc_write_diag_auth_vers());
-    p = prc_write_le_unique_id(p, PRC_WRITE_FILE_UID0);
+    /* The main header's own unique_id_file carries nanoPRC's provenance tag
+       and a checksum of the section layout -- see PRC_NANOPRC_FILE_MARK_TAG
+       in prc_app_id.h. */
+    p = prc_write_le_unique_id2(p, PRC_NANOPRC_FILE_MARK_TAG, mark_checksum);
     p = prc_write_le_app_unique_id(p);
     p = prc_write_le_uint32(p, 1); /* filestructure_count */
 

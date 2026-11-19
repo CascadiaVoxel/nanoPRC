@@ -27,6 +27,7 @@
 #include "../include/prc_api.h"
 #include "prc_data.h"
 #include "prc_bit.h"
+#include "prc_app_id.h"
 
 /* Byte sizes of the raw (non-bit-packed) little-endian fields used by the
    two file-level headers this write facility produces manually --
@@ -55,29 +56,39 @@ uint8_t *prc_write_le_uint32(uint8_t *p, uint32_t v);
    random for a single-file writer to work correctly, only non-zero and
    mutually consistent everywhere the format requires equality.
 
-   PRC_WRITE_FILE_UID0 is independent of PRC_WRITE_FILE_STRUCT_UID0 --
-   revised back from a brief attempt at making them equal, which was based
-   on a single reference file (not examples/cube.pdf) whose main header's
-   unique_id_file happened to equal its file structure's own identity. A
-   THIRD, independently-produced real file (a different generator again)
-   directly contradicts that: its main header's unique_id_file and its
-   file structure's own embedded unique_id_file are different values.
-   Between three real producers agreeing on nothing about this field's
-   relationship to the file structure's identity beyond "non-zero", it
-   looks like generator-specific noise rather than a real requirement, so
-   this write facility goes back to treating it as independent. PRC_WRITE_
-   APP_UID0 (authoring application identity) is likewise independent of
-   both in every real file checked so far. A future revision could
-   generate these per call instead of reusing fixed values.
+   Real producers were found to agree on nothing about the main header's
+   unique_id_file beyond "non-zero": it need not equal the file structure's
+   own identity (three independent generators differed), so the two are
+   treated as independent. nanoPRC's main header unique_id_file now carries
+   the provenance tag and checksum (above); the file-structure identity
+   carries the tag alone.
 
-   The application identifier is not a placeholder: it names nanoPRC (see
-   prc_app_id.h) and is written by prc_write_le_app_unique_id. */
-#define PRC_WRITE_FILE_UID0 1u
-#define PRC_WRITE_FILE_STRUCT_UID0 3u
+   The file-structure identity carries nanoPRC's provenance tag (see
+   PRC_NANOPRC_FILE_MARK_TAG in prc_app_id.h). It is non-zero, as the format
+   needs, and the main header, every file-structure header and the model
+   section's far reference all repeat this one value, so they stay mutually
+   consistent while spreading the tag across the stream. The main header's
+   own unique_id_file carries the tag too, plus the checksum below, and is
+   written by prc_write_le_unique_id2. The application identifier is a
+   separate, text, mark that names nanoPRC and is written by
+   prc_write_le_app_unique_id. */
+#define PRC_WRITE_FILE_STRUCT_UID0 PRC_NANOPRC_FILE_MARK_TAG
 
 /* Writes a 4x uint32 unique id {word0, 0, 0, 0} as raw little-endian bytes
    at `p`, returning p + 16 (PRC_WRITE_UNIQUE_ID_BYTES). */
 uint8_t *prc_write_le_unique_id(uint8_t *p, uint32_t word0);
+
+/* Writes {word0, word1, 0, 0} as raw little-endian bytes at `p`, returning
+   p + 16. Used for the main header's unique_id_file, which carries the
+   provenance tag in word0 and the file-mark checksum in word1. */
+uint8_t *prc_write_le_unique_id2(uint8_t *p, uint32_t word0, uint32_t word1);
+
+/* FNV-1a hash of the file's section layout -- its section count, each
+   section offset, and the start and end offsets -- written to word1 of the
+   main header's unique_id_file as the provenance checksum (prc_app_id.h).
+   Reads sizes and offsets only, never geometry or any user content. */
+uint32_t prc_nanoprc_file_mark_checksum(uint32_t section_count,
+    const uint32_t *section_offsets, uint32_t start_offset, uint32_t end_offset);
 
 /* Writes nanoPRC's application identifier (prc_app_id.h) as raw
    little-endian bytes at `p`, returning p + 16. */

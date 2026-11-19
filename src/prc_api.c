@@ -1349,6 +1349,7 @@ prc_api_initialize_model_tree_parent(prc_context *ctx, prc_api_product *parent,
     parent->name = NULL;
     parent->behavior_bit_field1 = 0;
     parent->behavior_bit_field2 = 0;
+    parent->behavior_is_set = 0;
     parent->type = PRC_API_NODE_PRODUCT;
     parent->num_children = 0;
     parent->children = NULL;
@@ -1365,6 +1366,7 @@ prc_api_copy_node(prc_context *ctx, prc_api_product *des, prc_api_product *src)
     des->name = src->name;
     des->behavior_bit_field1 = src->behavior_bit_field1;
     des->behavior_bit_field2 = src->behavior_bit_field2;
+    des->behavior_is_set = src->behavior_is_set;
     des->type = src->type;
     des->num_children = src->num_children;
     des->children = src->children;
@@ -2351,6 +2353,7 @@ prc_api_helper_init_model_node(prc_context *ctx, prc_api_product *product,
     product->is_model = 1;
     product->behavior_bit_field1 = 0;
     product->behavior_bit_field2 = 0;
+    product->behavior_is_set = 0;
     len_name = (file_name != NULL) ? strlen((const char *)file_name)
                                     : strlen(default_model_name);
     product->name = (char *)prc_calloc(ctx, len_name + 1, sizeof(char));
@@ -2616,6 +2619,7 @@ prc_api_helper_add_ri(prc_context *ctx, uint32_t file_index, prc_api_part *api_p
         item.api_part->biased_layer_index = item.prc_ri->item_content.base.graphics_content.biased_layer_index;
         item.api_part->behavior_bit_field1 = item.prc_ri->item_content.base.graphics_content.behavior_bit_field1;
         item.api_part->behavior_bit_field2 = item.prc_ri->item_content.base.graphics_content.behavior_bit_field2;
+        item.api_part->behavior_is_set = item.prc_ri->item_content.base.graphics_content.is_set;
         item.api_part->has_inherited_style = item.prc_ri->item_content.style_inheritance.has_any_inheritance;
         item.api_part->color.has_inheritance = item.prc_ri->item_content.style_inheritance.color.has_inheritance;
         item.api_part->color.inherited_value = item.prc_ri->item_content.style_inheritance.color.inherited_value;
@@ -2705,6 +2709,7 @@ prc_api_helper_copy_product_details(prc_context *ctx, prc_api_data data,
     product_tree->location_set = !incoming_matrix.is_identity;
     product_tree->behavior_bit_field1 = 0;
     product_tree->behavior_bit_field2 = 0;
+    product_tree->behavior_is_set = 0;
     product_tree->is_model = 0;
     product_tree->type = PRC_API_NODE_PRODUCT;
     product_tree->num_children = 0;
@@ -2724,33 +2729,46 @@ prc_api_helper_copy_product_details(prc_context *ctx, prc_api_data data,
     }
 
     /* Process the entity refs at this time, blowing away the current information
-       that a part or RI may have in terms of style and location */
-    if (product->entity_ref_count > 0)
+       that a part or RI may have in terms of style and location.
+
+       Each reference is taken in turn: entity_reference[k], not the first
+       one again. Its target is looked for in the file structure the
+       reference names (entity_ref_file_index), as the style walk in
+       prc_api_helper_get_style_index_from_leaf does, and its line style and
+       layer count in the file structure that holds the reference itself.
+       A reference whose file structure is not loaded is skipped, and the
+       rest are still taken. A reference's local coordinate system is not
+       applied, but its style is. In 00256 (private) 3,158 products carry
+       more than one reference each. In 3D_PDF_iPhone_Replacement.stream-171
+       (prc-db) 240 references carry a local coordinate system; the 239 of
+       them that place an item all name an identity matrix. */
+    if (product->entity_ref_count > 0 && product->entity_reference != NULL)
     {
         for (k = 0; k < product->entity_ref_count; k++)
         {
-            if (product->entity_reference->content_entity_ref.reference_data.ref_type == PRC_TYPE_MISC_ReferenceOnPRCBase)
+            prc_misc_entity_reference *eref = &product->entity_reference[k];
+
+            if (eref->content_entity_ref.reference_data.ref_type == PRC_TYPE_MISC_ReferenceOnPRCBase)
             {
-                if (!product->entity_reference->content_entity_ref.reference_data.non_topo_reference.flag)
+                uint32_t ref_index;
+
+                if (!eref->content_entity_ref.reference_data.non_topo_reference.flag)
                 {
                     biased_file_index = prc_api_helper_get_biased_file_index_from_unique_id(ctx, data,
-                        product->entity_reference->content_entity_ref.reference_data.non_topo_reference.different_unique_id);
-                    if (biased_file_index != 0)
+                        eref->content_entity_ref.reference_data.non_topo_reference.different_unique_id);
+                    if (biased_file_index == 0)
                     {
-                        entity_ref_file_index = biased_file_index - 1;
+                        /* The file structure it names is not loaded */
+                        continue;
                     }
-                    else
-                    {
-                        /* Something wrong here. Just get out of it */
-                        break;
-                    }
+                    entity_ref_file_index = biased_file_index - 1;
                 }
                 else
                 {
                     entity_ref_file_index = file_index;
                 }
 
-                uint32_t ref_index = product->entity_reference->content_entity_ref.reference_data.non_topo_reference.unique_id;
+                ref_index = eref->content_entity_ref.reference_data.non_topo_reference.unique_id;
 
                 /* Search through the reference items in ctx and see if we
                    need to update the style or location information based upon the reference item.
@@ -2759,30 +2777,23 @@ prc_api_helper_copy_product_details(prc_context *ctx, prc_api_data data,
                 {
                     prc_content_prc_ref_base *ref_base = (prc_content_prc_ref_base *)ctx->graphics_content.ref_base_ptr[j];
 
-                    if (ref_index == ref_base->unique_id && file_index == ref_base->file_index && ref_base->parent_is_RI)
+                    if (ref_index == ref_base->unique_id && entity_ref_file_index == ref_base->file_index &&
+                        ref_base->parent_is_RI)
                     {
-                        /* We have a match. Update the location and style information */
+                        /* We have a match. Update the style information */
                         prc_representation_item_content *ri_item = (prc_representation_item_content*) ref_base->parent;
 
-                        /* Update the style information based upon the reference. */
                         ri_item->base.graphics_content.has_entity_ref = 1;
                         ri_item->base.graphics_content.entity_ref.biased_index_of_line_style =
-                            product->entity_reference->content_entity_ref.base.graphics_content.biased_index_of_line_style;
+                            eref->content_entity_ref.base.graphics_content.biased_index_of_line_style;
                         ri_item->base.graphics_content.entity_ref.biased_layer_index =
-                            product->entity_reference->content_entity_ref.base.graphics_content.biased_layer_index;
+                            eref->content_entity_ref.base.graphics_content.biased_layer_index;
                         ri_item->base.graphics_content.entity_ref.behavior_bit_field1 =
-                            product->entity_reference->content_entity_ref.base.graphics_content.behavior_bit_field1;
+                            eref->content_entity_ref.base.graphics_content.behavior_bit_field1;
                         ri_item->base.graphics_content.entity_ref.behavior_bit_field2 =
-                            product->entity_reference->content_entity_ref.base.graphics_content.behavior_bit_field2;
-                        ri_item->base.graphics_content.entity_ref.file_index = entity_ref_file_index;
-
-                        /* TODO deal with changes in local references too */
-                        if (product->entity_reference->content_entity_ref.index_of_local_coordinate != 0)
-                        {
-                            /* Throw and error for now so we catch this */
-                            prc_error(ctx, PRC_ERROR_INTERNAL, "Local coordinate system reference in entity reference is not supported in prc_api_helper_copy_product_details\n");
-                            return PRC_ERROR_INTERNAL;
-                        }
+                            eref->content_entity_ref.base.graphics_content.behavior_bit_field2;
+                        ri_item->base.graphics_content.entity_ref.file_index =
+                            eref->content_entity_ref.base.base.file_index;
                         break;
                     }
                 }
@@ -3035,6 +3046,48 @@ prc_api_add_product_push(prc_context *ctx, prc_api_add_product_work **worklist,
     return 0;
 }
 
+/* The first product occurrence along product's prototype chain that has a
+   part definition, or NULL if none has one. *part_file_index is set to the
+   file structure that holds that occurrence, which its part index counts
+   in. file_index is the file structure that holds product. */
+static prc_asm_product_occurrence *
+prc_api_helper_prototype_with_part(prc_context *ctx, prc_api_data data,
+    prc_asm_product_occurrence *product, uint32_t file_index, uint32_t *part_file_index)
+{
+    prc_data *data_in = (prc_data *)data;
+    prc_asm_product_occurrence *step = product;
+    uint32_t step_file = file_index;
+    uint32_t guard;
+
+    for (guard = 0; guard < 1024; guard++)
+    {
+        prc_references_of_product_occurrence *refs = &step->references_product_occurrence;
+        uint32_t next_file = step_file;
+
+        if (refs->biased_index_prototype == 0)
+            return NULL;
+        if (refs->prototype_in_same_file_structure.flag == 0)
+        {
+            uint32_t biased = prc_api_helper_get_biased_file_index_from_unique_id(ctx, data,
+                refs->prototype_in_same_file_structure.unique_id);
+
+            if (biased == 0)
+                return NULL;
+            next_file = biased - 1;
+        }
+        if (!prc_api_helper_tree_index_ok(data_in, next_file, refs->biased_index_prototype, 0))
+            return NULL;
+        step = &data_in->file_struct[next_file].tree->products[refs->biased_index_prototype - 1];
+        step_file = next_file;
+        if (step->references_product_occurrence.biased_index_part != 0)
+        {
+            *part_file_index = step_file;
+            return step;
+        }
+    }
+    return NULL;
+}
+
 /* Capture the part style and pass it as parent to RI creation.
 
    Iterative (not recursive): the product-occurrence tree (prototype chains
@@ -3108,6 +3161,8 @@ prc_api_helper_add_product(prc_context *ctx, prc_api_data data, uint32_t num_fil
             prc_asm_parts_definition *part;
             uint32_t biased_file_index;
             uint32_t file_index = work_curr_file_index;
+            uint32_t part_file_index;
+            uint32_t biased_part_index;
             prc_asm_product_occurrence *prototype_product;
             prc_api_transform new_transform;
             uint8_t wants_cross_file_ref = 0;
@@ -3287,27 +3342,50 @@ prc_api_helper_add_product(prc_context *ctx, prc_api_data data, uint32_t num_fil
                    occurrences that use them are drawn */
                 work_product_tree->behavior_bit_field1 = item.product->base.graphics_content.behavior_bit_field1;
                 work_product_tree->behavior_bit_field2 = item.product->base.graphics_content.behavior_bit_field2;
+                work_product_tree->behavior_is_set = item.product->base.graphics_content.is_set;
             }
 
             /* We should be at the last prototype. At this point work on the child
                product occurrences AND add the part if there is one. The carburetor
                for example has a tree that has this occur (which is a part and
                child product occurrences) */
-            if (product_refs->biased_index_part != 0)
+            part_file_index = file_index;
+            biased_part_index = product_refs->biased_index_part;
+
+            /* An occurrence with children of its own stops the walk above
+               at itself, so a part that only its prototype holds was never
+               reached. The prototype is the occurrence's template (ISO
+               14739-1, 7.2.x "PRC_TYPE_ASM_ProductOccurrence"), so take the
+               first part along its chain. In GS19090-011_3D.stream-70
+               (prc-db) 32 sub-assemblies hold their DATUM sets this way, and
+               Adobe Acrobat lists them in its tree. The counting pass,
+               prc_api_helper_count_items, already follows the prototype, so
+               the reserve holds room for this part and its items. */
+            if (biased_part_index == 0 && number_of_child_product_occurrences > 0 &&
+                !(wants_cross_file_ref && biased_file_index == 0))
             {
-                if (!prc_api_helper_tree_index_ok(data_in, file_index, product_refs->biased_index_part, 1))
+                prc_asm_product_occurrence *with_part = prc_api_helper_prototype_with_part(ctx, data,
+                    work_product, work_curr_file_index, &part_file_index);
+
+                if (with_part != NULL)
+                    biased_part_index = with_part->references_product_occurrence.biased_index_part;
+            }
+
+            if (biased_part_index != 0)
+            {
+                if (!prc_api_helper_tree_index_ok(data_in, part_file_index, biased_part_index, 1))
                 {
                     prc_error(ctx, PRC_ERROR_PARSE, "Part index past the end of the tree\n");
                     result = PRC_ERROR_PARSE;
                     goto cleanup;
                 }
-                part = &data_in->file_struct[file_index].tree->parts[product_refs->biased_index_part - 1];
+                part = &data_in->file_struct[part_file_index].tree->parts[biased_part_index - 1];
                 work_product_tree->part = &reserve->parts[reserve->part_index];
 
                 /* We may want to avoid adding this part if its name is null.
                    Capture the created part style so we can pass it to RIs. */
                 prc_api_object_style *part_style = prc_api_helper_add_part(ctx,
-                    work_product_tree->name, file_index,
+                    work_product_tree->name, part_file_index,
                     work_product_tree->part, part, work_parent_biased_style_index,
                     work_parent_biased_style_file_index, reserve, product_style);
                 if (part_style == NULL)
@@ -3327,7 +3405,7 @@ prc_api_helper_add_product(prc_context *ctx, prc_api_data data, uint32_t num_fil
 
                     for (k = 0; k < part->num_rep_items; k++)
                     {
-                        code = prc_api_helper_add_ri(ctx, file_index,
+                        code = prc_api_helper_add_ri(ctx, part_file_index,
                             &work_product_tree->part->rep_items[k],
                             &part->rep_items[k], work_parent_biased_style_index,
                             work_parent_biased_style_file_index, reserve, part_style);
@@ -3482,10 +3560,24 @@ typedef struct
     uint8_t removed;
 } prc_api_visibility_state;
 
+/* Where no flag decides, a representation item's own Show bit gives its
+   visibility (own_show 1), but a product occurrence is shown whatever its
+   own Show bit (own_show 0). is_set 0: the node's behaviour is the
+   section's starting value, which no entity wrote (clause 4.4); it counts as
+   Show with neither flag.
+
+   Checked in Adobe Acrobat Reader. Editing single graphics records in two
+   files: a body whose own record had Show clear was drawn once the record
+   was removed, so that it reused the starting value, and a solid that reused
+   it was hidden once given a record with Show clear; whether the body was
+   closed made no difference. Reader draws every node of private 00019,
+   among them a product occurrence written with Show clear and no flag and
+   the items below it. */
 static prc_api_visibility_state
-prc_api_visibility_step(prc_api_visibility_state s, uint8_t bits1, uint8_t bits2, uint8_t *visible)
+prc_api_visibility_step(prc_api_visibility_state s, uint8_t bits1, uint8_t bits2,
+    uint8_t is_set, uint8_t own_show, uint8_t *visible)
 {
-    uint32_t bits = (uint32_t)bits1 | ((uint32_t)bits2 << 8);
+    uint32_t bits = is_set ? ((uint32_t)bits1 | ((uint32_t)bits2 << 8)) : PRC_GRAPHICS_Show;
     int8_t shown = (bits & PRC_GRAPHICS_Show) ? 1 : 0;
 
     if (bits & PRC_GRAPHICS_Removed)
@@ -3501,7 +3593,7 @@ prc_api_visibility_step(prc_api_visibility_state s, uint8_t bits1, uint8_t bits2
     else if (s.parent >= 0)
         *visible = (uint8_t)s.parent;
     else
-        *visible = 1;
+        *visible = own_show ? (uint8_t)shown : 1;
     return s;
 }
 
@@ -3565,7 +3657,7 @@ prc_api_helper_set_visibility(prc_context *ctx, prc_api_product *root)
         {
             prc_api_product *p = item.product;
             prc_api_visibility_state s = prc_api_visibility_step(item.state,
-                p->behavior_bit_field1, p->behavior_bit_field2, &p->visible);
+                p->behavior_bit_field1, p->behavior_bit_field2, p->behavior_is_set, 0, &p->visible);
 
             if (p->part != NULL)
                 code = prc_api_visibility_push(ctx, &list, &size, &capacity, NULL, p->part, s);
@@ -3576,7 +3668,7 @@ prc_api_helper_set_visibility(prc_context *ctx, prc_api_product *root)
         {
             prc_api_part *part = item.part;
             prc_api_visibility_state s = prc_api_visibility_step(item.state,
-                part->behavior_bit_field1, part->behavior_bit_field2, &part->visible);
+                part->behavior_bit_field1, part->behavior_bit_field2, part->behavior_is_set, 1, &part->visible);
 
             for (k = 0; code == 0 && part->rep_items != NULL && k < part->num_rep_items; k++)
                 code = prc_api_visibility_push(ctx, &list, &size, &capacity, NULL, &part->rep_items[k], s);

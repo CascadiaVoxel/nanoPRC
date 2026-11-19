@@ -350,6 +350,10 @@ struct prc_api_part_s
     uint32_t biased_layer_index;
     uint8_t behavior_bit_field1;
     uint8_t behavior_bit_field2;
+    /** 1 if the file gives this representation item behaviour bits of its
+        own (see prc_api_product.behavior_is_set), 0 if it does not. Always 0
+        for a part definition, whose behaviour bits are not read. */
+    uint8_t behavior_is_set;
     /** The local coordinate system that places this part or representation
         item, as an index into the coordinate systems of file structure
         tess_file_index, biased by 1; 0 for none.
@@ -417,6 +421,14 @@ struct prc_api_product_s
         are not product occurrences. */
     uint8_t behavior_bit_field1;
     uint8_t behavior_bit_field2;
+    /** 1 if the file gives this node behaviour bits of its own: a graphics
+        record written for it, or one written earlier in the same tree
+        section that it reuses (same_graphics). 0 if the bits are still the
+        section's starting value, which ISO 14739-1 clause 4.4 "Current data
+        values" gives as -1 and no entity has written; behavior_bit_field1
+        and behavior_bit_field2 then read 0. Also 0 for nodes that are not
+        product occurrences. */
+    uint8_t behavior_is_set;
     /** 1 if this node is shown, 0 if it is hidden or removed: the graphics
         behaviour resolved along the path from the root, as Adobe Acrobat
         resolves it, so a renderer need not. Set by prc_api_create_model_tree
@@ -428,11 +440,13 @@ struct prc_api_product_s
         (0x0002), the lowest of them gives the value, its Show bit (0x0001);
         otherwise, where nodes set ParentHeritShow (0x0004), the highest of
         them gives it; a node with ChildHeritShow ignores its own
-        ParentHeritShow. Where no node on the path sets either, the node is
-        shown whatever its own Show bit: the standard gives the node's own
-        value there, but Adobe Acrobat draws such nodes, and many files
-        clear Show on every node. Removed (0x2000) anywhere on the path
-        hides the node.
+        ParentHeritShow. Where no node on the path sets either, a
+        representation item's own Show bit gives the value, while a product
+        occurrence or part is shown whatever its own Show bit, as Adobe
+        Acrobat draws them. A node whose behaviour is not set
+        (behavior_is_set 0) counts as Show set with neither flag: Acrobat
+        draws it, and many files leave most nodes at the starting value.
+        Removed (0x2000) anywhere on the path hides the node.
 
         This is the default visibility. A PDF 3D view can set the visibility
         of nodes for itself, which is not applied here. */
@@ -993,11 +1007,13 @@ PRC_EXPORT int prc_api_create_model_tree(prc_context *ctx, prc_api_data data, pr
 /* ------------------------------------------------------------------ */
 /* Write facility: public types.                                       */
 /*                                                                      */
-/* Not yet exposed here: per-file color/material/style/picture tables   */
-/* (globals section entries that representation items could reference  */
-/* by index) -- prc_api_write_prc_file always writes an empty table, so */
-/* every representation item gets the reader's default appearance.     */
-/* File a request upstream if you need materials/colors sooner.        */
+/* Appearance: a representation item can carry its own material and     */
+/* textures (prc_api_write_rep_item: has_material, has_material_slots,  */
+/* texture_image, texture_layers), and a tessellation per-vertex        */
+/* colours (prc_api_write_tessellation: vertex_colors). The writer      */
+/* builds the file's colour, material, picture and style tables from    */
+/* them. An item given no material gets one shared default material,   */
+/* since a file with no style at all stops some viewers drawing.        */
 /* ------------------------------------------------------------------ */
 
 /**

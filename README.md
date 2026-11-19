@@ -1,5 +1,21 @@
 # nanoPRC
 
+## What nanoPRC is
+
+A 3D PDF is an ordinary PDF document that also carries a 3D model, in a 3D annotation that viewers such as Adobe
+Acrobat Reader let the reader rotate, section and explore on the page. The PDF standard (ISO 32000) allows that model
+in one of two formats, U3D (ECMA-363) or PRC (ISO 14739-1). PRC is the richer of the two: it holds an assembly tree of
+products and parts, triangle meshes (usually compressed), wires, colours, materials and textures, views, and 3D markup
+(product and manufacturing information), and it can also hold exact B-rep and NURBS geometry.
+
+nanoPRC is a C99 library that reads and writes PRC. It finds the PRC stream in a PDF, encrypted or not, or reads a bare
+`.prc` file, decodes it, and gives the caller the model tree with its triangle meshes, lines, markup, materials,
+textures and the visibility of each node through a C API, so that other software can display, convert or analyse the
+model without a PDF viewer. Tessellating the exact geometry is in development and off by default. In the other
+direction, it writes PRC from a product tree and meshes that the caller supplies, and embeds it in a minimal 3D PDF, so
+that a program can publish its own 3D content as a 3D PDF. nanoPRC does not draw anything itself: the viewer in
+`demos/viewer`, the converters to and from OBJ, PLY, glTF and STL, and a Python binding show how the API is used.
+
 ## CI Badges
 
 [![build](https://github.com/CascadiaVoxel/nanoPRC/actions/workflows/build.yaml/badge.svg)](https://github.com/CascadiaVoxel/nanoPRC/actions/workflows/build.yaml)
@@ -76,7 +92,7 @@ public API:
 |--------|-------------|
 | [prc_obj_rw](https://github.com/t3dr0/prc_obj_rw) | OBJ export (with MTL and textures) and OBJ import into PRC/PDF |
 | [prc_ply_rw](https://github.com/t3dr0/prc_ply_rw) | PLY export and import; mesh2ply, which converts OFF and PLY meshes to clean binary PLY; and ply_colourise, which colours a PLY's vertices by their x, y or z coordinate |
-| [prc_glb_rw](https://github.com/t3dr0/prc_glb_rw) | glTF/GLB export and import |
+| [prc_glb_rw](https://github.com/t3dr0/prc_glb_rw) | glTF/GLB export and import, with materials, textures and vertex colours; Draco mesh compression (`KHR_draco_mesh_compression`) in both directions in a build configured with `-DPRC_GLB_WITH_DRACO=ON` |
 
 Each is also included here as a git submodule under `tools/`, pinned to a tagged release, and built with the library
 when `NANOPRC_BUILD_CONVERTERS` is ON (see Building).
@@ -89,7 +105,10 @@ facility" section of that header for the current, authoritative list of what is 
 a PRC stream; `prc_api_pdf_embed_prc` embeds that stream in a minimal 3D-annotated PDF. Tessellation
 can be written as uncompressed triangles, wire geometry, or the fully compressed format. Geometry is
 always tessellated before writing -- PRC also supports writing exact NURBS/B-Rep surfaces directly, but
-nanoPRC does not do that yet. Materials/colors/styles are not yet exposed through the write API either.
+nanoPRC does not do that yet. Each representation item can carry its own material (diffuse, ambient, specular and
+emissive colours, opacity and shininess) and textures, including opacity-mask and reflection layers
+(`prc_api_write_rep_item`), and a tessellation can carry per-vertex colours (`prc_api_write_tessellation`). An item
+given no material is written with one shared default material.
 
 ### Diagnostic Environment-Variable Hooks
 

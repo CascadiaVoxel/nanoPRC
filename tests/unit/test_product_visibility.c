@@ -20,17 +20,26 @@
    ISO 14739-1, 7.2.4.2 "GraphicsContent" and Table 34 "behavior_bit_field":
    the lowest node on the path with ChildHeritShow gives the value, else the
    highest with ParentHeritShow, and a node with ChildHeritShow ignores its
-   own ParentHeritShow. Where no node sets either, Acrobat draws the node
-   whatever its own Show bit. Removed hides a node and what it holds.
+   own ParentHeritShow. Where no node sets either, a representation item's
+   own Show bit gives its value, but a product occurrence is shown whatever
+   its own Show bit. A node whose behaviour is still its tree section's
+   starting value (clause 4.4), because no graphics record was written for
+   it, counts as Show set with neither flag. Removed hides a node and what
+   it holds.
 
    Checked against Adobe Acrobat Reader, which reported every node it hides
-   for four files (private 00006 and 00077, and the prc-db Capping Machine
-   and Industrial Grinder samples): the hidden products and items it listed
-   are the ones this gives.
+   for ten files, among them private 00006, 00019, 00077 and 00247, and the
+   prc-db Capping Machine, Industrial Grinder, Miter Saw and TPR samples:
+   the hidden products and items it listed are the ones this gives. The
+   starting-value rule was then checked by editing single graphics records
+   in 00077 and the Miter Saw: an item with Show clear was drawn once its
+   record was removed, and an item that had none was hidden once given one
+   with Show clear.
 
-   The writer sets Show on every node, so the cases are made by writing a
-   small model and then setting the behaviour of its occurrences in the
-   parsed data, before the model tree is built:
+   The writer writes a record with Show set for every node, so the cases are
+   made by writing a small model and then setting the behaviour of its
+   occurrences, and of two representation items, in the parsed data, before
+   the model tree is built:
 
        A  0x0002 (ChildHeritShow, Show clear)      { A1 0x0001 }   both hidden
        B  0x0004 (ParentHeritShow, Show clear)     { B1 0x0001 }   both hidden
@@ -39,8 +48,13 @@
        E  0x0001 (Show)                            { E1 Removed }  E shown, E1 hidden
        F  0x0005 (ParentHeritShow, Show)           { F1 0x0004 }   both shown: the highest wins
        G  0x0002 (ChildHeritShow, Show clear)      { G1 0x0003 }   G hidden, G1 shown: the lowest wins
+       H  starting value                           { H1 starting } both shown, and H1's item,
+                                                                    also left at the starting
+                                                                    value, is shown
+       I  0x0001 (Show)                            { I1 0x0001 }   both shown, but I1's item
+                                                                    has 0x0000 and is hidden
 
-   Each leaf's part follows its product. */
+   Each leaf's part follows its product, and so do its items, except I1's. */
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -52,7 +66,10 @@
 
 static const char *TEST_FILENAME = "test_product_visibility.prc";
 
-#define NUM_BRANCHES 7
+#define NUM_BRANCHES 9
+
+/* No graphics record: the behaviour stays the section's starting value */
+#define STARTING_VALUE 0xffffffffu
 
 static const prc_api_product *
 find(const prc_api_product *p, const char *name)
@@ -72,7 +89,24 @@ find(const prc_api_product *p, const char *name)
 }
 
 static void
-set_behaviour(prc_asm_file_structure_tree *tree, const char *name, uint32_t bits)
+set_graphics(prc_graphics_content *g, uint32_t bits)
+{
+    if (bits == STARTING_VALUE)
+    {
+        g->behavior_bit_field1 = 0;
+        g->behavior_bit_field2 = 0;
+        g->is_set = 0;
+    }
+    else
+    {
+        g->behavior_bit_field1 = (uint8_t)(bits & 0xff);
+        g->behavior_bit_field2 = (uint8_t)(bits >> 8);
+        g->is_set = 1;
+    }
+}
+
+static prc_asm_product_occurrence *
+find_occurrence(prc_asm_file_structure_tree *tree, const char *name)
 {
     uint32_t i;
 
@@ -81,17 +115,35 @@ set_behaviour(prc_asm_file_structure_tree *tree, const char *name, uint32_t bits
         const char *s = (const char *)tree->products[i].base.base.name.name.string;
 
         if (s != NULL && strcmp(s, name) == 0)
-        {
-            tree->products[i].base.graphics_content.behavior_bit_field1 = (uint8_t)(bits & 0xff);
-            tree->products[i].base.graphics_content.behavior_bit_field2 = (uint8_t)(bits >> 8);
-            return;
-        }
+            return &tree->products[i];
     }
     PRC_ASSERT(0 && "product not found");
+    return NULL;
 }
 
 static void
-expect(const prc_api_product *tree, const char *name, int visible)
+set_behaviour(prc_asm_file_structure_tree *tree, const char *name, uint32_t bits)
+{
+    set_graphics(&find_occurrence(tree, name)->base.graphics_content, bits);
+}
+
+/* The behaviour of the first representation item of the named occurrence's
+   part */
+static void
+set_item_behaviour(prc_asm_file_structure_tree *tree, const char *name, uint32_t bits)
+{
+    prc_asm_product_occurrence *p = find_occurrence(tree, name);
+    uint32_t biased = p->references_product_occurrence.biased_index_part;
+    prc_asm_parts_definition *part;
+
+    PRC_ASSERT(biased != 0 && biased <= tree->parts_count);
+    part = &tree->parts[biased - 1];
+    PRC_ASSERT(part->num_rep_items > 0);
+    set_graphics(&part->rep_items[0].item_content.base.graphics_content, bits);
+}
+
+static void
+expect(const prc_api_product *tree, const char *name, int visible, int item_visible)
 {
     const prc_api_product *p = find(tree, name);
 
@@ -104,7 +156,11 @@ expect(const prc_api_product *tree, const char *name, int visible)
 
         PRC_ASSERT_EQ(p->part->visible, visible);
         for (r = 0; r < p->part->num_rep_items; r++)
-            PRC_ASSERT_EQ(p->part->rep_items[r].visible, visible);
+        {
+            printf("    item %u: visible %d (expected %d)\n", (unsigned)r,
+                (int)p->part->rep_items[r].visible, item_visible);
+            PRC_ASSERT_EQ(p->part->rep_items[r].visible, item_visible);
+        }
     }
 }
 
@@ -113,12 +169,15 @@ main(void)
 {
     static const double positions[9] = { 0, 0, 0, 1, 0, 0, 0, 1, 0 };
     static const uint32_t tri_indices[3] = { 0, 1, 2 };
-    static const char *branch_names[NUM_BRANCHES] = { "A", "B", "C", "D", "E", "F", "G" };
-    static const char *leaf_names[NUM_BRANCHES] = { "A1", "B1", "C1", "D1", "E1", "F1", "G1" };
-    static const uint32_t branch_bits[NUM_BRANCHES] = { 0x0002, 0x0004, 0x0000, 0x0003, 0x0001, 0x0005, 0x0002 };
-    static const uint32_t leaf_bits[NUM_BRANCHES] = { 0x0001, 0x0001, 0x0000, 0x0004, 0x2001, 0x0004, 0x0003 };
-    static const int branch_visible[NUM_BRANCHES] = { 0, 0, 1, 1, 1, 1, 0 };
-    static const int leaf_visible[NUM_BRANCHES] = { 0, 0, 1, 1, 0, 1, 1 };
+    static const char *branch_names[NUM_BRANCHES] = { "A", "B", "C", "D", "E", "F", "G", "H", "I" };
+    static const char *leaf_names[NUM_BRANCHES] = { "A1", "B1", "C1", "D1", "E1", "F1", "G1", "H1", "I1" };
+    static const uint32_t branch_bits[NUM_BRANCHES] = { 0x0002, 0x0004, 0x0000, 0x0003, 0x0001, 0x0005, 0x0002,
+        STARTING_VALUE, 0x0001 };
+    static const uint32_t leaf_bits[NUM_BRANCHES] = { 0x0001, 0x0001, 0x0000, 0x0004, 0x2001, 0x0004, 0x0003,
+        STARTING_VALUE, 0x0001 };
+    static const int branch_visible[NUM_BRANCHES] = { 0, 0, 1, 1, 1, 1, 0, 1, 1 };
+    static const int leaf_visible[NUM_BRANCHES] = { 0, 0, 1, 1, 0, 1, 1, 1, 1 };
+    static const int leaf_item_visible[NUM_BRANCHES] = { 0, 0, 1, 1, 0, 1, 1, 1, 0 };
     prc_context *ctx;
     prc_api_write_tessellation tess;
     prc_api_write_rep_item ri;
@@ -192,16 +251,21 @@ main(void)
         set_behaviour(pd->file_struct[0].tree, branch_names[k], branch_bits[k]);
         set_behaviour(pd->file_struct[0].tree, leaf_names[k], leaf_bits[k]);
     }
+    /* Each leaf has a part of its own, so this reaches I1's item alone */
+    PRC_ASSERT(find_occurrence(pd->file_struct[0].tree, "I1")->references_product_occurrence.biased_index_part !=
+        find_occurrence(pd->file_struct[0].tree, "H1")->references_product_occurrence.biased_index_part);
+    set_item_behaviour(pd->file_struct[0].tree, "I1", 0x0000);
+    set_item_behaviour(pd->file_struct[0].tree, "H1", STARTING_VALUE);
 
     PRC_ASSERT_EQ(prc_api_prep_model_tree(ctx, data, &num_parts, &num_products, &num_markups), 0);
     PRC_ASSERT_EQ(prc_api_create_model_tree(ctx, data, &model_tree, num_parts, num_products, num_markups), 0);
     PRC_ASSERT_NOT_NULL(model_tree);
 
-    expect(model_tree, "ROOT", 1);
+    expect(model_tree, "ROOT", 1, 1);
     for (k = 0; k < NUM_BRANCHES; k++)
     {
-        expect(model_tree, branch_names[k], branch_visible[k]);
-        expect(model_tree, leaf_names[k], leaf_visible[k]);
+        expect(model_tree, branch_names[k], branch_visible[k], branch_visible[k]);
+        expect(model_tree, leaf_names[k], leaf_visible[k], leaf_item_visible[k]);
     }
 
     prc_api_release_data(ctx, data, NULL, 0, NULL, 0, NULL, 0, model_tree);

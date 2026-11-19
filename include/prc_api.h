@@ -1007,11 +1007,13 @@ PRC_EXPORT int prc_api_create_model_tree(prc_context *ctx, prc_api_data data, pr
 /* ------------------------------------------------------------------ */
 /* Write facility: public types.                                       */
 /*                                                                      */
-/* Not yet exposed here: per-file color/material/style/picture tables   */
-/* (globals section entries that representation items could reference  */
-/* by index) -- prc_api_write_prc_file always writes an empty table, so */
-/* every representation item gets the reader's default appearance.     */
-/* File a request upstream if you need materials/colors sooner.        */
+/* Appearance: a representation item can carry its own material and     */
+/* textures (prc_api_write_rep_item: has_material, has_material_slots,  */
+/* texture_image, texture_layers), and a tessellation per-vertex        */
+/* colours (prc_api_write_tessellation: vertex_colors). The writer      */
+/* builds the file's colour, material, picture and style tables from    */
+/* them. An item given no material gets one shared default material,   */
+/* since a file with no style at all stops some viewers drawing.        */
 /* ------------------------------------------------------------------ */
 
 /**

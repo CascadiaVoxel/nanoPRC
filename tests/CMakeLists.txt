@@ -244,3 +244,8 @@ add_executable(test_colour_style_transparency tests/unit/test_colour_style_trans
 target_link_libraries(test_colour_style_transparency prc_static)
 target_include_directories(test_colour_style_transparency PRIVATE tests)
 add_test(NAME test_colour_style_transparency COMMAND test_colour_style_transparency)
+
+add_executable(test_sliver_preservation tests/unit/test_sliver_preservation.c)
+target_link_libraries(test_sliver_preservation prc_static)
+target_include_directories(test_sliver_preservation PRIVATE tests)
+add_test(NAME test_sliver_preservation COMMAND test_sliver_preservation)

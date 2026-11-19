@@ -179,11 +179,11 @@ prc_encode_rebuild_edges(prc_edge_slot *etable, size_t ecap,
 }
 
 /* prc_encode_preprocess_ex, plus weld_group: NULL, or one value per input
-   vertex. Two vertices weld only when they quantize to the same position AND
-   carry the same group, so a caller can keep apart vertices that share a
-   position but must stay distinct -- a texture seam, where the two sides
-   carry different UVs. With NULL every vertex is in one group, and the
-   result is exactly prc_encode_preprocess_ex's. */
+   vertex. Two vertices weld only when they are at the same position (see
+   merge_within_tolerance) AND carry the same group, so a caller can keep
+   apart vertices that share a position but must stay distinct -- a texture
+   seam, where the two sides carry different UVs. With NULL every vertex is
+   in one group, and the result is exactly prc_encode_preprocess_ex's. */
 static int
 prc_encode_preprocess_grouped(prc_context *ctx,
     const double *positions, uint32_t num_positions,
@@ -191,6 +191,7 @@ prc_encode_preprocess_grouped(prc_context *ctx,
     const uint32_t *tri_indices, uint32_t num_triangles,
     prc_write_tolerance tolerance,
     uint8_t skip_nonmanifold_edge_remap,
+    uint8_t merge_within_tolerance,
     prc_encode_mesh *out)
 {
     prc_vtx_slot *vtable = NULL;
@@ -356,9 +357,26 @@ prc_encode_preprocess_grouped(prc_context *ctx,
                 uint64_t hash;
                 size_t slot;
 
-                kx = (int64_t)llround(p[0] / tol);
-                ky = (int64_t)llround(p[1] / tol);
-                kz = (int64_t)llround(p[2] / tol);
+                if (merge_within_tolerance)
+                {
+                    /* Vertices in the same tolerance-sized cell merge */
+                    kx = (int64_t)llround(p[0] / tol);
+                    ky = (int64_t)llround(p[1] / tol);
+                    kz = (int64_t)llround(p[2] / tol);
+                }
+                else
+                {
+                    /* Only vertices at exactly the same position merge:
+                       the key is the coordinates' bits, with -0 taken as
+                       0. Vertices closer than the tolerance stay apart,
+                       so a thin triangle keeps its three corners. */
+                    double c0 = (p[0] == 0.0) ? 0.0 : p[0];
+                    double c1 = (p[1] == 0.0) ? 0.0 : p[1];
+                    double c2 = (p[2] == 0.0) ? 0.0 : p[2];
+                    memcpy(&kx, &c0, sizeof(kx));
+                    memcpy(&ky, &c1, sizeof(ky));
+                    memcpy(&kz, &c2, sizeof(kz));
+                }
                 group = (weld_group != NULL) ? weld_group[i] : 0;
                 hash = prc_vtx_hash(kx, ky, kz);
                 /* Mixed in only when groups exist, so ungrouped input probes
@@ -407,8 +425,16 @@ prc_encode_preprocess_grouped(prc_context *ctx,
     if (num_triangles > 0)
     {
         /* Only triangles two of whose corners weld to the same vertex are
-           dropped; the compressed traversal cannot encode them. Thin but
-           real triangles are kept. An earlier filter also dropped every
+           dropped; the compressed traversal cannot encode a triangle with
+           a repeated vertex. Thin but real triangles are kept. With the
+           exact merge (merge_within_tolerance 0) that is only a triangle
+           given the same vertex, or the same position, twice; two
+           distinct corners closer than the tolerance stay distinct
+           vertices, which the traversal encodes and Adobe Acrobat opens,
+           even where they quantize to the same point. Merging within the
+           tolerance used to drop such slivers, 352 of the Stanford
+           Dragon's 871,306 triangles, and moved the triangles around them
+           onto the merged vertex. An earlier filter also dropped every
            triangle with a corner under about 0.57 degrees, because one file
            (757-3516-1.STL) had shown an empty model tree in Adobe Acrobat.
            That was not the triangles: the writer then ended its
@@ -1223,10 +1249,11 @@ prc_encode_preprocess_ex(prc_context *ctx,
     const uint32_t *tri_indices, uint32_t num_triangles,
     prc_write_tolerance tolerance,
     uint8_t skip_nonmanifold_edge_remap,
+    uint8_t merge_within_tolerance,
     prc_encode_mesh *out)
 {
     return prc_encode_preprocess_grouped(ctx, positions, num_positions, NULL, tri_indices,
-        num_triangles, tolerance, skip_nonmanifold_edge_remap, out);
+        num_triangles, tolerance, skip_nonmanifold_edge_remap, merge_within_tolerance, out);
 }
 
 /* Every existing caller (COMPRESSED encoding, where an edge shared by 3+
@@ -1235,7 +1262,9 @@ prc_encode_preprocess_ex(prc_context *ctx,
    remap; only prc_api_mesh_weld_and_split (an uncompressed-TRIANGLES-
    oriented caller, which has no such traversal and so no need for that
    specific cleanup -- see its own doc comment) opts out via
-   prc_encode_preprocess_ex directly. */
+   prc_encode_preprocess_ex directly. It is also the one caller that merges
+   vertices within the tolerance; every COMPRESSED caller merges only
+   vertices at exactly the same position. */
 int
 prc_encode_preprocess(prc_context *ctx,
     const double *positions, uint32_t num_positions,
@@ -1244,7 +1273,7 @@ prc_encode_preprocess(prc_context *ctx,
     prc_encode_mesh *out)
 {
     return prc_encode_preprocess_ex(ctx, positions, num_positions, tri_indices, num_triangles,
-        tolerance, 0, out);
+        tolerance, 0, 0, out);
 }
 
 /* Depth-first traversal (Step B): emits the compressed-tessellation arrays by
@@ -4867,7 +4896,7 @@ prc_api_mesh_weld_and_split(prc_context *ctx,
        fixup applied to a file with many 3+-way-shared edges) versus a few
        hundred from the fan split actually wanted here. */
     code = prc_encode_preprocess_ex(ctx, positions, num_positions, tri_indices, num_triangles,
-        tolerance, 1, &mesh);
+        tolerance, 1, 1, &mesh);
     if (code < 0)
         return code;
 
@@ -5495,7 +5524,7 @@ prc_write_compress_tess_entry(prc_context *ctx, prc_bit_write_state *s,
             tex_coords, num_tex_coords, tex_indices, &textured);
         if (code != 0) return code;
         code = prc_encode_preprocess_grouped(ctx, textured.positions, textured.num_positions,
-            textured.weld_group, textured.tri_indices, num_triangles, tolerance, 0, &mesh);
+            textured.weld_group, textured.tri_indices, num_triangles, tolerance, 0, 0, &mesh);
     }
     else
     {

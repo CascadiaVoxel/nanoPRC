@@ -398,6 +398,16 @@ prc_evaluate_circle_compressed(prc_context *ctx, void *params, double input)
         return output;
     }
 
+    if (input == 0)
+    {
+        return info->start_point;
+    }
+
+    if (input == 1)
+    {
+        return info->end_point;
+    }
+
     /* Get the basis vectors for our parameterization */
     prc_vec_sub(info->start_point, info->center, &basis_vector1);
 

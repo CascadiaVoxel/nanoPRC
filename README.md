@@ -76,7 +76,7 @@ public API:
 |--------|-------------|
 | [prc_obj_rw](https://github.com/t3dr0/prc_obj_rw) | OBJ export (with MTL and textures) and OBJ import into PRC/PDF |
 | [prc_ply_rw](https://github.com/t3dr0/prc_ply_rw) | PLY export and import; mesh2ply, which converts OFF and PLY meshes to clean binary PLY; and ply_colourise, which colours a PLY's vertices by their x, y or z coordinate |
-| [prc_glb_rw](https://github.com/t3dr0/prc_glb_rw) | glTF/GLB export and import |
+| [prc_glb_rw](https://github.com/t3dr0/prc_glb_rw) | glTF/GLB export and import, with materials, textures and vertex colours; Draco mesh compression (`KHR_draco_mesh_compression`) in both directions in a build configured with `-DPRC_GLB_WITH_DRACO=ON` |
 
 Each is also included here as a git submodule under `tools/`, pinned to a tagged release, and built with the library
 when `NANOPRC_BUILD_CONVERTERS` is ON (see Building).

@@ -75,9 +75,9 @@
      under must_calculate_normals. Supplying tex_indices together with the
      computed-one-normal-per-face path (norm_indices == NULL and
      must_calculate_normals == 0) would require
-     PRC_FACETESSDATA_TriangleOneNormalTextured, which this project's own
-     reader rejects with PRC_ERROR_NOT_IMPLEMENTED, so it is refused here
-     rather than written and left unreadable.
+     PRC_FACETESSDATA_TriangleOneNormalTextured. nanoPRC's reader reads that
+     kind, but this writer does not produce it, and output using it has not
+     been checked against other readers, so the combination is refused.
 
    Face-embedded wire indices are out of scope (not written).
 

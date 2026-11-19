@@ -1111,13 +1111,19 @@ prc_internal_api_set_strips(prc_context *ctx, prc_tess_face face,
 }
 
 /* Deal with the triangles on a single face. This gets the indices into the
-   triangulation data */
+   triangulation data. A face's triangulateddata holds one entry per kind of
+   entity it uses, in the order of Table 139, and for each triangle kind that
+   entry is just the triangle count (ISO 14739-1 7.8.6.1 General). So the
+   count is read at this kind's own position, and its indices are added to
+   the face's running total: a face may hold, say, textured triangles and
+   then one-normal textured triangles, whose count is not the first entry. */
 void
 prc_internal_api_set_triangles(prc_context *ctx, prc_tess_face face,
                     uint8_t is_single_norm, prc_internal_api_tess_entities *entities,
                                size_t *face_tessellation_index, size_t *num_indices)
 {
-	entities->num_triangles = face.triangulateddata[0];
-	*num_indices = entities->num_triangles * 3; /* 3 indices per triangle */
+	entities->num_triangles = face.triangulateddata[*face_tessellation_index];
+	entities->triangle_offset = *num_indices;
+	*num_indices = *num_indices + entities->num_triangles * 3; /* 3 indices per triangle */
  	*face_tessellation_index = *face_tessellation_index + 1;
 }

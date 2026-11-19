@@ -1580,10 +1580,10 @@ typedef struct prc_api_write_tessellation_s
 
         Not legal together with the computed-one-normal-per-face path
         (`normals` NULL and `must_calculate_normals` 0): that combination
-        needs PRC_FACETESSDATA_TriangleOneNormalTextured, which this
-        project's own reader currently rejects, so it is refused rather than
-        written unreadable. Supply `normals`/`norm_indices`, or set
-        `must_calculate_normals`.
+        needs PRC_FACETESSDATA_TriangleOneNormalTextured. nanoPRC reads that
+        kind, but the writer does not produce it, and output using it has not
+        been checked against other readers, so the combination is refused.
+        Supply `normals`/`norm_indices`, or set `must_calculate_normals`.
 
         Two wire-format conventions here are not stated by ISO 14739 and were
         measured against real files before being implemented; both are filed

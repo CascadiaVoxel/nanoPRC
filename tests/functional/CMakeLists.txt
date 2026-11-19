@@ -37,3 +37,13 @@ target_include_directories(test_compressed_normals PRIVATE tests)
 target_compile_definitions(test_compressed_normals PRIVATE
 	EXAMPLE_CUBE_PDF="${CMAKE_SOURCE_DIR}/examples/cube.pdf")
 add_test(NAME test_compressed_normals COMMAND test_compressed_normals)
+
+# nano_prc_json_export's closing message gives the number of tessellations it
+# wrote. It used to print 0 for every file, because it was printed after the
+# tessellation table was released, which resets the count. examples/cube.pdf
+# has 1 tessellation, 2 parts and 3 products.
+add_test(NAME test_json_export_summary
+	COMMAND nano_prc_json_export "${CMAKE_SOURCE_DIR}/examples/cube.pdf"
+		"${CMAKE_CURRENT_BINARY_DIR}/json_export_summary.json")
+set_tests_properties(test_json_export_summary PROPERTIES
+	PASS_REGULAR_EXPRESSION "\\(1 tessellations, 2 parts, 3 products\\)")

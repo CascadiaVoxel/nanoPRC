@@ -518,7 +518,7 @@ prc_internal_set_texture_style(prc_context *ctx, prc_file_struct_internal_global
             current_internal_texture->wrapping_v = texture_def.texture_wrapping_mode_t; /* Repeat in v */
             current_internal_texture->has_texture_transform = texture_def.has_texture_transformation;
             current_internal_texture->mapping_attributes = texture_def.texture_mapping_attributes;
-            switch (texture_def.texture_mapping_attributes)
+            switch ((uint32_t)texture_def.texture_mapping_attributes)
             {
             case 0x0:
             case 0x1:

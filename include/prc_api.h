@@ -1064,7 +1064,11 @@ static PRC_INLINE prc_write_tolerance prc_write_tol_relative(double fraction)
  *                      bounding-box diagonal).
  * @param tol           Caller-supplied tolerance specification.
  * @param bbox_diagonal Bounding-box diagonal of the geometry being encoded (mm).
- * @return Resolved tolerance in mm, clamped to a 1e-7 mm (0.1 nm) practical floor.
+ * @return Resolved tolerance in mm, raised if need be to a floor of
+ *         @p bbox_diagonal x 2^-28, which keeps the compressed encoder's
+ *         int32 deltas in range. The floor depends only on the model's size,
+ *         so a small model (one measured in metres, say) gets the tolerance
+ *         it asks for.
  */
 PRC_EXPORT double prc_write_tol_resolve(prc_context *ctx, prc_write_tolerance tol, double bbox_diagonal);
 

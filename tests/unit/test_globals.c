@@ -488,8 +488,14 @@ test_tolerance_modes(prc_context *ctx)
     /* Relative: value * bbox_diagonal. */
     PRC_ASSERT(fabs(prc_write_tol_resolve(ctx, prc_write_tol_relative(0.001), 1000.0) - 1.0) < 1e-12);
 
-    /* Floor clamp: anything below 1e-7 mm is raised to the floor. */
-    PRC_ASSERT(fabs(prc_write_tol_resolve(ctx, prc_write_tol_absolute(1e-10), 1000.0) - 1e-7) < 1e-15);
+    /* A small model gets what it asks for: 1e-6 of a 0.0265 diagonal is
+       2.65e-8, which the old fixed 1e-7 floor raised almost fourfold. */
+    PRC_ASSERT(fabs(prc_write_tol_resolve(ctx, prc_write_tol_relative(1e-6), 0.0265) - 2.65e-8) < 1e-20);
+    PRC_ASSERT(fabs(prc_write_tol_resolve(ctx, prc_write_tol_absolute(2.65e-8), 0.0265) - 2.65e-8) < 1e-20);
+
+    /* Floor clamp: anything below bbox_diagonal x 2^-28 is raised to it. */
+    PRC_ASSERT(fabs(prc_write_tol_resolve(ctx, prc_write_tol_absolute(1e-10), 1000.0) - 1000.0 / 268435456.0) < 1e-18);
+    PRC_ASSERT(fabs(prc_write_tol_resolve(ctx, prc_write_tol_relative(1e-12), 1000.0) - 1000.0 / 268435456.0) < 1e-18);
 }
 
 int

@@ -2367,7 +2367,12 @@ prc_api_helper_get_material_from_style_index(prc_context *ctx, prc_api_data data
                 color[0] = (float)rgb_color.red;
                 color[1] = (float)rgb_color.green;
                 color[2] = (float)rgb_color.blue;
-                color[3] = (float)rgb_color.alpha;
+                /* The style's transparency applies to its colour as it does
+                   to a material above: in 3D-PDF-Machine-BOM.stream-211
+                   (prc-db) the case's colour styles carry 178 and Adobe
+                   Acrobat draws it see-through */
+                color[3] = (float)rgb_color.alpha *
+                    (graph_style.is_transparency ? graph_style.transparency / 255.0f : 1.0f);
 
                 style->tint[0] = color[0];
                 style->tint[1] = color[1];
@@ -3552,9 +3557,10 @@ prc_internal_api_fans_strips_to_triangles(prc_context *ctx, prc_internal_api_fac
 }
 
 /* tess_index_in is an index into the tessellations in part_details or
-   markup_details in prc_data */
-PRC_EXPORT int
-prc_api_get_tessellation_vertices(prc_context *ctx, prc_api_data data_in,
+   markup_details in prc_data. prc_api_get_tessellation_vertices below calls
+   this and then sets has_transparency. */
+static int
+prc_api_get_tessellation_vertices_impl(prc_context *ctx, prc_api_data data_in,
     uint32_t tess_index_in, uint32_t face_index,
     prc_api_face *face_out, prc_api_tess *api_tess)
 {
@@ -6557,6 +6563,61 @@ failure:
         vertex_out->capacity = 0;
     }
 
+    return code;
+}
+
+/* 1 if any of the vertices is less than opaque */
+static uint8_t
+prc_api_vertices_have_partial_alpha(const prc_api_tess_vertex_buffer *buffer)
+{
+    size_t k;
+
+    if (buffer == NULL || buffer->vertices == NULL)
+        return 0;
+    for (k = 0; k < buffer->num_vertices; k++)
+    {
+        if (buffer->vertices[k].color[3] < 1.0f)
+            return 1;
+    }
+    return 0;
+}
+
+/* The vertices of a face, and then has_transparency: set on the face and on
+   the tessellation when the face draws less than opaque, from a material's
+   diffuse alpha or from a colour's alpha, which carries its style's
+   transparency. The tessellation's flag is cleared at face 0 and gathered
+   over its faces after that. A compressed tessellation's faces share one
+   vertex buffer, which is looked at once, at face 0. The colour of a face
+   whose vertices carry their own styles is not a colour to draw by (it is
+   0), so it is not looked at. */
+PRC_EXPORT int
+prc_api_get_tessellation_vertices(prc_context *ctx, prc_api_data data_in,
+    uint32_t tess_index_in, uint32_t face_index,
+    prc_api_face *face_out, prc_api_tess *api_tess)
+{
+    uint8_t tess_was_transparent = (api_tess != NULL && face_index > 0) ? api_tess->has_transparency : 0;
+    uint8_t face_is_transparent = 0;
+    int code;
+
+    code = prc_api_get_tessellation_vertices_impl(ctx, data_in, tess_index_in, face_index, face_out, api_tess);
+    if (code < 0 || api_tess == NULL)
+        return code;
+
+    if (face_out != NULL)
+    {
+        if (face_out->is_material)
+            face_is_transparent = face_out->material.diffuse_alpha < 1.0f;
+        else if (!face_out->vertices_have_style)
+        {
+            if (face_out->face_vertices.num_vertices > 0)
+                face_is_transparent = prc_api_vertices_have_partial_alpha(&face_out->face_vertices);
+            else if (face_index == 0)
+                face_is_transparent = prc_api_vertices_have_partial_alpha(&api_tess->tess_vertices);
+        }
+        if (face_is_transparent)
+            face_out->has_transparency = 1;
+    }
+    api_tess->has_transparency = (uint8_t)(tess_was_transparent || face_is_transparent);
     return code;
 }
 

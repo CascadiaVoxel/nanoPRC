@@ -275,7 +275,10 @@ prc_internal_api_get_color_from_style(prc_context *ctx, prc_file_struct_internal
                 color_out[0] = rgb_color.red;
                 color_out[1] = rgb_color.green;
                 color_out[2] = rgb_color.blue;
-                color_out[3] = rgb_color.alpha;
+                /* With the style's transparency, as prc_api_helper_get_face_style
+                   applies it */
+                color_out[3] = (float)rgb_color.alpha *
+                    (graph_style.is_transparency ? graph_style.transparency / 255.0f : 1.0f);
             }
         }
     }
@@ -986,7 +989,10 @@ prc_internal_api_get_style(prc_context *ctx, prc_file_struct_internal_global_dat
                 color[0] = (float) rgb_color.red;
                 color[1] = (float) rgb_color.green;
                 color[2] = (float) rgb_color.blue;
-                color[3] = (float) rgb_color.alpha;
+                /* With the style's transparency, as prc_api_helper_get_face_style
+                   applies it */
+                color[3] = (float) rgb_color.alpha *
+                    (graph_style.is_transparency ? graph_style.transparency / 255.0f : 1.0f);
 
                 style->tint[0] = color[0];
                 style->tint[1] = color[1];

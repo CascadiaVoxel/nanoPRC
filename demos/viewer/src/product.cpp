@@ -948,6 +948,25 @@ void Product::attach(prc_context *ctx, prc_api_data data, const prc_api_tess *te
             exit(1);
         }
 
+        /* A face drawn in a colour takes the colour's alpha, which carries
+           the style's transparency, as a material face takes its diffuse
+           alpha above. Vertices with their own styles hold colour 0 and
+           draw from their own alpha instead. */
+        if (!is_material && !verticesHaveMaterial && face_vertex_count > 0 &&
+            (tess->type == PRC_API_TESS_3D || tess->type == PRC_API_TESS_3D_Compressed))
+        {
+            float face_alpha = 1.0f;
+
+            for (size_t v = 0; v < face_vertex_count; v++)
+            {
+                if (face_vertices[v].color[3] < face_alpha)
+                    face_alpha = face_vertices[v].color[3];
+            }
+            _material[i].alpha = face_alpha;
+            if (face_alpha < 1.0f)
+                _hasTransparency = true;
+        }
+
         // Append THIS face's vertices to combined buffer
         for (size_t v = 0; v < face_vertex_count; v++) {
             combined_vertices.push_back(face_vertices[v]);

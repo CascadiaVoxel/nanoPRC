@@ -249,6 +249,69 @@ cleanup:
     return ok;
 }
 
+/* nano_prc_stl_import's default tolerances, as fractions of the bounding
+   box diagonal: vertices it merges, and the compressed quantization step */
+#define SLIVER_WELD_FRACTION 1e-6
+#define SLIVER_QUANT_FRACTION 6.826086758455277e-6
+
+static void
+put_f32(unsigned char *b, float v)
+{
+    memcpy(b, &v, 4);
+}
+
+/* A unit square in z = 0, fanned around two inner vertices 4 and 5, half
+   the merge tolerance apart. Two of the six triangles use the short edge
+   between them, and must survive the import: stl_import used to merge 4
+   and 5, and the encoder then dropped both triangles. 4 and 5 sit either
+   side of a boundary of the encoder's quantization grid, so that only
+   stl_import's merge is tested, whatever the encoder does with vertices
+   closer than its tolerance. */
+static void
+write_sliver_stl(const char *path)
+{
+    static const uint32_t tris[6][3] = {
+        { 0, 1, 4 }, { 1, 5, 4 }, { 1, 2, 5 }, { 2, 3, 5 }, { 3, 4, 5 }, { 3, 0, 4 }
+    };
+    double diag = sqrt(2.0);
+    double weld = SLIVER_WELD_FRACTION * diag, quant = SLIVER_QUANT_FRACTION * diag;
+    double boundary = (floor(0.5 / quant) + 0.5) * quant;
+    float v[6][3];
+    unsigned char header[84], rec[50];
+    FILE *f;
+    int t, c;
+
+    memset(v, 0, sizeof(v));
+    v[1][0] = 1.0f;
+    v[2][0] = 1.0f; v[2][1] = 1.0f;
+    v[3][1] = 1.0f;
+    v[4][0] = (float)(boundary - 0.25 * weld); v[4][1] = 0.5f;
+    v[5][0] = (float)(boundary + 0.25 * weld); v[5][1] = 0.5f;
+    /* stl_import would merge 4 and 5; the encoder's grid keeps them apart */
+    PRC_ASSERT((double)v[5][0] - (double)v[4][0] > 0.0);
+    PRC_ASSERT((double)v[5][0] - (double)v[4][0] < weld);
+    PRC_ASSERT(floor((double)v[4][0] / quant + 0.5) != floor((double)v[5][0] / quant + 0.5));
+
+    f = fopen(path, "wb");
+    PRC_ASSERT_NOT_NULL(f);
+    memset(header, 0, sizeof(header));
+    header[80] = 6;
+    PRC_ASSERT_EQ(fwrite(header, 1, 84, f), (size_t)84);
+    for (t = 0; t < 6; t++)
+    {
+        memset(rec, 0, sizeof(rec));
+        put_f32(rec + 8, 1.0f); /* normal +z */
+        for (c = 0; c < 3; c++)
+        {
+            put_f32(rec + 12 + c * 12 + 0, v[tris[t][c]][0]);
+            put_f32(rec + 12 + c * 12 + 4, v[tris[t][c]][1]);
+            put_f32(rec + 12 + c * 12 + 8, v[tris[t][c]][2]);
+        }
+        PRC_ASSERT_EQ(fwrite(rec, 1, 50, f), (size_t)50);
+    }
+    fclose(f);
+}
+
 int
 main(void)
 {
@@ -322,6 +385,19 @@ main(void)
         PRC_ASSERT_NEAR(orig.bbox_min[i], roundtrip.bbox_min[i], eps);
         PRC_ASSERT_NEAR(orig.bbox_max[i], roundtrip.bbox_max[i], eps);
     }
+
+    /* A triangle thinner than stl_import's merge tolerance is kept */
+    printf("  sub-case: a sliver thinner than the merge tolerance is kept\n");
+    snprintf(stl_path, sizeof(stl_path), "%s/sliver_roundtrip.stl", ROUNDTRIP_TMP_DIR);
+    snprintf(prc_path, sizeof(prc_path), "%s/sliver_roundtrip.prc", ROUNDTRIP_TMP_DIR);
+    snprintf(pdf_path, sizeof(pdf_path), "%s/sliver_roundtrip.pdf", ROUNDTRIP_TMP_DIR);
+    write_sliver_stl(stl_path);
+    snprintf(cmd, sizeof(cmd), CMD_QUOTE "\"%s\" \"%s\" \"%s\" \"%s\"" CMD_QUOTE, STL_IMPORT_EXE, stl_path, prc_path, pdf_path);
+    rc = system(cmd);
+    PRC_ASSERT(CMD_SUCCEEDED(rc));
+    PRC_ASSERT_EQ(count_triangles_and_bbox(ctx, prc_path, &roundtrip), 0);
+    printf("    %u of 6 triangles\n", (unsigned)roundtrip.triangle_count);
+    PRC_ASSERT_EQ(roundtrip.triangle_count, 6u);
 
     prc_api_release_context(ctx);
 

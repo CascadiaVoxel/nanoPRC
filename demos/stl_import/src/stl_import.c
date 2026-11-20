@@ -803,15 +803,18 @@ weld_bucket_append(weld_bucket *b, int64_t ix, int64_t iy, int64_t iz, uint32_t 
     return 0;
 }
 
-/* Finds an existing welded vertex within `tolerance` of `p`, or creates a
-   new one. Returns the welded vertex index, or UINT32_MAX on allocation
-   failure. */
+/* The existing welded vertex nearest `p` within `tolerance`, leaving out
+   the `num_avoid` vertices in `avoid`, or UINT32_MAX if there is none.
+   Its squared distance goes to *dist2_out. */
 static uint32_t
-weld_grid_lookup_or_insert(weld_grid *g, const double p[3], double tolerance)
+weld_grid_find(const weld_grid *g, const double p[3], double tolerance,
+    const uint32_t *avoid, int num_avoid, double *dist2_out)
 {
     int64_t base[3];
     int dx, dy, dz, c;
     double tol2 = tolerance * tolerance;
+    double best_dist2 = 0.0;
+    uint32_t best = UINT32_MAX;
 
     for (c = 0; c < 3; c++)
         base[c] = (int64_t)floor(p[c] / g->cell_size);
@@ -824,7 +827,7 @@ weld_grid_lookup_or_insert(weld_grid *g, const double p[3], double tolerance)
             {
                 int64_t ix = base[0] + dx, iy = base[1] + dy, iz = base[2] + dz;
                 uint32_t bucket_index = weld_hash_cell(ix, iy, iz) & (g->num_buckets - 1);
-                weld_bucket *b = &g->buckets[bucket_index];
+                const weld_bucket *b = &g->buckets[bucket_index];
                 uint32_t i;
 
                 for (i = 0; i < b->count; i++)
@@ -832,23 +835,46 @@ weld_grid_lookup_or_insert(weld_grid *g, const double p[3], double tolerance)
                     const weld_bucket_entry *e = &b->entries[i];
                     double ddx, ddy, ddz, dist2;
                     const double *existing;
+                    int k, avoided = 0;
 
                     if (e->cell[0] != ix || e->cell[1] != iy || e->cell[2] != iz)
+                        continue;
+                    for (k = 0; k < num_avoid; k++)
+                        if (avoid[k] == e->vertex_index)
+                            avoided = 1;
+                    if (avoided)
                         continue;
                     existing = &g->positions[e->vertex_index * 3];
                     ddx = existing[0] - p[0];
                     ddy = existing[1] - p[1];
                     ddz = existing[2] - p[2];
                     dist2 = ddx * ddx + ddy * ddy + ddz * ddz;
-                    if (dist2 <= tol2)
-                        return e->vertex_index;
+                    if (dist2 <= tol2 && (best == UINT32_MAX || dist2 < best_dist2))
+                    {
+                        best = e->vertex_index;
+                        best_dist2 = dist2;
+                    }
                 }
             }
         }
     }
+    if (dist2_out != NULL)
+        *dist2_out = best_dist2;
+    return best;
+}
 
-    /* No match within tolerance: create a new welded vertex, indexed under
-       its own (not a neighbor's) cell. */
+/* Creates a new welded vertex at `p`, indexed under its own (not a
+   neighbor's) cell. Returns its index, or UINT32_MAX on allocation
+   failure. */
+static uint32_t
+weld_grid_insert(weld_grid *g, const double p[3])
+{
+    int64_t base[3];
+    int c;
+
+    for (c = 0; c < 3; c++)
+        base[c] = (int64_t)floor(p[c] / g->cell_size);
+
     if (g->count == g->capacity)
     {
         uint32_t new_cap;
@@ -879,6 +905,51 @@ weld_grid_lookup_or_insert(weld_grid *g, const double p[3], double tolerance)
             return UINT32_MAX;
     }
     return g->count++;
+}
+
+/* Welds the three corners of one triangle, `corners` (9 doubles), into
+   out[3]. Each corner takes the nearest welded vertex within `tolerance`,
+   or a new one, but never a vertex another corner of the same triangle has
+   taken: a triangle thinner than the tolerance keeps three distinct
+   corners instead of collapsing and being dropped (TRexcut.stl lost 11
+   triangles that way). The corners are settled nearest match first, so a
+   corner that has an exact match keeps it, and a corner near it but not on
+   it gets its own vertex instead of taking that one first. Returns 0, or
+   -1 on allocation failure. */
+static int
+weld_grid_weld_triangle(weld_grid *g, const double *corners, double tolerance, uint32_t out[3])
+{
+    double dist2[3];
+    int order[3] = { 0, 1, 2 };
+    int c, k, m;
+
+    for (c = 0; c < 3; c++)
+    {
+        if (weld_grid_find(g, &corners[c * 3], tolerance, NULL, 0, &dist2[c]) == UINT32_MAX)
+            dist2[c] = HUGE_VAL;
+    }
+    /* Nearest match first; ties keep the file's order */
+    for (k = 1; k < 3; k++)
+        for (m = k; m > 0 && dist2[order[m]] < dist2[order[m - 1]]; m--)
+        {
+            int t = order[m];
+            order[m] = order[m - 1];
+            order[m - 1] = t;
+        }
+    for (k = 0; k < 3; k++)
+    {
+        uint32_t taken[2];
+        int i;
+        c = order[k];
+        for (i = 0; i < k; i++)
+            taken[i] = out[order[i]];
+        out[c] = weld_grid_find(g, &corners[c * 3], tolerance, taken, k, NULL);
+        if (out[c] == UINT32_MAX)
+            out[c] = weld_grid_insert(g, &corners[c * 3]);
+        if (out[c] == UINT32_MAX)
+            return -1;
+    }
+    return 0;
 }
 
 /* --- 2b: union-find over welded vertices, to find connected components --- */
@@ -2062,15 +2133,14 @@ main(int argc, char *argv[])
         fprintf(stderr, "Error: allocation failed for weld index\n");
         goto cleanup;
     }
-    for (i = 0; i < (int)mesh.num_triangles * 3; i++)
+    for (i = 0; i < (int)mesh.num_triangles; i++)
     {
-        uint32_t wv = weld_grid_lookup_or_insert(&grid, &mesh.raw_positions[(size_t)i * 3], weld_tolerance_fraction * diagonal);
-        if (wv == UINT32_MAX)
+        if (weld_grid_weld_triangle(&grid, &mesh.raw_positions[(size_t)i * 9], weld_tolerance_fraction * diagonal,
+                &weld_index[(size_t)i * 3]) != 0)
         {
             fprintf(stderr, "Error: allocation failed welding vertices\n");
             goto cleanup;
         }
-        weld_index[i] = wv;
     }
     printf("Welded to %u vertices (tolerance %.3g x bbox diagonal)\n", (unsigned)grid.count, weld_tolerance_fraction);
     if (quant_tolerance_fraction != weld_tolerance_fraction)

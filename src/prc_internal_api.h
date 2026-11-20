@@ -182,6 +182,9 @@ typedef struct prc_internal_api_tess_entities_s
     size_t num_triangles;
     size_t num_fans;
     size_t num_strips;
+    /* Where this group's triangles start in the face's indices; the fans'
+       and strips' own starts are in fan_offsets and strip_offsets. */
+    size_t triangle_offset;
     size_t *fan_offsets;
     size_t *strip_offsets;
 } prc_internal_api_tess_entities;
@@ -296,13 +299,6 @@ typedef struct prc_internal_api_wire_s
     prc_api_graphic_type_t type;
 } prc_internal_api_wire;
 
-typedef enum {
-    PRC_INTERNAL_API_MULTINORM = 0,
-    PRC_INTERNAL_API_SINGLENORM,
-    PRC_INTERNAL_API_SINGLENORM_TEXTURE,
-    PRC_INTERNAL_API_MULTINORM_TEXTURE,
-    PRC_INTERNAL_API_MAX
-} prc_internal_api_entity_t;
 
 typedef struct prc_api_child_reserve_s
 {

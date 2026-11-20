@@ -157,8 +157,8 @@ prc_write_tess_3d_ex(prc_context *ctx, prc_bit_write_state *s,
     if (has_texture && num_triangles > 0 && norm_indices == NULL && !must_calculate_normals)
     {
         /* Would need PRC_FACETESSDATA_TriangleOneNormalTextured, which this
-           project's own reader rejects with PRC_ERROR_NOT_IMPLEMENTED, so
-           writing it would produce a file we cannot read back. See the
+           writer does not produce (nanoPRC's reader reads it, but output
+           using it has not been checked against other readers). See the
            header. */
         prc_error(ctx, PRC_ERROR_INTERNAL,
             "prc_write_tess_3d: texture coordinates require supplied normals or "

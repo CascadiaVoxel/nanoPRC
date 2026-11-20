@@ -4121,10 +4121,6 @@ prc_api_get_tessellation_vertices_impl(prc_context *ctx, prc_api_data data_in,
         /* Now we must check the single norm textured objects */
         if (face.used_entities_flag & PRC_FACETESSDATA_TriangleOneNormalTextured)
         {
-            code = PRC_ERROR_NOT_IMPLEMENTED;
-            prc_error(ctx, PRC_ERROR_NOT_IMPLEMENTED,
-                "TriangleOneNormalTextured is not implemented in prc_api_get_tessellation_vertices\n");
-            goto uncompressed_failure;
             /* Read number of triangles with one norm and texture */
             prc_internal_api_set_triangles(ctx, face, 1, entities_textured_one_norm,
                                         &face_tessellation_index, &num_indices);
@@ -6875,117 +6871,52 @@ prc_api_get_graphics_primitive(prc_context *ctx, prc_api_data data_in,
 
     face = prc_face_internal_face(&tess->tess_faces[face_index]);
 
-    /* Run through each of the entity types */
-    for (k = 0; k < PRC_INTERNAL_API_MAX; k++)
+    /* The face's primitives in the order its indices are stored: for each
+       group of entities, in Table 139 order (multiple normals, one normal,
+       multiple normals textured, one normal textured), its triangles as one
+       primitive, then each of its fans, then each of its strips. A face may
+       hold more than one group, so once a group's primitives are passed the
+       count goes on into the next; and a group's triangles start where it
+       recorded, not at the start of the face. */
     {
-        switch (k)
+        prc_internal_api_tess_entities *groups[4];
+
+        groups[0] = &face->multi_norm;
+        groups[1] = &face->single_norm;
+        groups[2] = &face->texture_multi_norm;
+        groups[3] = &face->texture_single_norm;
+        for (k = 0; k < 4; k++)
         {
-            case PRC_INTERNAL_API_MULTINORM:
-            entity = &face->multi_norm;
-            break;
-
-            case PRC_INTERNAL_API_SINGLENORM:
-            entity = &face->single_norm;
-            break;
-
-            case PRC_INTERNAL_API_SINGLENORM_TEXTURE:
-            entity = &face->texture_single_norm;
-            break;
-
-            case PRC_INTERNAL_API_MULTINORM_TEXTURE:
-            entity = &face->texture_multi_norm;
-            break;
-
-            default:
-            return PRC_API_ERROR_PARSER;
-        }
-
-        /* Have triangles */
-        if (entity->num_triangles > 0)
-        {
-            if (graphics_index == 0)
+            entity = groups[k];
+            if (entity->num_triangles > 0)
             {
-                /* Return triangles */
-                graphics_object->type = PRC_API_TRIANGLES;
-                graphics_object->num_indices = entity->num_triangles * 3;
-                graphics_object->indices = face->vertex_indices;
+                if (graphics_index == 0)
+                {
+                    graphics_object->type = PRC_API_TRIANGLES;
+                    graphics_object->num_indices = entity->num_triangles * 3;
+                    graphics_object->indices = &face->vertex_indices[entity->triangle_offset];
+                    return 0;
+                }
+                graphics_index--;
+            }
+            if (graphics_index < entity->num_fans)
+            {
+                graphics_object->type = PRC_API_FAN;
+                graphics_object->num_indices = entity->fan_offsets[2 * graphics_index + 1];
+                graphics_object->indices =
+                    &face->vertex_indices[entity->fan_offsets[2 * graphics_index]];
                 return 0;
             }
-            /* Make indexing easier into fan or strips */
-            graphics_index = graphics_index - 1;
-            if (entity->num_fans > 0)
+            graphics_index -= entity->num_fans;
+            if (graphics_index < entity->num_strips)
             {
-                /* Have Fans */
-                if (graphics_index < entity->num_fans)
-                {
-                    /* Return a fan */
-                    graphics_object->type = PRC_API_FAN;
-                    graphics_object->num_indices =
-                        entity->fan_offsets[2 * graphics_index + 1];
-                    graphics_object->indices =
-                        &face->vertex_indices[entity->fan_offsets[2 * graphics_index]];
-                    return 0;
-                }
-                else
-                {
-                    graphics_index = graphics_index - entity->num_fans;
-                    graphics_object->type = PRC_API_STRIP;
-                    graphics_object->num_indices =
-                        entity->strip_offsets[2 * graphics_index + 1];
-                    graphics_object->indices =
-                        &face->vertex_indices[entity->strip_offsets[2 * graphics_index]];
-                    return 0;
-                }
-            }
-            else
-            {
-                /* Return a strip */
                 graphics_object->type = PRC_API_STRIP;
-                graphics_object->num_indices =
-                    entity->strip_offsets[2 * graphics_index + 1];
+                graphics_object->num_indices = entity->strip_offsets[2 * graphics_index + 1];
                 graphics_object->indices =
                     &face->vertex_indices[entity->strip_offsets[2 * graphics_index]];
                 return 0;
             }
-        }
-        else
-        {
-            /* No Triangles */
-            if (entity->num_fans > 0)
-            {
-                /* Have fans */
-                if (graphics_index < entity->num_fans)
-                {
-                    /* Return a fan */
-                    graphics_object->type = PRC_API_FAN;
-                    graphics_object->num_indices =
-                        entity->fan_offsets[2 * graphics_index + 1];
-                    graphics_object->indices =
-                        &face->vertex_indices[entity->fan_offsets[2 * graphics_index]];
-                    return 0;
-                }
-                else
-                {
-                    graphics_index = graphics_index - entity->num_fans;
-                    /* Return a strip */
-                    graphics_object->type = PRC_API_STRIP;
-                    graphics_object->num_indices =
-                        entity->strip_offsets[2 * graphics_index + 1];
-                    graphics_object->indices =
-                        &face->vertex_indices[entity->strip_offsets[2 * graphics_index]];
-                    return 0;
-                }
-            }
-            else if (entity->num_strips > 0)
-            {
-                /* Return a strip */
-                graphics_object->type = PRC_API_STRIP;
-                graphics_object->num_indices =
-                    entity->strip_offsets[2 * graphics_index + 1];
-                graphics_object->indices =
-                    &face->vertex_indices[entity->strip_offsets[2 * graphics_index]];
-                return 0;
-            }
+            graphics_index -= entity->num_strips;
         }
     }
     return PRC_API_ERROR_PARAMETER;

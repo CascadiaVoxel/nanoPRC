@@ -110,6 +110,19 @@ emissive colours, opacity and shininess) and textures, including opacity-mask an
 (`prc_api_write_rep_item`), and a tessellation can carry per-vertex colours (`prc_api_write_tessellation`). An item
 given no material is written with one shared default material.
 
+#### Provenance mark
+
+Every file nanoPRC writes carries a provenance mark, so a file it produced can be recognised as AGPL
+evidence even if the `"nanoPRC"` producer text has been edited out. The writer puts the application
+identifier `"nanoPRC"` in the header's `unique_id_application`, and, separately, a non-text tag
+(`0x9E3779B1`) in the header's `unique_id_file` with a checksum of the file's section layout (sizes and
+offsets only, never geometry or user content). Both fields are ones viewers ignore; the tag is not the
+`"nanoPRC"` text, so a search-and-replace on the producer string leaves it in place. `src/prc_app_id.h`
+documents the exact fields and values, `prc_api_written_by_nanoprc` reports whether a file carries
+either, and `tests/internal/provenance_probe.py` reads the mark from a `.prc` or an uncompressed-stream
+`.pdf`, recomputing the checksum from the section layout to confirm it. This is documented provenance evidence, not a protection measure -- nanoPRC is free software and
+anyone may remove the mark from their own copy.
+
 ### Diagnostic Environment-Variable Hooks
 
 Various internal `PRC_DIAG_*`/`PRC_TRACE_*`/`PRC_FUZZ_*` environment variables gate development-only

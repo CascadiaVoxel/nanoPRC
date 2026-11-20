@@ -179,11 +179,11 @@ prc_encode_rebuild_edges(prc_edge_slot *etable, size_t ecap,
 }
 
 /* prc_encode_preprocess_ex, plus weld_group: NULL, or one value per input
-   vertex. Two vertices weld only when they quantize to the same position AND
-   carry the same group, so a caller can keep apart vertices that share a
-   position but must stay distinct -- a texture seam, where the two sides
-   carry different UVs. With NULL every vertex is in one group, and the
-   result is exactly prc_encode_preprocess_ex's. */
+   vertex. Two vertices weld only when they are at the same position (see
+   merge_within_tolerance) AND carry the same group, so a caller can keep
+   apart vertices that share a position but must stay distinct -- a texture
+   seam, where the two sides carry different UVs. With NULL every vertex is
+   in one group, and the result is exactly prc_encode_preprocess_ex's. */
 static int
 prc_encode_preprocess_grouped(prc_context *ctx,
     const double *positions, uint32_t num_positions,
@@ -191,6 +191,7 @@ prc_encode_preprocess_grouped(prc_context *ctx,
     const uint32_t *tri_indices, uint32_t num_triangles,
     prc_write_tolerance tolerance,
     uint8_t skip_nonmanifold_edge_remap,
+    uint8_t merge_within_tolerance,
     prc_encode_mesh *out)
 {
     prc_vtx_slot *vtable = NULL;
@@ -356,9 +357,26 @@ prc_encode_preprocess_grouped(prc_context *ctx,
                 uint64_t hash;
                 size_t slot;
 
-                kx = (int64_t)llround(p[0] / tol);
-                ky = (int64_t)llround(p[1] / tol);
-                kz = (int64_t)llround(p[2] / tol);
+                if (merge_within_tolerance)
+                {
+                    /* Vertices in the same tolerance-sized cell merge */
+                    kx = (int64_t)llround(p[0] / tol);
+                    ky = (int64_t)llround(p[1] / tol);
+                    kz = (int64_t)llround(p[2] / tol);
+                }
+                else
+                {
+                    /* Only vertices at exactly the same position merge:
+                       the key is the coordinates' bits, with -0 taken as
+                       0. Vertices closer than the tolerance stay apart,
+                       so a thin triangle keeps its three corners. */
+                    double c0 = (p[0] == 0.0) ? 0.0 : p[0];
+                    double c1 = (p[1] == 0.0) ? 0.0 : p[1];
+                    double c2 = (p[2] == 0.0) ? 0.0 : p[2];
+                    memcpy(&kx, &c0, sizeof(kx));
+                    memcpy(&ky, &c1, sizeof(ky));
+                    memcpy(&kz, &c2, sizeof(kz));
+                }
                 group = (weld_group != NULL) ? weld_group[i] : 0;
                 hash = prc_vtx_hash(kx, ky, kz);
                 /* Mixed in only when groups exist, so ungrouped input probes
@@ -407,8 +425,16 @@ prc_encode_preprocess_grouped(prc_context *ctx,
     if (num_triangles > 0)
     {
         /* Only triangles two of whose corners weld to the same vertex are
-           dropped; the compressed traversal cannot encode them. Thin but
-           real triangles are kept. An earlier filter also dropped every
+           dropped; the compressed traversal cannot encode a triangle with
+           a repeated vertex. Thin but real triangles are kept. With the
+           exact merge (merge_within_tolerance 0) that is only a triangle
+           given the same vertex, or the same position, twice; two
+           distinct corners closer than the tolerance stay distinct
+           vertices, which the traversal encodes and Adobe Acrobat opens,
+           even where they quantize to the same point. Merging within the
+           tolerance used to drop such slivers, 352 of the Stanford
+           Dragon's 871,306 triangles, and moved the triangles around them
+           onto the merged vertex. An earlier filter also dropped every
            triangle with a corner under about 0.57 degrees, because one file
            (757-3516-1.STL) had shown an empty model tree in Adobe Acrobat.
            That was not the triangles: the writer then ended its
@@ -527,30 +553,21 @@ prc_encode_preprocess_grouped(prc_context *ctx,
             clean_tris, min_edge_len, min_cross_len, min_cross_len_rel, near_degenerate_flt_eps, diagonal, (double)FLT_EPSILON);
     }
 
-    /* Non-manifold input (3+ triangles sharing one edge): a single-pass
-       2-manifold traversal can only ever treat an edge as connecting
-       exactly two triangles. Confirmed via real-file bisection (2026-07-22
-       investigation, hand.stl -- a real 3D scan with a genuine 4-triangle
-       edge fan, most likely a fold/overlap artifact from the scanning
-       process) that BOTH of the alternatives tried before this one fail:
-       (a) silently linking just the first two triangles and dropping the
-       rest (the original behavior) produces a blank model tree in Adobe
-       Acrobat while every other reader tolerates it; (b) leaving every
-       triangle in place but retroactively treating the edge as a boundary
-       for everyone ALSO fails -- the final decoded geometry is identical
-       either way, so Acrobat's rejection tracks the reconstructed 3D
-       topology itself, not this write facility's own internal
-       chain-growth bookkeeping. Confirmed via a minimal 6-triangle
-       standalone repro that fully REMOVING the excess triangles fixes it,
-       but that loses real user geometry. The fix that both fixes Acrobat
-       AND keeps every triangle (confirmed on the same repro): give every
-       triangle beyond the first two on a shared edge its own PRIVATE,
-       imperceptibly-offset copy of that edge's two vertices, so no edge
-       in the final mesh is ever shared by more than two triangles -- a
-       genuinely valid 2-manifold structure, with the "extra" triangles now
-       just very slightly detached (an offset far below visual perception,
-       scaled off this mesh's own resolved encoding tolerance) rather than
-       welded onto the same edge as everyone else.
+    /* Edges shared by 3 or more triangles (non-manifold edges). The
+       compressed traversal links each edge to at most two triangles, so
+       every triangle after the first two on an edge is given its own copies
+       of the edge's two vertices, at the same positions. No edge of the
+       mesh written is then shared by more than two triangles, and every
+       triangle is kept.
+
+       The copies are needed. Without them the encoder can write a stream
+       that is not valid: our own decoder rejects some such files
+       ("points_is_reference_array index out of range"), and Adobe Acrobat
+       shows an empty model tree for hand.stl, UK_original.stl and
+       TRexcut.stl. Moving the copies is not needed. They used to be moved
+       50 times the tolerance towards the triangle's third vertex, which
+       opened a crack along the edge; with the copies left in place, Acrobat
+       and PDF-XChange open all three files as before (November 2026).
 
        Mechanics: walk every triangle's 3 edges, hashing each by its
        (min-vertex, max-vertex) pair into an open-addressed table (etable)
@@ -650,15 +667,9 @@ prc_encode_preprocess_grouped(prc_context *ctx,
         if (num_excess > 0 && !skip_nonmanifold_edge_remap)
         {
             /* For each queued (triangle, edge-slot) pair, give that
-               triangle two brand-new vertices standing in for the shared
-               edge's own two endpoints (i0/i1 below), instead of reusing
-               the original shared ones -- everything else about the
-               triangle (its third, "apex" vertex) is untouched. */
-            /* Offset magnitude: well above the resolved encoding tolerance
-               (so the quantized point_array value is genuinely distinct,
-               not silently re-merged by quantization), far below anything
-               visually perceptible on real geometry. */
-            double offset_mag = tol * 50.0;
+               triangle two new vertices at the positions of the shared
+               edge's two ends (i0/i1 below), in place of the shared ones.
+               Its third vertex is unchanged. */
             double *grown;
             uint32_t new_count = out->num_positions;
 
@@ -680,26 +691,12 @@ prc_encode_preprocess_grouped(prc_context *ctx,
                 uint32_t e = excess_slot[i];
                 uint32_t i0 = out->tri_indices[(size_t)ti * 3 + e];
                 uint32_t i1 = out->tri_indices[(size_t)ti * 3 + ((e + 1) % 3)];
-                uint32_t apex = out->tri_indices[(size_t)ti * 3 + ((e + 2) % 3)];
-                double *p0 = &out->positions[(size_t)i0 * 3];
-                double *p1 = &out->positions[(size_t)i1 * 3];
-                double *papex = &out->positions[(size_t)apex * 3];
-                double mid[3], dir[3], len;
-                uint32_t d;
                 uint32_t new_i0, new_i1;
-
-                for (d = 0; d < 3; d++) mid[d] = (p0[d] + p1[d]) * 0.5;
-                for (d = 0; d < 3; d++) dir[d] = papex[d] - mid[d];
-                len = sqrt(dir[0]*dir[0] + dir[1]*dir[1] + dir[2]*dir[2]);
-                if (len > 1e-300)
-                    for (d = 0; d < 3; d++) dir[d] /= len;
-                else
-                    { dir[0] = 1.0; dir[1] = 0.0; dir[2] = 0.0; } /* degenerate apex-at-midpoint fallback */
 
                 new_i0 = new_count++;
                 new_i1 = new_count++;
-                for (d = 0; d < 3; d++) out->positions[(size_t)new_i0 * 3 + d] = p0[d] + dir[d] * offset_mag;
-                for (d = 0; d < 3; d++) out->positions[(size_t)new_i1 * 3 + d] = p1[d] + dir[d] * offset_mag;
+                memcpy(&out->positions[(size_t)new_i0 * 3], &out->positions[(size_t)i0 * 3], 3 * sizeof(double));
+                memcpy(&out->positions[(size_t)new_i1 * 3], &out->positions[(size_t)i1 * 3], 3 * sizeof(double));
 
                 out->tri_indices[(size_t)ti * 3 + e] = new_i0;
                 out->tri_indices[(size_t)ti * 3 + ((e + 1) % 3)] = new_i1;
@@ -805,12 +802,16 @@ prc_encode_preprocess_grouped(prc_context *ctx,
            one of its 7 connected parts and still failed in Acrobat after
            the edge fix and a sliver-triangle filter (since removed) were
            both already active -- this was previously only diagnosed (read-only
-           census), never fixed. Same general remedy as the edge case: keep
-           the first fan on the original vertex, give every OTHER fan its
-           own private, imperceptibly-offset copy of that vertex's
-           position, remapping only that fan's triangles' corner(s) at this
-           vertex. Uses a per-vertex incident-edge index (not a scan over
-           ALL edges per vertex) so this stays O(V+E) and scales to
+           census), never fixed. Same remedy as the edge case: keep the
+           first fan on the original vertex, give every OTHER fan its own
+           copy of that vertex, at the same position, and remap only that
+           fan's triangles' corner(s) at this vertex. As with the edges,
+           the copies are needed and moving them is not: the copies used to
+           be moved 50 times the tolerance, and with them left in place
+           Acrobat and PDF-XChange open hand.stl, UK_original.stl and
+           TRexcut.stl (about a thousand split vertices) as before
+           (November 2026). Uses a per-vertex incident-edge index (not a
+           scan over ALL edges per vertex) so this stays O(V+E) and scales to
            multi-million-triangle meshes. */
         if (out->num_positions > 0 && clean_tris > 0)
         {
@@ -1036,23 +1037,9 @@ prc_encode_preprocess_grouped(prc_context *ctx,
                                a single up-front bound isn't practical;
                                realloc growth is amortized by the caller's
                                allocator. */
-                            double *pv = &out->positions[(size_t)vi * 3];
                             double *grown2 = (double *)prc_realloc(ctx, out->positions,
                                 ((size_t)out->num_positions + 1) * 3 * sizeof(double));
                             uint32_t newv;
-                            double offset_mag2 = tol * 50.0;
-                            uint32_t d2;
-                            /* DIAGNOSTIC (2026-07-26, mixed_chains investigation):
-                               override the non-manifold vertex split offset
-                               magnitude (as a multiple of tol) to test whether
-                               the split's SIZE matters to the Acrobat blank
-                               -tree bug, independent of the split MECHANISM
-                               itself. PRC_DIAG_SPLIT_OFFSET_MULT=N. */
-                            {
-                                const char *ov = prc_diag_getenv("PRC_DIAG_SPLIT_OFFSET_MULT");
-                                if (ov != NULL)
-                                    offset_mag2 = tol * strtod(ov, NULL);
-                            }
                             if (grown2 == NULL)
                             {
                                 prc_error(ctx, PRC_ERROR_MEMORY, "Allocation error in prc_encode_preprocess non-manifold vertex split\n");
@@ -1065,33 +1052,10 @@ prc_encode_preprocess_grouped(prc_context *ctx,
                                 goto fail;
                             }
                             out->positions = grown2;
-                            pv = &out->positions[(size_t)vi * 3]; /* re-fetch: realloc may have moved the buffer */
                             newv = out->num_positions;
                             out->num_positions++;
-                            /* Offset toward this fan's own first triangle's
-                               centroid -- keeps the split imperceptible and
-                               avoids an arbitrary/shared direction across
-                               fans. */
-                            {
-                                uint32_t rep_tri = vtri_list[vtri_start[vi] + k2];
-                                double cen[3], dir2[3], len2;
-                                uint32_t cc;
-                                cen[0] = cen[1] = cen[2] = 0.0;
-                                for (cc = 0; cc < 3; cc++)
-                                {
-                                    uint32_t vv = out->tri_indices[(size_t)rep_tri * 3 + cc];
-                                    uint32_t dd;
-                                    for (dd = 0; dd < 3; dd++) cen[dd] += out->positions[(size_t)vv * 3 + dd] / 3.0;
-                                }
-                                for (d2 = 0; d2 < 3; d2++) dir2[d2] = cen[d2] - pv[d2];
-                                len2 = sqrt(dir2[0]*dir2[0] + dir2[1]*dir2[1] + dir2[2]*dir2[2]);
-                                if (len2 > 1e-300)
-                                    for (d2 = 0; d2 < 3; d2++) dir2[d2] /= len2;
-                                else
-                                    { dir2[0] = 1.0; dir2[1] = 0.0; dir2[2] = 0.0; }
-                                for (d2 = 0; d2 < 3; d2++)
-                                    out->positions[(size_t)newv * 3 + d2] = pv[d2] + dir2[d2] * offset_mag2;
-                            }
+                            /* The copy takes the vertex's own position */
+                            memcpy(&out->positions[(size_t)newv * 3], &out->positions[(size_t)vi * 3], 3 * sizeof(double));
                             vfan_new_vertex[root] = newv;
                             splits_needed++;
                         }
@@ -1223,10 +1187,11 @@ prc_encode_preprocess_ex(prc_context *ctx,
     const uint32_t *tri_indices, uint32_t num_triangles,
     prc_write_tolerance tolerance,
     uint8_t skip_nonmanifold_edge_remap,
+    uint8_t merge_within_tolerance,
     prc_encode_mesh *out)
 {
     return prc_encode_preprocess_grouped(ctx, positions, num_positions, NULL, tri_indices,
-        num_triangles, tolerance, skip_nonmanifold_edge_remap, out);
+        num_triangles, tolerance, skip_nonmanifold_edge_remap, merge_within_tolerance, out);
 }
 
 /* Every existing caller (COMPRESSED encoding, where an edge shared by 3+
@@ -1235,7 +1200,9 @@ prc_encode_preprocess_ex(prc_context *ctx,
    remap; only prc_api_mesh_weld_and_split (an uncompressed-TRIANGLES-
    oriented caller, which has no such traversal and so no need for that
    specific cleanup -- see its own doc comment) opts out via
-   prc_encode_preprocess_ex directly. */
+   prc_encode_preprocess_ex directly. It is also the one caller that merges
+   vertices within the tolerance; every COMPRESSED caller merges only
+   vertices at exactly the same position. */
 int
 prc_encode_preprocess(prc_context *ctx,
     const double *positions, uint32_t num_positions,
@@ -1244,7 +1211,7 @@ prc_encode_preprocess(prc_context *ctx,
     prc_encode_mesh *out)
 {
     return prc_encode_preprocess_ex(ctx, positions, num_positions, tri_indices, num_triangles,
-        tolerance, 0, out);
+        tolerance, 0, 0, out);
 }
 
 /* Depth-first traversal (Step B): emits the compressed-tessellation arrays by
@@ -4867,7 +4834,7 @@ prc_api_mesh_weld_and_split(prc_context *ctx,
        fixup applied to a file with many 3+-way-shared edges) versus a few
        hundred from the fan split actually wanted here. */
     code = prc_encode_preprocess_ex(ctx, positions, num_positions, tri_indices, num_triangles,
-        tolerance, 1, &mesh);
+        tolerance, 1, 1, &mesh);
     if (code < 0)
         return code;
 
@@ -5495,7 +5462,7 @@ prc_write_compress_tess_entry(prc_context *ctx, prc_bit_write_state *s,
             tex_coords, num_tex_coords, tex_indices, &textured);
         if (code != 0) return code;
         code = prc_encode_preprocess_grouped(ctx, textured.positions, textured.num_positions,
-            textured.weld_group, textured.tri_indices, num_triangles, tolerance, 0, &mesh);
+            textured.weld_group, textured.tri_indices, num_triangles, tolerance, 0, 0, &mesh);
     }
     else
     {

@@ -77,12 +77,19 @@ int prc_encode_preprocess(prc_context *ctx,
    larger, on real-world meshes with many 3+-way edges) vertex count it
    would otherwise add down to just what prc_api_mesh_has_nonmanifold_fans'
    own vertex-fan splitting needs. prc_encode_preprocess is a thin wrapper
-   for this with the flag hardcoded to 0 (existing behavior, unchanged). */
+   for this with the flag hardcoded to 0 (existing behavior, unchanged).
+
+   merge_within_tolerance: when non-zero, vertices in the same
+   tolerance-sized cell are merged, as prc_api_mesh_weld_and_split asks;
+   when 0, only vertices at exactly the same position are, as COMPRESSED
+   needs, so that a triangle thinner than the tolerance keeps its three
+   corners. prc_encode_preprocess passes 0. */
 int prc_encode_preprocess_ex(prc_context *ctx,
     const double *positions, uint32_t num_positions,
     const uint32_t *tri_indices, uint32_t num_triangles,
     prc_write_tolerance tolerance,
     uint8_t skip_nonmanifold_edge_remap,
+    uint8_t merge_within_tolerance,
     prc_encode_mesh *out);
 
 void prc_encode_preprocess_free(prc_context *ctx, prc_encode_mesh *m);

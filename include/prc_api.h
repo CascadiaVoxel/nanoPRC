@@ -525,9 +525,10 @@ PRC_EXPORT prc_api_data prc_api_open_contents(prc_context *ctx, const char *infi
  * nanoPRC's writer puts its own application identifier in the PRC header's
  * unique_id_application, the field the format provides for naming the
  * application that wrote a file. Its 16 bytes are the ASCII text "nanoPRC"
- * followed by nine zero bytes. This reports whether the main header carries
- * it. Files nanoPRC wrote before the identifier was added carry {2,0,0,0}
- * there instead, and are not recognised.
+ * followed by nine zero bytes. nanoPRC also writes a non-text provenance tag
+ * in the header's unique_id_file. This reports whether the main header
+ * carries either: the text identifier, or, if that has been edited away,
+ * the tag. Files nanoPRC wrote before either was added are not recognised.
  *
  * @param ctx Active API context.
  * @param data Data handle returned by prc_api_open_contents.
@@ -1028,7 +1029,9 @@ typedef enum
 } prc_write_tol_mode_t;
 
 /**
- * @brief Encoder tolerance: controls quantization grid size and weld distance.
+ * @brief Encoder tolerance: controls the quantization grid size, and the weld
+ * distance of prc_api_mesh_weld_and_split. COMPRESSED merges only vertices at
+ * exactly the same position, so a triangle thinner than the tolerance is kept.
  *
  * Construct via the inline helpers below rather than direct struct init.
  */
@@ -1064,7 +1067,11 @@ static PRC_INLINE prc_write_tolerance prc_write_tol_relative(double fraction)
  *                      bounding-box diagonal).
  * @param tol           Caller-supplied tolerance specification.
  * @param bbox_diagonal Bounding-box diagonal of the geometry being encoded (mm).
- * @return Resolved tolerance in mm, clamped to a 1e-7 mm (0.1 nm) practical floor.
+ * @return Resolved tolerance in mm, raised if need be to a floor of
+ *         @p bbox_diagonal x 2^-28, which keeps the compressed encoder's
+ *         int32 deltas in range. The floor depends only on the model's size,
+ *         so a small model (one measured in metres, say) gets the tolerance
+ *         it asks for.
  */
 PRC_EXPORT double prc_write_tol_resolve(prc_context *ctx, prc_write_tolerance tol, double bbox_diagonal);
 
@@ -1081,8 +1088,8 @@ PRC_EXPORT double prc_write_tol_resolve(prc_context *ctx, prc_write_tolerance to
  * had shown an empty model tree for some of them. That was not the
  * vertices: the writer then ended its tessellation section without the
  * closing user_data, and a section ending exactly on a byte boundary
- * gives an empty model tree whatever it contains.) Uses the same welding
- * tolerance and vertex-dedup logic COMPRESSED itself would use, so the
+ * gives an empty model tree whatever it contains.) Merges vertices as
+ * COMPRESSED itself does (only those at exactly the same position), so the
  * check reflects what COMPRESSED would actually encode.
  *
  * @param ctx           Active context.
@@ -1100,8 +1107,9 @@ PRC_EXPORT int prc_api_mesh_has_nonmanifold_fans(prc_context *ctx,
     prc_write_tolerance tolerance);
 
 /**
- * @brief Welds coincident vertices (within @p tolerance, same convention
- * PRC_API_WRITE_TESS_KIND_COMPRESSED's own encoder uses) and additionally
+ * @brief Welds coincident vertices (those in the same @p tolerance-sized
+ * cell; PRC_API_WRITE_TESS_KIND_COMPRESSED itself merges only vertices at
+ * exactly the same position) and additionally
  * splits any vertex touched by multiple disconnected triangle "fans" --
  * see prc_api_mesh_has_nonmanifold_fans's own doc comment for what that
  * means and why it matters -- into one copy per fan, instead of leaving it
@@ -1435,13 +1443,13 @@ typedef enum
         4096-triangle test mesh). Simpler than COMPRESSED (no welding/
         traversal encoding to reason about) but produces larger files with no
         vertex deduplication -- prefer COMPRESSED below for dense meshes
-        where file size/memory matter, or when you want the encoder's own
-        tolerance-based weld instead of doing it yourself. */
+        where file size/memory matter. */
     PRC_API_WRITE_TESS_KIND_TRIANGLES = 0,
     /** Line/polyline geometry: wire_elements below. */
     PRC_API_WRITE_TESS_KIND_WIRE = 1,
-    /** Triangulated surface, PRC_TYPE_TESS_3D_Compressed: vertex welding
-        (tolerance-based dedup), degenerate-triangle removal, and an
+    /** Triangulated surface, PRC_TYPE_TESS_3D_Compressed: merging of
+        vertices at exactly the same position, removal of triangles with a
+        repeated vertex, quantization to `tolerance`, and an
         EdgeBreaker-style traversal encoding -- smaller files than TRIANGLES
         for the same geometry, and the recommended choice for large/dense
         meshes. Round-trips correctly through nanoPRC's own parser (including
@@ -1463,8 +1471,8 @@ typedef enum
  * deduplication or quantization on the TRIANGLES path -- positions are
  * stored as supplied; use prc_write_tol_resolve if you want to pre-weld
  * vertices yourself before calling in. COMPRESSED reads the same
- * position/normal/index/face-group fields as TRIANGLES but performs its
- * own welding using `tolerance`.
+ * position/normal/index/face-group fields as TRIANGLES; it merges vertices
+ * at exactly the same position and quantizes positions to `tolerance`.
  */
 
 /**
@@ -1534,7 +1542,9 @@ typedef struct prc_api_write_tessellation_s
         requires at least one face. */
     const uint32_t *face_tri_counts;
     uint32_t      num_faces;
-    /** COMPRESSED only: vertex-welding tolerance. A zero-valued tolerance
+    /** COMPRESSED only: quantization tolerance, the largest distance a
+        position may move. Vertices closer than this are not merged, so a
+        thin triangle keeps its three corners. A zero-valued tolerance
         (the memset(0) default) resolves to prc_write_tol_relative(1e-6).
         Ignored by TRIANGLES. */
     prc_write_tolerance tolerance;

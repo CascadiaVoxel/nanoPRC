@@ -289,7 +289,7 @@ int main(int argc, char **argv)
         p[0] = 'P'; p[1] = 'R'; p[2] = 'C'; p += 3;
         p = prc_write_le_uint32(p, PRC_WRITE_MIN_VERS_FOR_READ);
         p = prc_write_le_uint32(p, PRC_WRITE_AUTH_VERS);
-        p = prc_write_le_unique_id(p, PRC_WRITE_FILE_UID0);
+        p = prc_write_le_unique_id(p, PRC_NANOPRC_FILE_MARK_TAG);
         p = prc_write_le_app_unique_id(p);
         p = prc_write_le_uint32(p, 1); /* filestructure_count */
         p = prc_write_le_unique_id(p, PRC_WRITE_FILE_STRUCT_UID0);

@@ -146,8 +146,10 @@ test_disjoint_triangles(prc_context *ctx)
 static void
 test_degenerate_weld(prc_context *ctx)
 {
-    /* vertices 1 and 2 differ by 1e-8 << 1e-4 tolerance: they weld to one
-       deduplicated slot, making the triangle degenerate */
+    /* vertices 1 and 2 differ by 1e-8 << 1e-4 tolerance. Merging within the
+       tolerance (prc_api_mesh_weld_and_split's merge) welds them to one
+       deduplicated slot, making the triangle degenerate; COMPRESSED's own
+       merge, of exactly equal positions only, keeps all three */
     double positions[] = {
         0.0, 0.0, 0.0,
         1.0, 0.0, 0.0,
@@ -156,13 +158,19 @@ test_degenerate_weld(prc_context *ctx)
     uint32_t tris[] = { 0, 1, 2 };
     prc_encode_mesh mesh;
 
-    PRC_ASSERT_EQ(prc_encode_preprocess(ctx, positions, 3, tris, 1,
-        prc_write_tol_absolute(1e-4), &mesh), 0);
+    PRC_ASSERT_EQ(prc_encode_preprocess_ex(ctx, positions, 3, tris, 1,
+        prc_write_tol_absolute(1e-4), 0, 1, &mesh), 0);
     PRC_ASSERT_EQ(mesh.num_positions, 2);
     PRC_ASSERT_EQ(mesh.num_triangles, 0);
     PRC_ASSERT_EQ(mesh.num_edges, 0);
     PRC_ASSERT_EQ(mesh.num_components, 0);
     PRC_ASSERT_NULL(mesh.tri_indices);
+    prc_encode_preprocess_free(ctx, &mesh);
+
+    PRC_ASSERT_EQ(prc_encode_preprocess(ctx, positions, 3, tris, 1,
+        prc_write_tol_absolute(1e-4), &mesh), 0);
+    PRC_ASSERT_EQ(mesh.num_positions, 3);
+    PRC_ASSERT_EQ(mesh.num_triangles, 1);
     prc_encode_preprocess_free(ctx, &mesh);
 }
 
@@ -185,8 +193,9 @@ test_half_tolerance_weld(prc_context *ctx)
 
     printf("  sub-case: half-tolerance boundary weld\n");
 
-    PRC_ASSERT_EQ(prc_encode_preprocess(ctx, positions, 3, tris, 1,
-        prc_write_tol_absolute(1e-3), &mesh), 0);
+    /* Merging within the tolerance, as prc_api_mesh_weld_and_split does */
+    PRC_ASSERT_EQ(prc_encode_preprocess_ex(ctx, positions, 3, tris, 1,
+        prc_write_tol_absolute(1e-3), 0, 1, &mesh), 0);
     PRC_ASSERT(positions[6] - positions[3] == 0.5 * mesh.tolerance_mm);
     PRC_ASSERT_EQ(mesh.num_positions, 2);
     PRC_ASSERT_EQ(mesh.num_triangles, 0);
@@ -202,8 +211,10 @@ test_half_tolerance_weld(prc_context *ctx)
 static void
 test_tolerance_mode_equivalence(prc_context *ctx)
 {
-    /* vertex 4 sits 1e-8 from vertex 1 and welds away; the three triangles
-       all survive, so both the position and index outputs are nontrivial */
+    /* vertex 4 sits 1e-8 from vertex 1 and welds away when merging within
+       the tolerance (as prc_api_mesh_weld_and_split does, so that merge is
+       asked for here); the three triangles all survive, so both the
+       position and index outputs are nontrivial */
     double positions[6 * 3] = {
         0.0, 0.0, 0.0,
         1.0, 0.0, 0.0,
@@ -220,8 +231,8 @@ test_tolerance_mode_equivalence(prc_context *ctx)
 
     printf("  sub-case: absolute vs relative tolerance equivalence\n");
 
-    PRC_ASSERT_EQ(prc_encode_preprocess(ctx, positions, 6, tris, 3,
-        prc_write_tol_absolute(v), &mesh_a), 0);
+    PRC_ASSERT_EQ(prc_encode_preprocess_ex(ctx, positions, 6, tris, 3,
+        prc_write_tol_absolute(v), 0, 1, &mesh_a), 0);
     PRC_ASSERT_EQ(mesh_a.num_positions, 5);
     PRC_ASSERT_EQ(mesh_a.num_triangles, 3);
 
@@ -233,8 +244,8 @@ test_tolerance_mode_equivalence(prc_context *ctx)
     dz = mesh_a.bbox[5] - mesh_a.bbox[2];
     diagonal = sqrt(dx * dx + dy * dy + dz * dz);
 
-    PRC_ASSERT_EQ(prc_encode_preprocess(ctx, positions, 6, tris, 3,
-        prc_write_tol_relative(v / diagonal), &mesh_b), 0);
+    PRC_ASSERT_EQ(prc_encode_preprocess_ex(ctx, positions, 6, tris, 3,
+        prc_write_tol_relative(v / diagonal), 0, 1, &mesh_b), 0);
 
     PRC_ASSERT(fabs(mesh_a.tolerance_mm - mesh_b.tolerance_mm) < 1e-12);
     PRC_ASSERT_EQ(mesh_b.num_positions, mesh_a.num_positions);

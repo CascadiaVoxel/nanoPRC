@@ -525,9 +525,10 @@ PRC_EXPORT prc_api_data prc_api_open_contents(prc_context *ctx, const char *infi
  * nanoPRC's writer puts its own application identifier in the PRC header's
  * unique_id_application, the field the format provides for naming the
  * application that wrote a file. Its 16 bytes are the ASCII text "nanoPRC"
- * followed by nine zero bytes. This reports whether the main header carries
- * it. Files nanoPRC wrote before the identifier was added carry {2,0,0,0}
- * there instead, and are not recognised.
+ * followed by nine zero bytes. nanoPRC also writes a non-text provenance tag
+ * in the header's unique_id_file. This reports whether the main header
+ * carries either: the text identifier, or, if that has been edited away,
+ * the tag. Files nanoPRC wrote before either was added are not recognised.
  *
  * @param ctx Active API context.
  * @param data Data handle returned by prc_api_open_contents.

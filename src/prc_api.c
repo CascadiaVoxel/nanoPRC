@@ -4965,8 +4965,13 @@ prc_api_written_by_nanoprc(prc_context *ctx, prc_api_data data_in)
     if (data == NULL || data->header == NULL)
         return 0;
     id = &data->header->unique_id_application;
-    return id->unique_id0 == PRC_NANOPRC_APP_UID0 &&
-           id->unique_id1 == PRC_NANOPRC_APP_UID1 &&
-           id->unique_id2 == PRC_NANOPRC_APP_UID2 &&
-           id->unique_id3 == PRC_NANOPRC_APP_UID3;
+    if (id->unique_id0 == PRC_NANOPRC_APP_UID0 &&
+        id->unique_id1 == PRC_NANOPRC_APP_UID1 &&
+        id->unique_id2 == PRC_NANOPRC_APP_UID2 &&
+        id->unique_id3 == PRC_NANOPRC_APP_UID3)
+        return 1;
+    /* The ASCII application id above may have been edited away; the
+       provenance tag in unique_id_file is the edit-resistant fallback (see
+       PRC_NANOPRC_FILE_MARK_TAG in prc_app_id.h). */
+    return data->header->unique_id_file.unique_id0 == PRC_NANOPRC_FILE_MARK_TAG;
 }

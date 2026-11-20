@@ -37,4 +37,36 @@
 #define PRC_NANOPRC_APP_UID2 0u
 #define PRC_NANOPRC_APP_UID3 0u
 
+/* Provenance mark: a second, documented way to tell that nanoPRC wrote a
+   file, meant to survive an edit that removes the "nanoPRC" text above.
+
+   The application identifier and the producer string both read as the
+   ASCII text "nanoPRC", so anyone changing one to hide nanoPRC's authorship
+   is likely to change the other in the same pass. The mark below is a plain
+   32-bit number, not text, and it lives in a different field (the header's
+   unique_id_file, which the format provides for a producer's own file
+   identity and which viewers do not render), so a search-and-replace on the
+   "nanoPRC" text leaves it in place. It is provenance evidence for the AGPL,
+   not a protection measure: nanoPRC is free software, this is documented in
+   the open, and anyone who reads this header can still remove the mark.
+
+   The tag is 2^32 divided by the golden ratio, a well-known constant, so a
+   file carrying it by chance is very unlikely and it is plainly a chosen
+   marker rather than noise. The writer puts it in word 0 of:
+     - the main header's unique_id_file (with the checksum below in word 1),
+     - the file-structure identity (PRC_WRITE_FILE_STRUCT_UID0), which the
+       main header, every file-structure header and the model section all
+       repeat, so the tag appears several times across the stream.
+   It does not depend on the geometry, so every file -- tessellation, wire or
+   exact geometry -- carries it the same way.
+
+   The checksum (main header unique_id_file word 1) is an FNV-1a hash of the
+   file's section count, section offsets and start/end offsets -- sizes and
+   positions only, never geometry or any user content. It corroborates the
+   tag: a file copied whole still matches, while unrelated bytes that happen
+   to equal the tag almost certainly will not. prc_nanoprc_file_mark_checksum
+   in prc_write_common.c computes it; tests/internal/provenance_probe.py
+   reads the mark back. */
+#define PRC_NANOPRC_FILE_MARK_TAG 0x9E3779B1u
+
 #endif

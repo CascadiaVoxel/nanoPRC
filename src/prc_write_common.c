@@ -84,6 +84,44 @@ prc_write_le_unique_id(uint8_t *p, uint32_t word0)
 }
 
 uint8_t *
+prc_write_le_unique_id2(uint8_t *p, uint32_t word0, uint32_t word1)
+{
+    p = prc_write_le_uint32(p, word0);
+    p = prc_write_le_uint32(p, word1);
+    p = prc_write_le_uint32(p, 0);
+    p = prc_write_le_uint32(p, 0);
+    return p;
+}
+
+/* FNV-1a over four bytes, low byte first. */
+static uint32_t
+prc_fnv1a_u32(uint32_t h, uint32_t v)
+{
+    int b;
+    for (b = 0; b < 4; b++)
+    {
+        h ^= (v >> (b * 8)) & 0xffu;
+        h *= 16777619u;
+    }
+    return h;
+}
+
+uint32_t
+prc_nanoprc_file_mark_checksum(uint32_t section_count,
+    const uint32_t *section_offsets, uint32_t start_offset, uint32_t end_offset)
+{
+    uint32_t h = 2166136261u; /* FNV-1a offset basis */
+    uint32_t i;
+
+    h = prc_fnv1a_u32(h, section_count);
+    for (i = 0; i < section_count; i++)
+        h = prc_fnv1a_u32(h, section_offsets != NULL ? section_offsets[i] : 0);
+    h = prc_fnv1a_u32(h, start_offset);
+    h = prc_fnv1a_u32(h, end_offset);
+    return h;
+}
+
+uint8_t *
 prc_write_le_app_unique_id(uint8_t *p)
 {
     p = prc_write_le_uint32(p, PRC_NANOPRC_APP_UID0);

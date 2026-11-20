@@ -1739,13 +1739,10 @@ prc_internal_api_get_vertices(prc_context *ctx, prc_api_data data_in,
         prc_tess_3d_wire *tess = tess_entry->tess_3d_wire;
 
         num_vertices = (size_t)tess->tessellation_coordinates.number_of_coordinates / 3;
+        /* A wire with no points has nothing to draw; it is not an error, and
+           the file's other geometry is still read */
         if (num_vertices == 0)
-        {
-            code = PRC_API_ERROR_PARSER;
-            prc_error(ctx, code,
-                "No wire vertices available in prc_internal_api_get_vertices\n");
-            goto failure;
-        }
+            return 0;
 
         vertex_buffer =
             (prc_internal_api_vertex *)prc_calloc(ctx, num_vertices,
@@ -5944,6 +5941,17 @@ compressed_failure:
         prc_internal_api_wire *wire = NULL;
         uint32_t wire_capacity = 0;
         uint32_t num_vertex_colors = 0;
+
+        /* A wire with no points: no vertices and no lines */
+        if (num_vertices == 0)
+        {
+            vertex_out->vertices = NULL;
+            vertex_out->num_vertices = 0;
+            vertex_out->capacity = 0;
+            api_tess->num_line_primitives = 0;
+            api_tess->reserved = NULL;
+            break;
+        }
 
         /* Lets allocate the space for the vertices */
         vertex_out->vertices = (prc_api_vertex *)prc_calloc(ctx, num_vertices, sizeof(prc_api_vertex));

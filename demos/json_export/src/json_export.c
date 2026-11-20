@@ -1099,6 +1099,9 @@ int main(int argc, char *argv[])
     prc_api_product *model_tree = NULL;
     tess_table table;
     uint32_t num_parts = 0, num_products = 0, num_markups = 0;
+    /* The tessellation count for the closing message, kept because releasing
+       the table sets table.num_tess to 0 */
+    uint32_t num_tess_written = 0;
     FILE *out = NULL;
     json_writer writer;
     int writer_initialized = 0;
@@ -1273,6 +1276,8 @@ cleanup:
         }
     }
 
+    num_tess_written = table.num_tess;
+
     if (ctx != NULL)
     {
         /* prc_api_release_data tolerates NULL/zero for any of the
@@ -1299,7 +1304,7 @@ cleanup:
     if (exit_code == 0)
     {
         fprintf(stderr, "json_export: wrote '%s' (%u tessellations, %u parts, %u products)\n",
-                output_path, table.num_tess, num_parts, num_products);
+                output_path, num_tess_written, num_parts, num_products);
     }
 
     return exit_code;

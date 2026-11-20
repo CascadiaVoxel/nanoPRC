@@ -93,23 +93,38 @@ prc_write_le_app_unique_id(uint8_t *p)
     return p;
 }
 
-/* Floor is 1e-7 mm (0.1 nm), NOT FLT_MIN: coordinates get divided by the
-   tolerance to form int32 grid indices, and dividing any physical coordinate
-   by FLT_MIN (~1.17e-38) would produce ~8.5e38 and overflow the grid index.
-   1e-7 keeps even a 10 km model within int32 range with margin. */
-#define PRC_WRITE_TOL_FLOOR_MM 1e-7
+/* The compressed encoder stores each position as a whole number of
+   tolerance steps from the chain origin (the bounding box's corner) or from
+   a predicted position, in an int32, and refuses a delta outside that range
+   (prc_encode_quantize). Those deltas stay within about twice the bounding
+   box diagonal, so a tolerance of at least the diagonal times 2^-28 keeps
+   them within 2^29 steps, a quarter of the int32 range. That is below what
+   float32 input can resolve (about 6e-8 of a coordinate), so any tolerance
+   a caller can mean is used as asked.
+
+   The floor used to be 1e-7 whatever the model's size. A scan measured in
+   metres, 0.0265 across, asked for 1e-6 of its diagonal, 2.65e-8, and was
+   quantized at 1e-7 instead, almost four times as coarse; scans about 0.25
+   across were coarsened below about 4e-7 of the diagonal. */
+#define PRC_WRITE_TOL_FLOOR_FRACTION (1.0 / 268435456.0) /* 2^-28 */
+/* Only for a mesh with no extent, where any positive step will do */
+#define PRC_WRITE_TOL_MIN_MM 1e-30
 
 double
 prc_write_tol_resolve(prc_context *ctx, prc_write_tolerance tol, double bbox_diagonal)
 {
-    double tolerance_mm;
+    double tolerance_mm, floor_mm;
+
+    floor_mm = (bbox_diagonal > 0.0) ? bbox_diagonal * PRC_WRITE_TOL_FLOOR_FRACTION : PRC_WRITE_TOL_MIN_MM;
+    if (floor_mm < PRC_WRITE_TOL_MIN_MM)
+        floor_mm = PRC_WRITE_TOL_MIN_MM;
 
     if (tol.mode == PRC_WRITE_TOL_RELATIVE)
     {
         if (bbox_diagonal <= 0.0)
         {
             prc_error(ctx, PRC_ERROR_INTERNAL, "prc_write_tol_resolve: relative tolerance requires a positive bbox diagonal\n");
-            return PRC_WRITE_TOL_FLOOR_MM;
+            return floor_mm;
         }
         tolerance_mm = tol.value * bbox_diagonal;
     }
@@ -118,7 +133,7 @@ prc_write_tol_resolve(prc_context *ctx, prc_write_tolerance tol, double bbox_dia
         tolerance_mm = tol.value;
     }
 
-    if (tolerance_mm < PRC_WRITE_TOL_FLOOR_MM)
-        tolerance_mm = PRC_WRITE_TOL_FLOOR_MM;
+    if (!(tolerance_mm >= floor_mm))
+        tolerance_mm = floor_mm;
     return tolerance_mm;
 }

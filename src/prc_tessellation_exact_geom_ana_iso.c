@@ -3558,6 +3558,7 @@ prc_tessellate_compressed_face(prc_context *ctx, prc_data *data, uint32_t shell_
 
         synthetic_surface.surface_type = PRC_TYPE_SURF_NURBS;
         synthetic_surface.surf_nurbs = &nurbs;
+        synthetic_face.hull_if_loops_degenerate = 0; /* Disable this for now. Adobe does do some type of hull though */
 
         code = prc_create_nurbs_from_compressed_nurbs(ctx,
             &hcg_ana_nurbs.compressed_surface, &nurbs, nurbs_tolerance);

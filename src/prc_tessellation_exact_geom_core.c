@@ -22,6 +22,8 @@
 #include <math.h>
 #include <string.h>
 
+#define PRC_DEBUG_TORUS_TRIM 1
+
 /* One node of the circular doubly-linked-list polygon used for ear clipping.
       uv is a plain surface parameter (u, v), not a screen coordinate */
 typedef struct prc_tri_vertex_s
@@ -364,9 +366,35 @@ prc_sample_loop(prc_context *ctx, prc_nano_brep_ref_data *brep_ref_data,
        This includes the last point of the last coedge being the first point
        of the first coedge. We will maintain that point. */
        /* Each coedge has one redundant point. */
-    loop_samples->num_samples = total_samples - num_coedges + 1;
-    loop_samples->samples = (prc_vec3 *)prc_calloc(ctx, loop_samples->num_samples, sizeof(prc_vec3));
-    if (loop_samples->samples != NULL)
+
+   /* A degenerate loop's edges do not chain, so an edge's end is not the
+       next edge's start and dropping it would lose a corner: in a loop
+       whose references read 0, 0, 0, 3 every edge starts at the same vertex
+       and the others exist only as ends. Keep every sample of such a loop,
+       ends included; it is never traced as an outline, only used for the
+       points it references (prc_hull_loop_of_degenerate_plane). */
+    if (*loop_degenerate)
+    {
+        uint32_t pos = 0;
+
+        loop_samples->num_samples = total_samples;
+        loop_samples->samples = (prc_vec3 *)prc_calloc(ctx, total_samples, sizeof(prc_vec3));
+        if (loop_samples->samples != NULL)
+        {
+            for (j = 0; j < num_coedges; j++)
+            {
+                memcpy(&loop_samples->samples[pos], coedge_samples[j].samples,
+                    sizeof(prc_vec3) * coedge_samples[j].num_samples);
+                pos += coedge_samples[j].num_samples;
+            }
+        }
+    }
+    else
+    {
+        loop_samples->num_samples = total_samples - num_coedges + 1;
+        loop_samples->samples = (prc_vec3 *)prc_calloc(ctx, loop_samples->num_samples, sizeof(prc_vec3));
+    }
+    if (loop_samples->samples != NULL && !*loop_degenerate)
     {
         uint32_t pos = 0;
         for (j = 0; j < num_coedges; j++)
@@ -1428,6 +1456,7 @@ prc_wrapping_loop_side(const prc_loop_samples *loop, uint8_t wrap_axis, int32_t 
     uint32_t count = (loop->num_samples > 0) ? (loop->num_samples - 1) : 0;
     double a_first, a_last, period, mid, qa, qa_shifted, qb;
     uint32_t i;
+    const double eps = 1e-7;
 
     if (count < 2)
         return 1;
@@ -1455,7 +1484,7 @@ prc_wrapping_loop_side(const prc_loop_samples *loop, uint8_t wrap_axis, int32_t 
             double t = (ai1 != ai) ? (qa_shifted - ai) / (ai1 - ai) : 0.0;
             double b_curve = bi + t * (bi1 - bi);
 
-            return (wind > 0) ? (qb > b_curve) : (qb < b_curve);
+            return (wind > 0) ? (qb >= b_curve - eps) : (qb <= b_curve + eps);
         }
     }
 
@@ -1466,7 +1495,7 @@ prc_wrapping_loop_side(const prc_loop_samples *loop, uint8_t wrap_axis, int32_t 
             (wrap_axis ? loop->uv_samples[0].x : loop->uv_samples[0].y) :
             (wrap_axis ? loop->uv_samples[count].x : loop->uv_samples[count].y);
 
-        return (wind > 0) ? (qb > b_curve) : (qb < b_curve);
+        return (wind > 0) ? (qb >= b_curve - eps) : (qb <= b_curve + eps);
     }
 }
 
@@ -2325,6 +2354,15 @@ prc_tessellate_trimmed_face(prc_context *ctx, prc_data *data, uint32_t shell_ind
         }
     }
 
+#ifdef PRC_DEBUG_TORUS_TRIM
+    fprintf(stderr, "=== TRIMMED GRID DEBUG ===\n");
+    fprintf(stderr, "Grid samples: u=%u (wrap=%u), v=%u (wrap=%u) | cells: u=%u, v=%u\n",
+        grid.vertex_samples_u, grid.wrap_u, grid.vertex_samples_v, grid.wrap_v,
+        cell_count_u, cell_count_v);
+    fprintf(stderr, "Sampling domain: u=[%.4f, %.4f], v=[%.4f, %.4f]\n",
+        sampling_info->start_u, sampling_info->end_u, sampling_info->start_v, sampling_info->end_v);
+#endif
+
     {
         uint8_t *cell_inside_raw = (uint8_t *)prc_calloc(ctx, cell_count_u * cell_count_v, sizeof(uint8_t));
         cell_processed = (uint8_t *)prc_calloc(ctx, cell_count_u * cell_count_v, sizeof(uint8_t));
@@ -2438,9 +2476,8 @@ prc_tessellate_trimmed_face(prc_context *ctx, prc_data *data, uint32_t shell_ind
            ear-clipping. The subdivision fringe doesn't trace an outline or
            ear-clip at all, so it needs none of this -- it just subdivides
            every cell the raw classification didn't already accept whole */
-           // if (use_subdivision_fringe || has_wrapping_loop)
 
-        if (use_subdivision_fringe)
+        if (use_subdivision_fringe || has_wrapping_loop)
         {
             memcpy(cell_inside, cell_inside_raw, cell_count_u * cell_count_v * sizeof(uint8_t));
         }
@@ -2527,6 +2564,19 @@ prc_tessellate_trimmed_face(prc_context *ctx, prc_data *data, uint32_t shell_ind
                 grid.wrap_u, grid.wrap_v, has_wrapping_loop, wrap_axis,
                 cell_count_u, cell_count_v, raw_inside_count, eroded_inside_count);
         }
+
+#ifdef PRC_DEBUG_TORUS_TRIM
+        {
+            uint32_t raw_cnt = 0, eroded_cnt = 0;
+            for (uint32_t c = 0; c < cell_count_u * cell_count_v; c++) {
+                if (cell_inside_raw[c]) raw_cnt++;
+                if (cell_inside[c]) eroded_cnt++;
+            }
+            fprintf(stderr, "Cells inside: raw=%u / %u, after_erosion=%u\n",
+                raw_cnt, cell_count_u * cell_count_v, eroded_cnt);
+            fprintf(stderr, "==========================\n");
+        }
+#endif
 
         prc_free(ctx, cell_inside_raw);
     };
@@ -3520,6 +3570,64 @@ prc_map_to_two_pi(double angle)
     return angle;
 }
 
+/* Ensure that the periodic curves are mapped to the proper range (e.g. 0 to 2pi) */
+static void
+prc_normalize_periodic_loop_phase(prc_loop_samples *loop_samples, uint32_t loop_idx,
+    uint8_t use_y_component)
+{
+    prc_loop_samples *curr_loop = &loop_samples[loop_idx];
+    uint32_t num_samples = curr_loop->num_samples;
+    int32_t wind = use_y_component ? curr_loop->wind_v : curr_loop->wind_u;
+    uint32_t j;
+
+    if (num_samples == 0 || wind != 0)
+        return;
+
+    if (loop_idx == 0)
+    {
+        double min_val = use_y_component ? curr_loop->uv_samples[0].y : curr_loop->uv_samples[0].x;
+        for (j = 1; j < num_samples; j++)
+        {
+            double val = use_y_component ? curr_loop->uv_samples[j].y : curr_loop->uv_samples[j].x;
+            if (val < min_val)
+                min_val = val;
+        }
+
+        if (min_val < 0.0 || min_val >= 2.0 * PRC_PI)
+        {
+            double shift = 2.0 * PRC_PI * floor(min_val / (2.0 * PRC_PI));
+            for (j = 0; j < num_samples; j++)
+            {
+                if (use_y_component)
+                    curr_loop->uv_samples[j].y -= shift;
+                else
+                    curr_loop->uv_samples[j].x -= shift;
+            }
+        }
+    }
+    else
+    {
+        uint32_t mid_idx = num_samples / 2;
+        uint32_t base_mid_idx = loop_samples[0].num_samples / 2;
+        double base_mid = use_y_component ?
+            loop_samples[0].uv_samples[base_mid_idx].y : loop_samples[0].uv_samples[base_mid_idx].x;
+        double curr_mid = use_y_component ?
+            curr_loop->uv_samples[mid_idx].y : curr_loop->uv_samples[mid_idx].x;
+        double shifts = lround((curr_mid - base_mid) / (2.0 * PRC_PI));
+
+        if (shifts != 0.0)
+        {
+            for (j = 0; j < num_samples; j++)
+            {
+                if (use_y_component)
+                    curr_loop->uv_samples[j].y -= shifts * (2.0 * PRC_PI);
+                else
+                    curr_loop->uv_samples[j].x -= shifts * (2.0 * PRC_PI);
+            }
+        }
+    }
+}
+
 /* Based upon surface type, map the 3D points to the UV surface storing
    the values in loop_samples structure. At this point, the loops are samples of
    the path in 3D space on the surface. We will move this to the uv parametric
@@ -3716,6 +3824,7 @@ prc_map_loops_to_surface(prc_context *ctx, prc_topo_face *topo_face, uint8_t ori
                 }
                 curr_loop->wind_u = prc_unwrap_angular_component(curr_loop->uv_samples, num_samples, 0);
                 curr_loop->wind_v = 0;
+                prc_normalize_periodic_loop_phase(loop_samples, k, 0);
             }
 
             for (j = 0; j < num_samples; j++)
@@ -3773,6 +3882,7 @@ prc_map_loops_to_surface(prc_context *ctx, prc_topo_face *topo_face, uint8_t ori
 
             curr_loop->wind_u = prc_unwrap_angular_component(curr_loop->uv_samples, num_samples, 0);
             curr_loop->wind_v = 0;
+            prc_normalize_periodic_loop_phase(loop_samples, k, 0);
 
             for (j = 0; j < num_samples; j++)
             {
@@ -3838,6 +3948,8 @@ prc_map_loops_to_surface(prc_context *ctx, prc_topo_face *topo_face, uint8_t ori
                to pole), so only u (longitude) is ever unwrapped here */
             curr_loop->wind_u = prc_unwrap_angular_component(curr_loop->uv_samples, num_samples, 0);
             curr_loop->wind_v = 0;
+            /* Normalize non-wrapping loops into the [0, 2*PI) primary domain */
+            prc_normalize_periodic_loop_phase(loop_samples, k, 0);
 
             for (j = 0; j < num_samples; j++)
             {
@@ -3894,32 +4006,9 @@ prc_map_loops_to_surface(prc_context *ctx, prc_topo_face *topo_face, uint8_t ori
             curr_loop->wind_u = prc_unwrap_angular_component(curr_loop->uv_samples, num_samples, 0);
             curr_loop->wind_v = prc_unwrap_angular_component(curr_loop->uv_samples, num_samples, 1);
 
-            /*   Align multiple loops to the same 2*PI phase period box  */
-            if (k > 0)
-            {
-                // Use a point midway through the loops to check the true phase box alignment
-                uint32_t mid_idx = num_samples / 2;
-                uint32_t base_mid_idx = loop_samples[0].num_samples / 2;
-
-                // Find the midway U position of the base loop (Loop 0)
-                double base_u_mid = loop_samples[0].uv_samples[base_mid_idx].x;
-
-                // Find the midway U position of the current loop
-                double current_u_mid = curr_loop->uv_samples[mid_idx].x;
-
-                // Calculate how many full 2*PI phases separate the bodies of these loops
-                double phase_diff = current_u_mid - base_u_mid;
-                double shifts = lround(phase_diff / (2.0 * PRC_PI));
-
-                if (shifts != 0)
-                {
-                    // Shift all samples of this loop back into alignment with Loop 0
-                    for (j = 0; j < num_samples; j++)
-                    {
-                        curr_loop->uv_samples[j].x -= shifts * (2.0 * PRC_PI);
-                    }
-                }
-            }
+            /* Normalize non-wrapping loops into the [0, 2*PI) primary domain */
+            prc_normalize_periodic_loop_phase(loop_samples, k, 0);
+            prc_normalize_periodic_loop_phase(loop_samples, k, 1);
 
             for (j = 0; j < num_samples; j++)
             {
@@ -3950,6 +4039,24 @@ prc_map_loops_to_surface(prc_context *ctx, prc_topo_face *topo_face, uint8_t ori
                     test_xyz.x, test_xyz.y, test_xyz.z, test2_xyz.x - test_xyz.x, test2_xyz.y - test_xyz.y, test2_xyz.z - test_xyz.z);
 #endif
             }
+#ifdef PRC_DEBUG_TORUS_TRIM
+            fprintf(stderr, "=== TORUS UV MAPPING DEBUG ===\n");
+            fprintf(stderr, "Torus major_radius=%.6f, minor_radius=%.6f, has_transform=%u, is_identity=%u\n",
+                major_radius, minor_radius, torus->has_transform, torus->exact_geom_transform.is_identity);
+            fprintf(stderr, "Param coeffs: u_a=%.6f, u_b=%.6f, v_a=%.6f, v_b=%.6f\n",
+                torus->parameterization.u_param_coeff_a, torus->parameterization.u_param_coeff_b,
+                torus->parameterization.v_param_coeff_a, torus->parameterization.v_param_coeff_b);
+            for (k = 0; k < num_loops; k++) {
+                fprintf(stderr, "Loop[%u]: num_samples=%u, wind_u=%d, wind_v=%d\n",
+                    k, loop_samples[k].num_samples, loop_samples[k].wind_u, loop_samples[k].wind_v);
+                for (j = 0; j < loop_samples[k].num_samples; j += 8) { // print every 8th sample + endpoints
+                    fprintf(stderr, "  pt[%u]: local_xyz=(%.4f, %.4f, %.4f) -> uv=(%.4f, %.4f)\n",
+                        j, loop_samples[k].samples[j].x, loop_samples[k].samples[j].y, loop_samples[k].samples[j].z,
+                        loop_samples[k].uv_samples[j].x, loop_samples[k].uv_samples[j].y);
+                }
+            }
+            fprintf(stderr, "==============================\n");
+#endif
         }
         break;
     }
@@ -4709,6 +4816,114 @@ prc_map_loops_to_surface(prc_context *ctx, prc_topo_face *topo_face, uint8_t ori
     return 0;
 }
 
+/* The convex hull of every sample of a face's loops, as one closed loop, in
+   the plane's own frame. Used for a compressed AnaPlane face whose loops are
+   all degenerate (their edges do not chain into a closed outline): an
+   AnaPlane stores no extent of its own, only its normal and its loops, so
+   the plane untrimmed has no bounds at all. Adobe Acrobat draws the convex
+   hull of the points such a loop references, discarding the edges and their
+   order; the hull of the samples is the same shape, since straight edges
+   sample only at their ends. Returns the number of hull points written into
+   *out (closed: the first point repeated at the end), or 0 when the points
+   are collinear and bound no area. */
+static int
+prc_hull_loop_of_degenerate_plane(prc_context *ctx, const prc_surf_plane *plane,
+    const prc_loop_samples *loops, uint32_t num_loops, prc_loop_samples *out)
+{
+    prc_vec3 origin = plane->transform.translation;
+    prc_vec3 ax = plane->transform.rotation[0];
+    prc_vec3 ay = plane->transform.rotation[1];
+    uint32_t total = 0, n = 0, i, k, h = 0, lower;
+    prc_vec2 *pts, *hull;
+
+    memset(out, 0, sizeof(*out));
+    for (k = 0; k < num_loops; k++)
+        total += loops[k].num_samples;
+    if (total < 3)
+        return 0;
+
+    pts = (prc_vec2 *)prc_calloc(ctx, total, sizeof(prc_vec2));
+    hull = (prc_vec2 *)prc_calloc(ctx, 2 * total + 1, sizeof(prc_vec2));
+    if (pts == NULL || hull == NULL)
+    {
+        prc_free(ctx, pts);
+        prc_free(ctx, hull);
+        prc_error(ctx, PRC_ERROR_MEMORY, "Failed in allocation prc_hull_loop_of_degenerate_plane\n");
+        return PRC_ERROR_MEMORY;
+    }
+    for (k = 0; k < num_loops; k++)
+    {
+        for (i = 0; i < loops[k].num_samples; i++)
+        {
+            prc_vec3 d;
+            d.x = loops[k].samples[i].x - origin.x;
+            d.y = loops[k].samples[i].y - origin.y;
+            d.z = loops[k].samples[i].z - origin.z;
+            pts[n].x = d.x * ax.x + d.y * ax.y + d.z * ax.z;
+            pts[n].y = d.x * ay.x + d.y * ay.y + d.z * ay.z;
+            n++;
+        }
+    }
+
+    /* Andrew's monotone chain: sort by x then y, then build the lower and
+       upper chains; the result runs anticlockwise in the plane's frame */
+    for (i = 1; i < n; i++)
+    {
+        prc_vec2 p = pts[i];
+        k = i;
+        while (k > 0 && (pts[k - 1].x > p.x || (pts[k - 1].x == p.x && pts[k - 1].y > p.y)))
+        {
+            pts[k] = pts[k - 1];
+            k--;
+        }
+        pts[k] = p;
+    }
+    for (i = 0; i < n; i++)
+    {
+        while (h >= 2 &&
+            (hull[h - 1].x - hull[h - 2].x) * (pts[i].y - hull[h - 2].y) -
+            (hull[h - 1].y - hull[h - 2].y) * (pts[i].x - hull[h - 2].x) <= 0.0)
+            h--;
+        hull[h++] = pts[i];
+    }
+    lower = h + 1;
+    for (i = n - 1; i-- > 0;)
+    {
+        while (h >= lower &&
+            (hull[h - 1].x - hull[h - 2].x) * (pts[i].y - hull[h - 2].y) -
+            (hull[h - 1].y - hull[h - 2].y) * (pts[i].x - hull[h - 2].x) <= 0.0)
+            h--;
+        hull[h++] = pts[i];
+    }
+    prc_free(ctx, pts);
+
+    /* h counts the first point twice (it closes the chain); fewer than four
+       means fewer than three distinct corners, which bound no area */
+    if (h < 4)
+    {
+        prc_free(ctx, hull);
+        return 0;
+    }
+
+    out->samples = (prc_vec3 *)prc_calloc(ctx, h, sizeof(prc_vec3));
+    if (out->samples == NULL)
+    {
+        prc_free(ctx, hull);
+        prc_error(ctx, PRC_ERROR_MEMORY, "Failed in allocation prc_hull_loop_of_degenerate_plane\n");
+        return PRC_ERROR_MEMORY;
+    }
+    for (i = 0; i < h; i++)
+    {
+        out->samples[i].x = origin.x + hull[i].x * ax.x + hull[i].y * ay.x;
+        out->samples[i].y = origin.y + hull[i].x * ax.y + hull[i].y * ay.y;
+        out->samples[i].z = origin.z + hull[i].x * ax.z + hull[i].y * ay.z;
+    }
+    out->num_samples = h;
+    out->is_outer_loop = 1;
+    prc_free(ctx, hull);
+    return (int)h;
+}
+
 int
 prc_tessellate_surface(prc_context *ctx, prc_data *data, uint32_t shell_index,
     uint32_t face_index, prc_topo_face *topo_face,
@@ -4850,6 +5065,36 @@ prc_tessellate_surface(prc_context *ctx, prc_data *data, uint32_t shell_index,
                 prc_free(ctx, loop_samples);
                 loop_samples = new_loop_samples;
                 num_loops = new_num_loops;
+            }
+            else if (topo_face->hull_if_loops_degenerate &&
+                (surface.surface_type == PRC_TYPE_SURF_Plane && surface.surf_plane != NULL ||
+                 surface.surface_type == PRC_TYPE_SURF_NURBS && surface.surf_nurbs != NULL))
+            {
+                /* Every loop of a compressed AnaPlane face is degenerate: trim by
+                   the convex hull of their points, or draw nothing if they bound
+                   no area, never the plane untrimmed */
+                prc_loop_samples hull_loop;
+                int hull_count = prc_hull_loop_of_degenerate_plane(ctx, surface.surf_plane,
+                    loop_samples, num_loops, &hull_loop);
+                for (k = 0; k < num_loops; k++)
+                {
+                    if (loop_samples[k].samples != NULL)
+                        prc_free(ctx, loop_samples[k].samples);
+                    if (loop_samples[k].uv_samples != NULL)
+                        prc_free(ctx, loop_samples[k].uv_samples);
+                }
+                if (hull_count <= 0)
+                {
+                    prc_free(ctx, loop_samples);
+                    prc_free(ctx, loop_degenerate);
+                    if (hull_count < 0)
+                        return hull_count;
+                    /* No area: the face draws nothing, as an unknown surface does */
+                    data->exact_geom_tess_part[data->exact_geom_tess_part_count].shells[shell_index].faces[face_index].type = PRC_EXACT_GEOM_UNKNOWN;
+                    return 0;
+                }
+                loop_samples[0] = hull_loop;
+                num_loops = 1;
             }
             else
             {

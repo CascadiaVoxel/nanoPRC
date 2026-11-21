@@ -1430,6 +1430,7 @@ prc_wrapping_loop_side(const prc_loop_samples *loop, uint8_t wrap_axis, int32_t 
     uint32_t count = (loop->num_samples > 0) ? (loop->num_samples - 1) : 0;
     double a_first, a_last, period, mid, qa, qa_shifted, qb;
     uint32_t i;
+    const double eps = 1e-7;
 
     if (count < 2)
         return 1;
@@ -1457,7 +1458,7 @@ prc_wrapping_loop_side(const prc_loop_samples *loop, uint8_t wrap_axis, int32_t 
             double t = (ai1 != ai) ? (qa_shifted - ai) / (ai1 - ai) : 0.0;
             double b_curve = bi + t * (bi1 - bi);
 
-            return (wind > 0) ? (qb > b_curve) : (qb < b_curve);
+            return (wind > 0) ? (qb >= b_curve - eps) : (qb <= b_curve + eps);
         }
     }
 
@@ -1468,7 +1469,7 @@ prc_wrapping_loop_side(const prc_loop_samples *loop, uint8_t wrap_axis, int32_t 
             (wrap_axis ? loop->uv_samples[0].x : loop->uv_samples[0].y) :
             (wrap_axis ? loop->uv_samples[count].x : loop->uv_samples[count].y);
 
-        return (wind > 0) ? (qb > b_curve) : (qb < b_curve);
+        return (wind > 0) ? (qb >= b_curve - eps) : (qb <= b_curve + eps);
     }
 }
 
@@ -2449,9 +2450,8 @@ prc_tessellate_trimmed_face(prc_context *ctx, prc_data *data, uint32_t shell_ind
            ear-clipping. The subdivision fringe doesn't trace an outline or
            ear-clip at all, so it needs none of this -- it just subdivides
            every cell the raw classification didn't already accept whole */
-           // if (use_subdivision_fringe || has_wrapping_loop)
 
-        if (use_subdivision_fringe)
+        if (use_subdivision_fringe || has_wrapping_loop)
         {
             memcpy(cell_inside, cell_inside_raw, cell_count_u * cell_count_v * sizeof(uint8_t));
         }

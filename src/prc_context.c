@@ -14,6 +14,7 @@
     along with nanoPRC. If not, see <https://www.gnu.org/licenses/>.
 */
 
+#include <stdlib.h>
 #include <string.h>
 #include <prc_context.h>
 #include "prc_diag_env.h"
@@ -38,6 +39,15 @@ prc_new_context(const prc_hooks *hooks)
     ctx->hooks = *hooks;
 
     ctx->internal.reader_version = 10001; /* PRC ISO Standard Version Number */
+    {
+        /* Diagnostic builds only: claim a different reader version, to see how
+           versioned schema blocks and the minimal_version_for_read refusal
+           behave for a reader that says it is older (Acrobat's engine claims
+           8137). */
+        const char *rv = prc_diag_getenv("PRC_DIAG_READER_VERSION");
+        if (rv != NULL)
+            ctx->internal.reader_version = (uint32_t)strtoul(rv, NULL, 10);
+    }
 
     ctx->trace_reversed = (prc_diag_getenv("PRC_TRACE_REVERSED") != NULL);
     ctx->trace_normals = (prc_diag_getenv("PRC_TRACE_NORMALS") != NULL);

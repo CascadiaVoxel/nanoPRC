@@ -2,13 +2,13 @@
 
 ## What nanoPRC is
 
-A 3D PDF is an ordinary PDF document that also carries a 3D model, in a 3D annotation that viewers such as Adobe
-Acrobat Reader let the reader rotate, section and explore on the page. The PDF standard (ISO 32000) allows that model
+A 3D PDF is an ordinary PDF document that also carries a 3D model, in a 3D annotation that viewers (such as Adobe
+Acrobat Reader) let the reader rotate, section and explore on the page. The PDF standard (ISO 32000) allows that 3D model
 in one of two formats, U3D (ECMA-363) or PRC (ISO 14739-1). PRC is the richer of the two: it holds an assembly tree of
 products and parts, triangle meshes (usually compressed), wires, colours, materials and textures, views, and 3D markup
 (product and manufacturing information), and it can also hold exact B-rep and NURBS geometry.
 
-nanoPRC is a C99 library that reads and writes PRC. It finds the PRC stream in a PDF, encrypted or not, or reads a bare
+**nanoPRC** is a C99 library that reads and writes PRC. It finds the PRC stream in a PDF, encrypted or not, or reads a bare
 `.prc` file, decodes it, and gives the caller the model tree with its triangle meshes, lines, markup, materials,
 textures and the visibility of each node through a C API, so that other software can display, convert or analyse the
 model without a PDF viewer. Tessellating the exact geometry is in development and off by default. In the other
@@ -82,7 +82,7 @@ nanoPRC includes several source-code demonstrations that showcase how to use the
 | demos/viewer | A basic 3D interactive viewer to display PRC models |
 | demos/json_export | A utility to create a JSON dump from a PRC model |
 | demos/stl_export | A utility to create binary STL mesh files from a PRC model |
-| demos/teapot_write | A utility to generate a PRC file of the Utah teapot from 32 bicubic NURBS patches, demonstrating the write API below |
+| demos/teapot_write | A utility to generate a PRC file of the Utah teapot tessellated from 32 bicubic NURBS patches, demonstrating the write API below |
 | demos/stl_import | A utility to import binary or ASCII STL mesh files into PRC/PDF, with vertex welding and automatic multi-part detection |
 
 Conversion to and from other mesh formats is in three companion repositories, each built on this library's
@@ -107,20 +107,22 @@ can be written as uncompressed triangles, wire geometry, or the fully compressed
 always tessellated before writing -- PRC also supports writing exact NURBS/B-Rep surfaces directly, but
 nanoPRC does not do that yet. Each representation item can carry its own material (diffuse, ambient, specular and
 emissive colours, opacity and shininess) and textures, including opacity-mask and reflection layers
-(`prc_api_write_rep_item`), and a tessellation can carry per-vertex colours (`prc_api_write_tessellation`). An item
-given no material is written with one shared default material.
+(`prc_api_write_rep_item`), and a tessellation can carry per-vertex colours (`prc_api_write_tessellation`).
+An item given no material is written with one shared default material.
+A minimal PDF wrapper around generated PRCs allows for external testing in other viewers.
 
 #### Provenance mark
 
 Every file nanoPRC writes carries a provenance mark, so a file it produced can be recognised as AGPL
 evidence even if the `"nanoPRC"` producer text has been edited out. The writer puts the application
-identifier `"nanoPRC"` in the header's `unique_id_application`, and, separately, a non-text tag
-(`0x9E3779B1`) in the header's `unique_id_file` with a checksum of the file's section layout (sizes and
-offsets only, never geometry or user content). Both fields are ones viewers ignore; the tag is not the
-`"nanoPRC"` text, so a search-and-replace on the producer string leaves it in place. `src/prc_app_id.h`
-documents the exact fields and values, `prc_api_written_by_nanoprc` reports whether a file carries
-either, and `tests/internal/provenance_probe.py` reads the mark from a `.prc` or an uncompressed-stream
-`.pdf`, recomputing the checksum from the section layout to confirm it. This is documented provenance evidence, not a protection measure -- nanoPRC is free software and
+identifier `"nanoPRC"` in the header's `unique_id_application`, and, separately,
+a binary tag in the PRC header data structure with a checksum
+of the file's section layout (sizes and offsets only, never geometry or user content).
+Both fields are ones viewers ignore; the tag is not the
+`"nanoPRC"` text, so a search-and-replace on the producer string leaves it in place.
+A provenance verification utility is included that reads the mark from a `.prc` or an uncompressed-stream `.pdf`,
+recomputing the checksum from the section layout to confirm it.
+This is documented provenance evidence, not a protection measure -- nanoPRC is free (AGPL) software and
 anyone may remove the mark from their own copy.
 
 ### Diagnostic Environment-Variable Hooks

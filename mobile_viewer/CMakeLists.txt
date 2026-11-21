@@ -173,15 +173,9 @@ else()
     set_source_files_properties(${GENERATED_SHADER_HEADERS} PROPERTIES GENERATED TRUE)
 endif()
 
-add_subdirectory(
-    "${CMAKE_CURRENT_SOURCE_DIR}/../thirdparty/glm" 
-    "${CMAKE_CURRENT_BINARY_DIR}/glm_build"
-)
-
 target_include_directories(mobile_viewer PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../thirdparty/MatrixUtil/MatrixUtil/include)
 target_include_directories(mobile_viewer PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../thirdparty/imgui)
 
 target_include_directories(mobile_viewer PRIVATE
     "src"
     "${CMAKE_CURRENT_BINARY_DIR}/src")
-target_link_libraries(mobile_viewer PRIVATE glm::glm-header-only)

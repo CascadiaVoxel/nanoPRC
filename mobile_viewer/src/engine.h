@@ -29,12 +29,6 @@
 #include "camera.h"
 #include "scene.h"
 
-// Modern GLM Setup
-#include <glm/glm.hpp>
-#include <glm/ext/matrix_transform.hpp>
-#include <glm/ext/matrix_clip_space.hpp>
-#include <glm/gtc/type_ptr.hpp>
-
 // ============================================================================
 
 // Unified Engine Runtime States
@@ -92,7 +86,6 @@ struct MobileEngineContext
     bool isInteracting = false;
     float lastMouseX = 0.0f;
     float lastMouseY = 0.0f;
-    glm::mat4 objectOrientation = glm::mat4(1.0f);
 
     // --- Dynamic Zoom Space ---
     float cameraDistance = 20.0f; // Matches your initial 20.0f Z-position

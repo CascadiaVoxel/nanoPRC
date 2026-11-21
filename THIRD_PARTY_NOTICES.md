@@ -20,9 +20,6 @@ The components below retain their own upstream licenses and are used as third-pa
 - **Khronos Platform Header** (`KHR/khrplatform.h`) is Copyright (c) 2008-2018 The Khronos Group Inc. and licensed under an MIT-style permissive license.
 - **Roboto Font** (`demos/viewer/src/roboto_font.h`, Roboto version 3.009) is Copyright 2011 The Roboto Project Authors and licensed under the SIL Open Font License, Version 1.1. See `thirdparty/Roboto_OFL.txt`.
 
-## Mobile/WASM Viewer
-- **GLM** is licensed under the MIT license. Copyright (c) 2005 - G-Truc Creation
-
 ---
 
 If you redistribute binaries or source bundles, include the relevant upstream license texts for these dependencies.

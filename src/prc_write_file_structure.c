@@ -27,14 +27,35 @@ int
 prc_write_schema_and_globals_to_stream(prc_context *ctx, prc_bit_write_state *s,
     const prc_write_global_tables *tables)
 {
+    uint32_t test_schema_version;
+    int test_on_transform;
+
     if (ctx == NULL || s == NULL || tables == NULL)
     {
         prc_error(ctx, PRC_ERROR_INTERNAL, "prc_write_schema_and_globals_to_stream: invalid arguments\n");
         return PRC_ERROR_INTERNAL;
     }
 
-    /* Table 8 PRC_Schema: no custom entity schema */
-    if (prc_bitwrite_uint32(ctx, s, 0) != 0) goto fail; /* schema_count */
+    /* Table 8 PRC_Schema: no custom entity schema, except in a diagnostic
+       build that asks for the test schema (see
+       prc_write_diag_test_schema_version in prc_write_common.h). */
+    test_schema_version = prc_write_diag_test_schema_version();
+    test_on_transform = test_schema_version != 0 && prc_write_diag_test_schema_on_transform();
+    if (test_schema_version == 0)
+    {
+        if (prc_bitwrite_uint32(ctx, s, 0) != 0) goto fail; /* schema_count */
+    }
+    else
+    {
+        if (prc_bitwrite_uint32(ctx, s, 1) != 0) goto fail; /* schema_count */
+        if (prc_bitwrite_uint32(ctx, s, test_on_transform ? PRC_TYPE_MISC_GeneralTransformation
+                                                          : PRC_TYPE_ASM_FileStructureGlobals) != 0) goto fail;
+        if (prc_bitwrite_uint32(ctx, s, 4) != 0) goto fail; /* token_count */
+        if (prc_bitwrite_uint32(ctx, s, EPRCSchema_Block_Version) != 0) goto fail;
+        if (prc_bitwrite_uint32(ctx, s, test_schema_version) != 0) goto fail;
+        if (prc_bitwrite_uint32(ctx, s, EPRCSchema_Data_Double) != 0) goto fail;
+        if (prc_bitwrite_uint32(ctx, s, EPRCSchema_Block_End) != 0) goto fail;
+    }
 
     /* Table 39 PRC_TYPE_ASM_FileStructureGlobals */
     if (prc_bitwrite_uint32(ctx, s, PRC_TYPE_ASM_FileStructureGlobals) != 0) goto fail;
@@ -46,6 +67,10 @@ prc_write_schema_and_globals_to_stream(prc_context *ctx, prc_bit_write_state *s,
     /* FileStructureGlobals ends with user_data, as the tessellation section
        does: see prc_write_extra_geometry_section_to_stream. */
     if (prc_bitwrite_uint32(ctx, s, 0) != 0) goto fail; /* user_data.stream_size */
+
+    /* The one double (1.5) the test schema describes, at the end of the entity. */
+    if (test_schema_version != 0 && !test_on_transform)
+        if (prc_bitwrite_double(ctx, s, 1.5) != 0) goto fail;
 
     return 0;
 

@@ -14,9 +14,11 @@
     along with nanoPRC. If not, see <https://www.gnu.org/licenses/>.
 */
 
+#include <stdlib.h>
 #include <string.h>
 #include "prc_write_common.h"
 #include "prc_app_id.h"
+#include "prc_diag_env.h"
 
 /* A Name: same_name TRUE means "the current name" of clause 4.4, the last
    name written in this section (NULL at its start), not "no name". So TRUE
@@ -174,4 +176,20 @@ prc_write_tol_resolve(prc_context *ctx, prc_write_tolerance tol, double bbox_dia
     if (!(tolerance_mm >= floor_mm))
         tolerance_mm = floor_mm;
     return tolerance_mm;
+}
+
+/* See prc_write_common.h. Always 0 unless the build enables the diagnostic
+   environment hooks and PRC_DIAG_TEST_SCHEMA_VERSION is set to a number. */
+uint32_t
+prc_write_diag_test_schema_version(void)
+{
+    const char *ov = prc_diag_getenv("PRC_DIAG_TEST_SCHEMA_VERSION");
+    return ov != NULL ? (uint32_t)strtoul(ov, NULL, 10) : 0u;
+}
+
+int
+prc_write_diag_test_schema_on_transform(void)
+{
+    const char *ov = prc_diag_getenv("PRC_DIAG_TEST_SCHEMA_ENTITY");
+    return ov != NULL && strcmp(ov, "transform") == 0;
 }

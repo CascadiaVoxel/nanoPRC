@@ -534,6 +534,10 @@ prc_write_product(prc_context *ctx, prc_bit_write_state *s, const prc_write_tree
         if (prc_bitwrite_uint32(ctx, s, PRC_TYPE_MISC_GeneralTransformation) != 0) return -1;
         for (k4 = 0; k4 < 16; k4++)
             if (prc_bitwrite_double(ctx, s, node->transform[k4]) != 0) return -1;
+        /* The double a diagnostic-build test schema describes (see
+           prc_write_diag_test_schema_version); never written otherwise. */
+        if (prc_write_diag_test_schema_version() != 0 && prc_write_diag_test_schema_on_transform())
+            if (prc_bitwrite_double(ctx, s, 1.5) != 0) return -1;
     }
 
     if (prc_bitwrite_uint32(ctx, s, 0) != 0) return -1; /* entity_ref_count */

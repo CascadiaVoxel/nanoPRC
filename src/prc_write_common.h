@@ -179,9 +179,63 @@ uint8_t *prc_write_le_app_unique_id(uint8_t *p);
 
    Re-validate against the full previously-Acrobat-confirmed file set before
    treating this as safely shipped -- it changes the header of every written
-   file, same as any bitstream change. */
+   file, same as any bitstream change.
+
+   UPDATED 2026-11-21 -- the two fields are now different: 8137 / 10001.
+   The two numbers do two jobs (pdf-association/pdf-issues #805, as revised
+   21 November 2026, after review by Datalogics):
+
+     minimal_version_for_read = 8137: what a READER needs. It is set by the
+       content, and nothing nanoPRC writes is defined after 8137 (the 8137
+       GeneralTransformation is the newest). Acrobat's engine refuses a floor
+       above 8137, so this value must not rise (reasons 1 to 4 above stand).
+
+     authoring_version = 10001: the edition of the document the writer worked
+       to (section 4.2 of the draft gives 10001 as this document's own
+       version). It gates nothing in deployed readers: Acrobat measured with a
+       value of 23306 here, and files written with 7094 / 23306 opened for
+       months. Real files carry values up to 20225 and beyond.
+
+   SCHEMA. The draft's line 140 as it stands says a writer whose
+   minimal_version_for_read is lower than authoring_version "shall write a
+   schema description ... providing the differences". Nothing is defined
+   between 8137 and 10001, so the description would be empty, and nanoPRC
+   writes none (schema_count 0, prc_write_schema_and_globals_to_stream). #805
+   proposes one added sentence that says exactly this ("No schema description
+   is required when the file contains no content defined between the two
+   versions"). The mechanism is exercised end to end by the diagnostic hook
+   PRC_DIAG_TEST_SCHEMA_VERSION below (diagnostic builds only), which writes
+   a schema and the data it describes.
+
+   Reading our own files is unaffected: every version gate in the reader is
+   at or below 8137 (7046, 7309, 8016, 8030). The diagnostic overrides
+   PRC_DIAG_MIN_VERS_FOR_READ / PRC_DIAG_AUTH_VERS still apply. */
 #define PRC_WRITE_MIN_VERS_FOR_READ 8137u
-#define PRC_WRITE_AUTH_VERS 8137u
+#define PRC_WRITE_AUTH_VERS 10001u
+
+/* Diagnostic builds only (PRC_ENABLE_DIAG_ENV): a TEST schema that the writer
+   injects when the environment variable PRC_DIAG_TEST_SCHEMA_VERSION is set
+   to a block version V (a number), and 0 when it is not set (always 0 in a
+   normal build). The writer then declares one entity schema with the tokens
+   { Block_Version, V, Data_Double, Block_End } and writes the one extra
+   double that it describes, where the entity ends. The double is 1.5, not
+   zero, so that a reader which fails to consume it is noticed (zero bits at
+   the end of a section read as padding). The entity is
+   PRC_TYPE_ASM_FileStructureGlobals by default (one extra double after the
+   globals' user data), or PRC_TYPE_MISC_GeneralTransformation when
+   PRC_DIAG_TEST_SCHEMA_ENTITY is "transform" (one extra double after the 16
+   matrix doubles of every placed node's transformation).
+
+   A reader whose own version is below V executes the block and consumes the
+   double; a reader at or above V treats the block as native data it already
+   knows and consumes nothing. So with V between a file's
+   minimal_version_for_read and its authoring_version this exercises, end to
+   end, the mechanism that line 140 of the draft asks for. It is a test of
+   the schema mechanism in a reader, not a format the writer ever produces
+   otherwise. */
+uint32_t prc_write_diag_test_schema_version(void);
+/* Non-zero when the test schema above goes on GeneralTransformation. */
+int prc_write_diag_test_schema_on_transform(void);
 
 /* Writes ContentPRCBase/ContentPRCRefBase's `name` field (Table 31): bit
    same=1 with no following string if `name` is NULL (matching this write

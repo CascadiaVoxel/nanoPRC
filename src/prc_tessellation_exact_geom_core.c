@@ -224,6 +224,15 @@ prc_sample_coedge(prc_context *ctx, prc_nano_brep_ref_data *brep_ref_data,
                     prc_error(ctx, code, "Error in prc_sample_curve\n");
                     return code;
                 }
+#if 1
+                /* Print the curve samples for debug */
+                fprintf(stderr, "prc_sample_coedge: num_samples=%u\n", wire_samples.number_of_points);
+                for (uint32_t i = 0; i < wire_samples.number_of_points; i++)
+                {
+                        prc_vec3 p = wire_samples.points[i];
+                        fprintf(stderr, "prc_sample_coedge: point[%u] = (%f, %f, %f)\n", i, p.x, p.y, p.z);
+                }
+#endif
             }
             else
             {
@@ -2249,6 +2258,176 @@ prc_subdivide_trim_boundary_triangle(prc_context *ctx, uint32_t num_loops, const
     return 0;
 }
 
+/* Evaluates the loop's curve coordinate b(a) at query coordinate q along
+   wrap_axis (0 = u wraps, returns v; 1 = v wraps, returns u). */
+   static double
+       prc_eval_wrapping_loop_curve(const prc_loop_samples *loop, uint8_t wrap_axis, prc_vec2 q)
+   {
+       uint32_t count = (loop->num_samples > 0) ? (loop->num_samples - 1) : 0;
+       double a_first, a_last, period, mid, qa, qa_shifted;
+       uint32_t i;
+
+       if (count < 2)
+           return wrap_axis ? q.x : q.y;
+
+       a_first = wrap_axis ? loop->uv_samples[0].y : loop->uv_samples[0].x;
+       a_last = wrap_axis ? loop->uv_samples[count].y : loop->uv_samples[count].x;
+       period = fabs(a_last - a_first);
+       if (period <= 0.0)
+           return wrap_axis ? loop->uv_samples[0].x : loop->uv_samples[0].y;
+
+       mid = (a_first + a_last) / 2.0;
+       qa = wrap_axis ? q.y : q.x;
+       qa_shifted = qa + period * (double)lround((mid - qa) / period);
+
+       for (i = 0; i < count; i++)
+       {
+           double ai = wrap_axis ? loop->uv_samples[i].y : loop->uv_samples[i].x;
+           double bi = wrap_axis ? loop->uv_samples[i].x : loop->uv_samples[i].y;
+           double ai1 = wrap_axis ? loop->uv_samples[i + 1].y : loop->uv_samples[i + 1].x;
+           double bi1 = wrap_axis ? loop->uv_samples[i + 1].x : loop->uv_samples[i + 1].y;
+
+           if ((ai <= qa_shifted && qa_shifted <= ai1) || (ai1 <= qa_shifted && qa_shifted <= ai))
+           {
+               double t = (ai1 != ai) ? (qa_shifted - ai) / (ai1 - ai) : 0.0;
+               return bi + t * (bi1 - bi);
+           }
+       }
+
+       return (fabs(qa_shifted - a_first) < fabs(qa_shifted - a_last)) ?
+           (wrap_axis ? loop->uv_samples[0].x : loop->uv_samples[0].y) :
+           (wrap_axis ? loop->uv_samples[count].x : loop->uv_samples[count].y);
+   }
+
+   /* Signed distance from UV point q to the material side of a wrapping loop
+      (>= 0 is inside, < 0 is outside). */
+   static double
+       prc_wrapping_loop_signed_dist(const prc_loop_samples *loop, uint8_t wrap_axis, int32_t wind, prc_vec2 q)
+   {
+       double qb = wrap_axis ? q.x : q.y;
+       double b_curve = prc_eval_wrapping_loop_curve(loop, wrap_axis, q);
+       return (wind > 0) ? (qb - b_curve) : (b_curve - qb);
+   }
+
+   /* Clips one UV grid triangle against all wrapping loops using Sutherland-Hodgman
+      polygon clipping and appends the resulting 1..3 triangles to the fringe buffers. */
+   static int
+       prc_clip_wrapping_triangle_to_loops(prc_context *ctx, uint32_t num_loops, const prc_loop_samples *loop_samples,
+           prc_vec2 uv0, prc_vec2 uv1, prc_vec2 uv2,
+           prc_vec2 **out_verts, uint32_t *out_num_verts, uint32_t *out_verts_cap,
+           uint32_t **out_tris, uint32_t *out_num_triangles, uint32_t *out_tris_cap)
+   {
+       prc_vec2 poly[12];
+       prc_vec2 next_poly[12];
+       uint32_t poly_count = 3;
+       uint32_t k, i;
+
+       poly[0] = uv0;
+       poly[1] = uv1;
+       poly[2] = uv2;
+
+       for (k = 0; k < num_loops; k++)
+       {
+           const prc_loop_samples *loop = &loop_samples[k];
+           uint8_t wrap_axis;
+           int32_t wind;
+           uint32_t next_count = 0;
+
+           if (loop->is_point_loop || (loop->wind_u == 0 && loop->wind_v == 0))
+               continue;
+
+           wrap_axis = (loop->wind_u != 0) ? 0 : 1;
+           wind = wrap_axis ? loop->wind_v : loop->wind_u;
+
+           for (i = 0; i < poly_count; i++)
+           {
+               prc_vec2 curr = poly[i];
+               prc_vec2 prev = poly[(i + poly_count - 1) % poly_count];
+               double d_curr = prc_wrapping_loop_signed_dist(loop, wrap_axis, wind, curr);
+               double d_prev = prc_wrapping_loop_signed_dist(loop, wrap_axis, wind, prev);
+               int curr_in = (d_curr >= 0.0);
+               int prev_in = (d_prev >= 0.0);
+
+               if (curr_in != prev_in)
+               {
+                   double denom = d_prev - d_curr;
+                   double t = (fabs(denom) > 1e-15) ? (d_prev / denom) : 0.0;
+                   prc_vec2 hit;
+
+                   if (t < 0.0) t = 0.0;
+                   if (t > 1.0) t = 1.0;
+                   hit.x = prev.x + t * (curr.x - prev.x);
+                   hit.y = prev.y + t * (curr.y - prev.y);
+                   if (next_count < 12)
+                       next_poly[next_count++] = hit;
+               }
+               if (curr_in && next_count < 12)
+               {
+                   next_poly[next_count++] = curr;
+               }
+           }
+
+           poly_count = next_count;
+           if (poly_count < 3)
+               return 0;
+
+           memcpy(poly, next_poly, poly_count * sizeof(prc_vec2));
+       }
+
+       /* Emit fan triangles from the clipped convex polygon (skipping degenerate slivers) */
+       for (i = 1; i + 1 < poly_count; i++)
+       {
+           prc_vec2 a = poly[0];
+           prc_vec2 b = poly[i];
+           prc_vec2 c = poly[i + 1];
+           double area2 = fabs((b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x));
+
+           if (area2 < 1e-14)
+               continue;
+
+           if (*out_num_verts + 3 > *out_verts_cap)
+           {
+               uint32_t new_cap = (*out_verts_cap == 0) ? 64 : (*out_verts_cap * 2);
+               prc_vec2 *new_verts;
+
+               while (new_cap < *out_num_verts + 3)
+                   new_cap *= 2;
+               new_verts = (prc_vec2 *)prc_realloc(ctx, *out_verts, new_cap * sizeof(prc_vec2));
+               if (new_verts == NULL)
+               {
+                   prc_error(ctx, PRC_ERROR_MEMORY, "Failed to grow vertices in prc_clip_wrapping_triangle_to_loops\n");
+                   return PRC_ERROR_MEMORY;
+               }
+               *out_verts = new_verts;
+               *out_verts_cap = new_cap;
+           }
+           if (*out_num_triangles + 1 > *out_tris_cap)
+           {
+               uint32_t new_cap = (*out_tris_cap == 0) ? 32 : (*out_tris_cap * 2);
+               uint32_t *new_tris = (uint32_t *)prc_realloc(ctx, *out_tris, new_cap * 3 * sizeof(uint32_t));
+
+               if (new_tris == NULL)
+               {
+                   prc_error(ctx, PRC_ERROR_MEMORY, "Failed to grow triangles in prc_clip_wrapping_triangle_to_loops\n");
+                   return PRC_ERROR_MEMORY;
+               }
+               *out_tris = new_tris;
+               *out_tris_cap = new_cap;
+           }
+
+           (*out_verts)[*out_num_verts + 0] = a;
+           (*out_verts)[*out_num_verts + 1] = b;
+           (*out_verts)[*out_num_verts + 2] = c;
+           (*out_tris)[*out_num_triangles * 3 + 0] = *out_num_verts + 0;
+           (*out_tris)[*out_num_triangles * 3 + 1] = *out_num_verts + 1;
+           (*out_tris)[*out_num_triangles * 3 + 2] = *out_num_verts + 2;
+           *out_num_verts += 3;
+           *out_num_triangles += 1;
+       }
+
+       return 0;
+   }
+
 /* Tessellates a curved (Cone/Cylinder/Sphere/Torus) face bounded by loop(s),
    whether a genuine simple closed trim polygon or a loop that winds around a
    periodic uv axis (degenerating to a line rather than an enclosed area in
@@ -2404,60 +2583,16 @@ prc_tessellate_trimmed_face(prc_context *ctx, prc_data *data, uint32_t shell_ind
                 uint32_t vnext_i = (i + 1 == grid.vertex_samples_u && grid.wrap_u) ? 0 : (i + 1);
                 uint32_t vnext_j = (j + 1 == grid.vertex_samples_v && grid.wrap_v) ? 0 : (j + 1);
                 uint32_t i00 = j * grid.vertex_samples_u + i;
+                uint32_t i10 = j * grid.vertex_samples_u + vnext_i;
                 uint32_t i11 = vnext_j * grid.vertex_samples_u + vnext_i;
+                uint32_t i01 = vnext_j * grid.vertex_samples_u + i;
 
-                if (has_wrapping_loop)
+                if (prc_point_inside_trimmed_region(num_loops, loop_samples, grid.uv[i00]) &&
+                    prc_point_inside_trimmed_region(num_loops, loop_samples, grid.uv[i10]) &&
+                    prc_point_inside_trimmed_region(num_loops, loop_samples, grid.uv[i11]) &&
+                    prc_point_inside_trimmed_region(num_loops, loop_samples, grid.uv[i01]))
                 {
-                    if (wrap_axis == 0) // Loops wrap U-axis (Longitude)
-                    {
-                        double v0 = grid.uv[i00].y;
-                        double v1 = grid.uv[i11].y;
-
-                        /* Fix: Longitude wraps full 360, so ignore U trim limits completely.
-                           Only restrict rows along the flat, linear V height axis. */
-                        if (v0 >= min_trim_v - 0.001 && v1 <= max_trim_v + 0.001)
-                        {
-                            cell_inside_raw[j * cell_count_u + i] = 1;
-                        }
-                        else
-                        {
-                            cell_inside_raw[j * cell_count_u + i] = 0;
-                            if (!grid.wrap_v) {
-                                cell_processed[j * cell_count_u + i] = 1;
-                            }
-                        }
-                    }
-                    else // Loops wrap V-axis (Latitude)
-                    {
-                        double u0 = grid.uv[i00].x;
-                        double u1 = grid.uv[i11].x;
-
-                        /* Fix: Latitude wraps full 360, so ignore V trim limits completely.
-                           Only restrict columns along the flat, linear U axis. */
-                        if (u0 >= min_trim_u - 0.001 && u1 <= max_trim_u + 0.001)
-                        {
-                            cell_inside_raw[j * cell_count_u + i] = 1;
-                        }
-                        else
-                        {
-                            cell_inside_raw[j * cell_count_u + i] = 0;
-                            if (!grid.wrap_u) {
-                                cell_processed[j * cell_count_u + i] = 1;
-                            }
-                        }
-                    }
-                }
-                else
-                {
-                    uint32_t i10 = j * grid.vertex_samples_u + vnext_i;
-                    uint32_t i01 = vnext_j * grid.vertex_samples_u + i;
-                    if (prc_point_inside_trimmed_region(num_loops, loop_samples, grid.uv[i00]) &&
-                        prc_point_inside_trimmed_region(num_loops, loop_samples, grid.uv[i10]) &&
-                        prc_point_inside_trimmed_region(num_loops, loop_samples, grid.uv[i11]) &&
-                        prc_point_inside_trimmed_region(num_loops, loop_samples, grid.uv[i01]))
-                    {
-                        cell_inside_raw[j * cell_count_u + i] = 1;
-                    }
+                    cell_inside_raw[j * cell_count_u + i] = 1;
                 }
             }
         }
@@ -2627,6 +2762,7 @@ prc_tessellate_trimmed_face(prc_context *ctx, prc_data *data, uint32_t shell_ind
             for (i = 0; i < cell_count_u; i++)
             {
                 uint32_t vnext_i, vnext_j, i00, i10, i11, i01;
+                prc_vec2 uv00, uv10, uv11, uv01;
 
                 if (cell_processed[j * cell_count_u + i])
                     continue;
@@ -2638,20 +2774,48 @@ prc_tessellate_trimmed_face(prc_context *ctx, prc_data *data, uint32_t shell_ind
                 i11 = vnext_j * grid.vertex_samples_u + vnext_i;
                 i01 = vnext_j * grid.vertex_samples_u + i;
 
-                /* Fixed uv-space CCW winding regardless of orientation,
-                   matching the ear-clip fringe's own convention below --
-                   the shared triangle-output loop further down applies the
-                   orientation flip once, the same way it already does for
-                   that fringe */
-                code = prc_subdivide_trim_boundary_triangle(ctx, num_loops, loop_samples,
-                    grid.uv[i00], grid.uv[i10], grid.uv[i11], 0, PRC_TRIM_BOUNDARY_SUBDIVIDE_MAX_DEPTH,
-                    &fringe_verts, &fringe_num_verts, &fringe_verts_cap,
-                    &fringe_triangles, &fringe_num_triangles, &fringe_tris_cap);
-                if (code >= 0)
-                    code = prc_subdivide_trim_boundary_triangle(ctx, num_loops, loop_samples,
-                        grid.uv[i00], grid.uv[i11], grid.uv[i01], 0, PRC_TRIM_BOUNDARY_SUBDIVIDE_MAX_DEPTH,
+                uv00 = grid.uv[i00];
+                uv10 = grid.uv[i10];
+                uv11 = grid.uv[i11];
+                uv01 = grid.uv[i01];
+
+                /* Prevent backward UV interpolation across the periodic seam */
+                if (grid.wrap_u && i + 1 == cell_count_u)
+                {
+                    uv10.x = sampling_info->end_u;
+                    uv11.x = sampling_info->end_u;
+                }
+                if (grid.wrap_v && j + 1 == cell_count_v)
+                {
+                    uv01.y = sampling_info->end_v;
+                    uv11.y = sampling_info->end_v;
+                }
+
+                if (has_wrapping_loop)
+                {
+                    code = prc_clip_wrapping_triangle_to_loops(ctx, num_loops, loop_samples,
+                        uv00, uv10, uv11,
                         &fringe_verts, &fringe_num_verts, &fringe_verts_cap,
                         &fringe_triangles, &fringe_num_triangles, &fringe_tris_cap);
+                    if (code >= 0)
+                        code = prc_clip_wrapping_triangle_to_loops(ctx, num_loops, loop_samples,
+                            uv00, uv11, uv01,
+                            &fringe_verts, &fringe_num_verts, &fringe_verts_cap,
+                            &fringe_triangles, &fringe_num_triangles, &fringe_tris_cap);
+                }
+                else
+                {
+                    code = prc_subdivide_trim_boundary_triangle(ctx, num_loops, loop_samples,
+                        uv00, uv10, uv11, 0, PRC_TRIM_BOUNDARY_SUBDIVIDE_MAX_DEPTH,
+                        &fringe_verts, &fringe_num_verts, &fringe_verts_cap,
+                        &fringe_triangles, &fringe_num_triangles, &fringe_tris_cap);
+                    if (code >= 0)
+                        code = prc_subdivide_trim_boundary_triangle(ctx, num_loops, loop_samples,
+                            uv00, uv11, uv01, 0, PRC_TRIM_BOUNDARY_SUBDIVIDE_MAX_DEPTH,
+                            &fringe_verts, &fringe_num_verts, &fringe_verts_cap,
+                            &fringe_triangles, &fringe_num_triangles, &fringe_tris_cap);
+                }
+
                 if (code < 0)
                 {
                     if (has_wrapping_loop)
@@ -2668,6 +2832,7 @@ prc_tessellate_trimmed_face(prc_context *ctx, prc_data *data, uint32_t shell_ind
         }
         goto fringe_done;
     }
+
 
     code = prc_trace_kept_region_boundaries(ctx, cell_inside, grid.vertex_samples_u, grid.vertex_samples_v,
         grid.wrap_u, grid.wrap_v, grid.uv, &traced_loops, &num_traced);

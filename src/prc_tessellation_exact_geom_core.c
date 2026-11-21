@@ -4175,6 +4175,36 @@ prc_map_loops_to_surface(prc_context *ctx, prc_topo_face *topo_face, uint8_t ori
             prc_normalize_periodic_loop_phase(loop_samples, k, 0);
             prc_normalize_periodic_loop_phase(loop_samples, k, 1);
 
+            /* If this loop wraps U (wind_u != 0) on a torus, its V coordinate is periodic
+               in [0, 2*PI). If noise near V=0 pushed the unwrapped V curve to ~2*PI,
+               shift it back by -2*PI so it sits at V=0 inside the grid's [0, 2*PI] domain. */
+            if (curr_loop->wind_u != 0 && curr_loop->wind_v == 0 && num_samples > 0)
+            {
+                double sum_v = 0.0;
+                for (j = 0; j < num_samples; j++)
+                    sum_v += curr_loop->uv_samples[j].y;
+                double mean_v = sum_v / (double)num_samples;
+
+                if (mean_v > 2.0 * PRC_PI - 0.05)
+                {
+                    for (j = 0; j < num_samples; j++)
+                        curr_loop->uv_samples[j].y -= 2.0 * PRC_PI;
+                }
+            }
+            if (curr_loop->wind_v != 0 && curr_loop->wind_u == 0 && num_samples > 0)
+            {
+                double sum_u = 0.0;
+                for (j = 0; j < num_samples; j++)
+                    sum_u += curr_loop->uv_samples[j].x;
+                double mean_u = sum_u / (double)num_samples;
+
+                if (mean_u > 2.0 * PRC_PI - 0.05)
+                {
+                    for (j = 0; j < num_samples; j++)
+                        curr_loop->uv_samples[j].x -= 2.0 * PRC_PI;
+                }
+            }
+
             for (j = 0; j < num_samples; j++)
             {
                 curr_loop->uv_samples[j].x = (curr_loop->uv_samples[j].x - torus->parameterization.u_param_coeff_b) / u_coeff_a;
@@ -4204,25 +4234,25 @@ prc_map_loops_to_surface(prc_context *ctx, prc_topo_face *topo_face, uint8_t ori
                     test_xyz.x, test_xyz.y, test_xyz.z, test2_xyz.x - test_xyz.x, test2_xyz.y - test_xyz.y, test2_xyz.z - test_xyz.z);
 #endif
             }
-#ifdef PRC_DEBUG_TORUS_TRIM
-            fprintf(stderr, "=== TORUS UV MAPPING DEBUG ===\n");
-            fprintf(stderr, "Torus major_radius=%.6f, minor_radius=%.6f, has_transform=%u, is_identity=%u\n",
-                major_radius, minor_radius, torus->has_transform, torus->exact_geom_transform.is_identity);
-            fprintf(stderr, "Param coeffs: u_a=%.6f, u_b=%.6f, v_a=%.6f, v_b=%.6f\n",
-                torus->parameterization.u_param_coeff_a, torus->parameterization.u_param_coeff_b,
-                torus->parameterization.v_param_coeff_a, torus->parameterization.v_param_coeff_b);
-            for (k = 0; k < num_loops; k++) {
-                fprintf(stderr, "Loop[%u]: num_samples=%u, wind_u=%d, wind_v=%d\n",
-                    k, loop_samples[k].num_samples, loop_samples[k].wind_u, loop_samples[k].wind_v);
-                for (j = 0; j < loop_samples[k].num_samples; j += 8) { // print every 8th sample + endpoints
-                    fprintf(stderr, "  pt[%u]: local_xyz=(%.4f, %.4f, %.4f) -> uv=(%.4f, %.4f)\n",
-                        j, loop_samples[k].samples[j].x, loop_samples[k].samples[j].y, loop_samples[k].samples[j].z,
-                        loop_samples[k].uv_samples[j].x, loop_samples[k].uv_samples[j].y);
-                }
-            }
-            fprintf(stderr, "==============================\n");
-#endif
         }
+#ifdef PRC_DEBUG_TORUS_TRIM
+        fprintf(stderr, "=== TORUS UV MAPPING DEBUG ===\n");
+        fprintf(stderr, "Torus major_radius=%.6f, minor_radius=%.6f, has_transform=%u, is_identity=%u\n",
+            major_radius, minor_radius, torus->has_transform, torus->exact_geom_transform.is_identity);
+        fprintf(stderr, "Param coeffs: u_a=%.6f, u_b=%.6f, v_a=%.6f, v_b=%.6f\n",
+            torus->parameterization.u_param_coeff_a, torus->parameterization.u_param_coeff_b,
+            torus->parameterization.v_param_coeff_a, torus->parameterization.v_param_coeff_b);
+        for (k = 0; k < num_loops; k++) {
+            fprintf(stderr, "Loop[%u]: num_samples=%u, wind_u=%d, wind_v=%d\n",
+                k, loop_samples[k].num_samples, loop_samples[k].wind_u, loop_samples[k].wind_v);
+            for (j = 0; j < loop_samples[k].num_samples; j += 8) { // print every 8th sample + endpoints
+                fprintf(stderr, "  pt[%u]: local_xyz=(%.4f, %.4f, %.4f) -> uv=(%.4f, %.4f)\n",
+                    j, loop_samples[k].samples[j].x, loop_samples[k].samples[j].y, loop_samples[k].samples[j].z,
+                    loop_samples[k].uv_samples[j].x, loop_samples[k].uv_samples[j].y);
+            }
+        }
+        fprintf(stderr, "==============================\n");
+#endif
         break;
     }
 

@@ -22,6 +22,8 @@
 #include <math.h>
 #include <string.h>
 
+#define PRC_DEBUG_TORUS_TRIM 1
+
 /* One node of the circular doubly-linked-list polygon used for ear clipping.
       uv is a plain surface parameter (u, v), not a screen coordinate */
 typedef struct prc_tri_vertex_s
@@ -2325,6 +2327,15 @@ prc_tessellate_trimmed_face(prc_context *ctx, prc_data *data, uint32_t shell_ind
         }
     }
 
+#ifdef PRC_DEBUG_TORUS_TRIM
+    fprintf(stderr, "=== TRIMMED GRID DEBUG ===\n");
+    fprintf(stderr, "Grid samples: u=%u (wrap=%u), v=%u (wrap=%u) | cells: u=%u, v=%u\n",
+        grid.vertex_samples_u, grid.wrap_u, grid.vertex_samples_v, grid.wrap_v,
+        cell_count_u, cell_count_v);
+    fprintf(stderr, "Sampling domain: u=[%.4f, %.4f], v=[%.4f, %.4f]\n",
+        sampling_info->start_u, sampling_info->end_u, sampling_info->start_v, sampling_info->end_v);
+#endif
+
     {
         uint8_t *cell_inside_raw = (uint8_t *)prc_calloc(ctx, cell_count_u * cell_count_v, sizeof(uint8_t));
         cell_processed = (uint8_t *)prc_calloc(ctx, cell_count_u * cell_count_v, sizeof(uint8_t));
@@ -2527,6 +2538,19 @@ prc_tessellate_trimmed_face(prc_context *ctx, prc_data *data, uint32_t shell_ind
                 grid.wrap_u, grid.wrap_v, has_wrapping_loop, wrap_axis,
                 cell_count_u, cell_count_v, raw_inside_count, eroded_inside_count);
         }
+
+#ifdef PRC_DEBUG_TORUS_TRIM
+        {
+            uint32_t raw_cnt = 0, eroded_cnt = 0;
+            for (uint32_t c = 0; c < cell_count_u * cell_count_v; c++) {
+                if (cell_inside_raw[c]) raw_cnt++;
+                if (cell_inside[c]) eroded_cnt++;
+            }
+            fprintf(stderr, "Cells inside: raw=%u / %u, after_erosion=%u\n",
+                raw_cnt, cell_count_u * cell_count_v, eroded_cnt);
+            fprintf(stderr, "==========================\n");
+        }
+#endif
 
         prc_free(ctx, cell_inside_raw);
     };
@@ -3520,6 +3544,64 @@ prc_map_to_two_pi(double angle)
     return angle;
 }
 
+/* Ensure that the periodic curves are mapped to the proper range (e.g. 0 to 2pi) */
+static void
+prc_normalize_periodic_loop_phase(prc_loop_samples *loop_samples, uint32_t loop_idx,
+    uint8_t use_y_component)
+{
+    prc_loop_samples *curr_loop = &loop_samples[loop_idx];
+    uint32_t num_samples = curr_loop->num_samples;
+    int32_t wind = use_y_component ? curr_loop->wind_v : curr_loop->wind_u;
+    uint32_t j;
+
+    if (num_samples == 0 || wind != 0)
+        return;
+
+    if (loop_idx == 0)
+    {
+        double min_val = use_y_component ? curr_loop->uv_samples[0].y : curr_loop->uv_samples[0].x;
+        for (j = 1; j < num_samples; j++)
+        {
+            double val = use_y_component ? curr_loop->uv_samples[j].y : curr_loop->uv_samples[j].x;
+            if (val < min_val)
+                min_val = val;
+        }
+
+        if (min_val < 0.0 || min_val >= 2.0 * PRC_PI)
+        {
+            double shift = 2.0 * PRC_PI * floor(min_val / (2.0 * PRC_PI));
+            for (j = 0; j < num_samples; j++)
+            {
+                if (use_y_component)
+                    curr_loop->uv_samples[j].y -= shift;
+                else
+                    curr_loop->uv_samples[j].x -= shift;
+            }
+        }
+    }
+    else
+    {
+        uint32_t mid_idx = num_samples / 2;
+        uint32_t base_mid_idx = loop_samples[0].num_samples / 2;
+        double base_mid = use_y_component ?
+            loop_samples[0].uv_samples[base_mid_idx].y : loop_samples[0].uv_samples[base_mid_idx].x;
+        double curr_mid = use_y_component ?
+            curr_loop->uv_samples[mid_idx].y : curr_loop->uv_samples[mid_idx].x;
+        double shifts = lround((curr_mid - base_mid) / (2.0 * PRC_PI));
+
+        if (shifts != 0.0)
+        {
+            for (j = 0; j < num_samples; j++)
+            {
+                if (use_y_component)
+                    curr_loop->uv_samples[j].y -= shifts * (2.0 * PRC_PI);
+                else
+                    curr_loop->uv_samples[j].x -= shifts * (2.0 * PRC_PI);
+            }
+        }
+    }
+}
+
 /* Based upon surface type, map the 3D points to the UV surface storing
    the values in loop_samples structure. At this point, the loops are samples of
    the path in 3D space on the surface. We will move this to the uv parametric
@@ -3716,6 +3798,7 @@ prc_map_loops_to_surface(prc_context *ctx, prc_topo_face *topo_face, uint8_t ori
                 }
                 curr_loop->wind_u = prc_unwrap_angular_component(curr_loop->uv_samples, num_samples, 0);
                 curr_loop->wind_v = 0;
+                prc_normalize_periodic_loop_phase(loop_samples, k, 0);
             }
 
             for (j = 0; j < num_samples; j++)
@@ -3773,6 +3856,7 @@ prc_map_loops_to_surface(prc_context *ctx, prc_topo_face *topo_face, uint8_t ori
 
             curr_loop->wind_u = prc_unwrap_angular_component(curr_loop->uv_samples, num_samples, 0);
             curr_loop->wind_v = 0;
+            prc_normalize_periodic_loop_phase(loop_samples, k, 0);
 
             for (j = 0; j < num_samples; j++)
             {
@@ -3838,6 +3922,8 @@ prc_map_loops_to_surface(prc_context *ctx, prc_topo_face *topo_face, uint8_t ori
                to pole), so only u (longitude) is ever unwrapped here */
             curr_loop->wind_u = prc_unwrap_angular_component(curr_loop->uv_samples, num_samples, 0);
             curr_loop->wind_v = 0;
+            /* Normalize non-wrapping loops into the [0, 2*PI) primary domain */
+            prc_normalize_periodic_loop_phase(loop_samples, k, 0);
 
             for (j = 0; j < num_samples; j++)
             {
@@ -3894,32 +3980,9 @@ prc_map_loops_to_surface(prc_context *ctx, prc_topo_face *topo_face, uint8_t ori
             curr_loop->wind_u = prc_unwrap_angular_component(curr_loop->uv_samples, num_samples, 0);
             curr_loop->wind_v = prc_unwrap_angular_component(curr_loop->uv_samples, num_samples, 1);
 
-            /*   Align multiple loops to the same 2*PI phase period box  */
-            if (k > 0)
-            {
-                // Use a point midway through the loops to check the true phase box alignment
-                uint32_t mid_idx = num_samples / 2;
-                uint32_t base_mid_idx = loop_samples[0].num_samples / 2;
-
-                // Find the midway U position of the base loop (Loop 0)
-                double base_u_mid = loop_samples[0].uv_samples[base_mid_idx].x;
-
-                // Find the midway U position of the current loop
-                double current_u_mid = curr_loop->uv_samples[mid_idx].x;
-
-                // Calculate how many full 2*PI phases separate the bodies of these loops
-                double phase_diff = current_u_mid - base_u_mid;
-                double shifts = lround(phase_diff / (2.0 * PRC_PI));
-
-                if (shifts != 0)
-                {
-                    // Shift all samples of this loop back into alignment with Loop 0
-                    for (j = 0; j < num_samples; j++)
-                    {
-                        curr_loop->uv_samples[j].x -= shifts * (2.0 * PRC_PI);
-                    }
-                }
-            }
+            /* Normalize non-wrapping loops into the [0, 2*PI) primary domain */
+            prc_normalize_periodic_loop_phase(loop_samples, k, 0);
+            prc_normalize_periodic_loop_phase(loop_samples, k, 1);
 
             for (j = 0; j < num_samples; j++)
             {
@@ -3950,6 +4013,24 @@ prc_map_loops_to_surface(prc_context *ctx, prc_topo_face *topo_face, uint8_t ori
                     test_xyz.x, test_xyz.y, test_xyz.z, test2_xyz.x - test_xyz.x, test2_xyz.y - test_xyz.y, test2_xyz.z - test_xyz.z);
 #endif
             }
+#ifdef PRC_DEBUG_TORUS_TRIM
+            fprintf(stderr, "=== TORUS UV MAPPING DEBUG ===\n");
+            fprintf(stderr, "Torus major_radius=%.6f, minor_radius=%.6f, has_transform=%u, is_identity=%u\n",
+                major_radius, minor_radius, torus->has_transform, torus->exact_geom_transform.is_identity);
+            fprintf(stderr, "Param coeffs: u_a=%.6f, u_b=%.6f, v_a=%.6f, v_b=%.6f\n",
+                torus->parameterization.u_param_coeff_a, torus->parameterization.u_param_coeff_b,
+                torus->parameterization.v_param_coeff_a, torus->parameterization.v_param_coeff_b);
+            for (k = 0; k < num_loops; k++) {
+                fprintf(stderr, "Loop[%u]: num_samples=%u, wind_u=%d, wind_v=%d\n",
+                    k, loop_samples[k].num_samples, loop_samples[k].wind_u, loop_samples[k].wind_v);
+                for (j = 0; j < loop_samples[k].num_samples; j += 8) { // print every 8th sample + endpoints
+                    fprintf(stderr, "  pt[%u]: local_xyz=(%.4f, %.4f, %.4f) -> uv=(%.4f, %.4f)\n",
+                        j, loop_samples[k].samples[j].x, loop_samples[k].samples[j].y, loop_samples[k].samples[j].z,
+                        loop_samples[k].uv_samples[j].x, loop_samples[k].uv_samples[j].y);
+                }
+            }
+            fprintf(stderr, "==============================\n");
+#endif
         }
         break;
     }

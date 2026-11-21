@@ -1420,10 +1420,6 @@ prc_create_deduced_curve(prc_context *ctx, prc_compressed_curve *src_curve,
         printf("Input des_end:         (%.6f, %.6f, %.6f)\n", des_end.x, des_end.y, des_end.z);
         printf("Chord Midpoint:        (%.6f, %.6f, %.6f)\n", chord_mid.x, chord_mid.y, chord_mid.z);
         printf("Half Chord Length:     %.6f\n", half_chord_len);
-        printf("Bisector Direction:    (%.6f, %.6f, %.6f)\n", bisector_dir.x, bisector_dir.y, bisector_dir.z);
-        printf("Distance to Center:    %.6f\n", dist_to_center);
-        printf("Calculated Center (+): (%.6f, %.6f, %.6f)\n", center_pos.x, center_pos.y, center_pos.z);
-        printf("Alternative Center(-): (%.6f, %.6f, %.6f)\n", center_neg.x, center_neg.y, center_neg.z);
         printf("Chosen Offset Type:    %s\n", use_negative_offset ? "NEGATIVE (-)" : "POSITIVE (+)");
         printf("Final Assigned Center: (%.6f, %.6f, %.6f)\n", des_center.x, des_center.y, des_center.z);
         printf("----------------------------\n\n");

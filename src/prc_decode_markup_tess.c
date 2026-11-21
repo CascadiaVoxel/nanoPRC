@@ -513,7 +513,11 @@ prc_decode_markup_tess(prc_context *ctx, prc_tess_markup *data)
                     num_primitives++;
                 }
             }
-            else if (extra_data_type == PRC_TEXT_ENTITY)
+
+            /* A text entity stores two doubles (its width and height), so it is never
+               reached through the num_doubles == 0 side of the test above. The primitive
+               is made here, after it, for every text entity. */
+            if (extra_data_type == PRC_TEXT_ENTITY)
             {
                 /* Add a primitive */
                 uint32_t string_length;

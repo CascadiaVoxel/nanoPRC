@@ -870,7 +870,7 @@ void Scene::load(const char *infile, Camera *camera, bool memoryLeakCheck, bool 
         printf("Scene::load: prc_api_get_number_tessellations failed\n");
         exit(1);
     }
-    prc_api_tess *tesses = new prc_api_tess[totalTesselations];
+    prc_api_tess *tesses = new prc_api_tess[totalTesselations]();
     prc_api_tess *tesses_line = NULL;
     prc_api_tess *tesses_exact = NULL;
     uint32_t line_tess_index = 0;
@@ -921,7 +921,7 @@ void Scene::load(const char *infile, Camera *camera, bool memoryLeakCheck, bool 
         }
 
         tess.num_faces = nFaces;
-        tess.tess_faces = new prc_api_face[nFaces];
+        tess.tess_faces = new prc_api_face[nFaces]();
 
         int code = prc_api_initialize_tessellation(ctx, data, model_tree, k, &tess,
                                                    tess_line, &has_line);
@@ -935,7 +935,7 @@ void Scene::load(const char *infile, Camera *camera, bool memoryLeakCheck, bool 
         if (has_line)
         {
             tess_line->num_faces = nFaces;
-            tess_line->tess_faces = new prc_api_face[nFaces];
+            tess_line->tess_faces = new prc_api_face[nFaces]();
         }
 
         if (tess.type == PRC_API_TESS_UNKNOWN)
@@ -1003,7 +1003,7 @@ void Scene::load(const char *infile, Camera *camera, bool memoryLeakCheck, bool 
         uint32_t tess_count = 0;
         uint32_t shell_count, face_count;
 
-        tesses_exact = new prc_api_tess[exact_geom_object_count];
+        tesses_exact = new prc_api_tess[exact_geom_object_count]();
         if (tesses_exact == NULL)
         {
             printf("Scene::load: failed to allocate exact tessellation array\n");
@@ -1031,7 +1031,7 @@ void Scene::load(const char *infile, Camera *camera, bool memoryLeakCheck, bool 
             {
                 face_count = prc_api_get_number_exact_geom_faces(ctx, data, k, j);
                 tesses_exact[k].shells[j].num_faces = face_count;
-                tesses_exact[k].shells[j].shell_faces = new prc_api_face[face_count];
+                tesses_exact[k].shells[j].shell_faces = new prc_api_face[face_count]();
                 if (tesses_exact[k].shells[j].shell_faces == NULL)
                 {
                     printf("Scene::load: failed to allocate exact tessellation face array\n");

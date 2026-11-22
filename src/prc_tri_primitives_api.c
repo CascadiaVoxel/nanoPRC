@@ -6613,10 +6613,19 @@ prc_api_get_tessellation_vertices(prc_context *ctx, prc_api_data data_in,
             face_is_transparent = face_out->material.diffuse_alpha < 1.0f;
         else if (!face_out->vertices_have_style)
         {
-            if (face_out->face_vertices.num_vertices > 0)
+            /* A compressed tessellation never fills face_out->face_vertices:
+               its faces share the tessellation's vertex buffer. So that field
+               is not looked at for one, whatever the caller left in it (a
+               caller that did not zero its prc_api_face, as the viewer did
+               not, has garbage there: 3D-PDF-Sample-Shoe crashed on it), and
+               the shared buffer, which this call has just built at face 0, is. */
+            if (api_tess->type == PRC_API_TESS_3D_Compressed)
+            {
+                if (face_index == 0)
+                    face_is_transparent = prc_api_vertices_have_partial_alpha(&api_tess->tess_vertices);
+            }
+            else if (face_out->face_vertices.num_vertices > 0)
                 face_is_transparent = prc_api_vertices_have_partial_alpha(&face_out->face_vertices);
-            else if (face_index == 0)
-                face_is_transparent = prc_api_vertices_have_partial_alpha(&api_tess->tess_vertices);
         }
         if (face_is_transparent)
             face_out->has_transparency = 1;

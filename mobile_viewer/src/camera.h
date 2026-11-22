@@ -34,6 +34,8 @@ struct View_s
     char *name;
     Vector3 position;
     float pitch, yaw, roll;
+    Quaternion orientation;
+    Vector3 orbitCenter;
 };
 
 class Camera
@@ -79,59 +81,15 @@ public:
     constexpr void setCurrentViewIndex(uint32_t index) { _currentViewIndex = index; }
     constexpr uint32_t getCurrentViewIndex() const { return _currentViewIndex; }
     constexpr uint32_t getNewViewIndex() const { return _newViewIndex; }
-
-    constexpr void upDateView(Product &product)
-    {
-        if (_newViewIndex != _currentViewIndex)
-        {
-            if (_viewConvexStep == 0)
-            {
-                _productModel = product.model();
-            }
-            _viewConvexStep = _viewConvexStep + 1.0 / NUM_VIEW_STEPS;
-            if (_viewConvexStep >= 1.0)
-            {
-                _viewConvexStep = 0.0;
-                _currentViewIndex = _newViewIndex;
-                _productModel = Matrix4(1.0f); // Reset the model transformation
-                product.setModel(_productModel);
-            }
-
-            /* Lets do the translation from the center point */
-            Vector3 pos1 = { _views[_currentViewIndex].position.x - _modelWorldCenter.x,
-                             _views[_currentViewIndex].position.y - _modelWorldCenter.y,
-                             _views[_currentViewIndex].position.z - _modelWorldCenter.z };
-            Vector3 pos2 = { _views[_newViewIndex].position.x - _modelWorldCenter.x,
-                             _views[_newViewIndex].position.y - _modelWorldCenter.y,
-                             _views[_newViewIndex].position.z - _modelWorldCenter.z };
-            _position = {pos1.x * (1.0f - float(_viewConvexStep)) + pos2.x * float(_viewConvexStep) + _modelWorldCenter.x,
-                           pos1.y * (1.0f - float(_viewConvexStep)) + pos2.y * float(_viewConvexStep) + _modelWorldCenter.y,
-                           pos1.z * (1.0f - float(_viewConvexStep)) + pos2.z * float(_viewConvexStep) + _modelWorldCenter.z };
-
-
-            _pitch = _views[_currentViewIndex].pitch * (1.0 - _viewConvexStep) +
-                _views[_newViewIndex].pitch * _viewConvexStep;
-            _yaw = _views[_currentViewIndex].yaw * (1.0 - _viewConvexStep) +
-                _views[_newViewIndex].yaw * _viewConvexStep;
-            _roll = _views[_currentViewIndex].roll * (1.0 - _viewConvexStep) +
-                _views[_newViewIndex].roll * _viewConvexStep;
-
-            /* Move the model transformation back to identity */
-            Matrix4 ident_matrix = Matrix4(1.0f);
-            Matrix4 current_model = product.model();
-            current_model = current_model * (1 - _viewConvexStep) + ident_matrix * _viewConvexStep;
-            product.setModel(current_model);
-
-            update();
-            return;
-        }
-    }
+    void upDateView(Product &product);
 
     Camera();
 
 private:
     Vector3 _position;
     float _pitch, _yaw, _roll;
+
+    Quaternion _orientation;
 
     Matrix4 _productModel;
 

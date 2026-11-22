@@ -3127,18 +3127,45 @@ prc_tessellate_compressed_face(prc_context *ctx, prc_data *data, uint32_t shell_
         torus.major_radius = prc_vec_length_sqrt(x_axis);
         torus.minor_radius = prc_vec_length_sqrt(y_axis);
 
-        /* The non-compressed one is centered at the origin */
-        if (prc_vec_length_sqrt(torus_center) == 0)
+        /* Normalize x_axis and y_axis to form the local orthonormal rotation frame */
+        prc_vec3 x_basis = x_axis;
+        prc_vec3 y_basis = y_axis;
+        prc_vec3 z_basis;
+
+        if (prc_vec_normalize_sqrt(&x_basis) < 0)
         {
+            x_basis.x = 1.0; x_basis.y = 0.0; x_basis.z = 0.0;
+        }
+        if (prc_vec_normalize_sqrt(&y_basis) < 0)
+        {
+            y_basis.x = 0.0; y_basis.y = 1.0; y_basis.z = 0.0;
+        }
+
+        /* Re-orthogonalize y_basis via z_basis = x_basis x y_basis so the frame is strictly right-handed */
+        prc_vec_cross(x_basis, y_basis, &z_basis);
+        if (prc_vec_normalize_sqrt(&z_basis) < 0)
+        {
+            z_basis.x = 0.0; z_basis.y = 0.0; z_basis.z = 1.0;
+        }
+        prc_vec_cross(z_basis, x_basis, &y_basis);
+
+        const double eps = 1e-12;
+        if (prc_vec_length_sqrt(torus_center) < eps &&
+            fabs(x_basis.x - 1.0) < eps && fabs(x_basis.y) < eps && fabs(x_basis.z) < eps &&
+            fabs(y_basis.x) < eps && fabs(y_basis.y - 1.0) < eps && fabs(y_basis.z) < eps)
+        {
+            torus.has_transform = 0;
             torus.transform.behavior = 0;
             torus.exact_geom_transform.is_identity = 1;
         }
         else
         {
-            /* Need to translate the torus */
             torus.has_transform = 1;
-            torus.transform.behavior = PRC_TRANSFORMATION_Translate;
+            torus.transform.behavior = PRC_TRANSFORMATION_Translate | PRC_TRANSFORMATION_Rotate;
             torus.transform.translation = torus_center;
+            torus.transform.rotation[0] = x_basis;
+            torus.transform.rotation[1] = y_basis;
+            torus.transform.scale = 1.0;
         }
 
         torus.parameterization.u_param_coeff_a = 1;

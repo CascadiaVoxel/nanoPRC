@@ -14,64 +14,87 @@
     along with nanoPRC. If not, see <https://www.gnu.org/licenses/>.
 */
 
+#include <cmath>
 #include <string.h>
 #include "camera.h"
 
-
-#if 0
-void Camera::update()
+static Quaternion matrixToQuaternion(const Matrix4 &m)
 {
-    Quaternion qy = mutil::rotateaxis(Vector3(1.0f, 0.0f, 0.0f), mutil::radians(_pitch));
-    Quaternion qx = mutil::rotateaxis(Vector3(0.0f, 1.0f, 0.0f), mutil::radians(_yaw));
-    Quaternion qz = mutil::rotateaxis(Vector3(0.0f, 0.0f, 1.0f), mutil::radians(_roll));
+    // m.columns[col].{x,y,z} corresponds to row {0,1,2}, column {col}
+    float m00 = m.columns[0].x, m01 = m.columns[1].x, m02 = m.columns[2].x;
+    float m10 = m.columns[0].y, m11 = m.columns[1].y, m12 = m.columns[2].y;
+    float m20 = m.columns[0].z, m21 = m.columns[1].z, m22 = m.columns[2].z;
 
-    Quaternion q = qx * qy * qz;
+    float trace = m00 + m11 + m22;
+    Quaternion q;
 
-    _front = mutil::rotatevector(q, Vector3(0.0f, 0.0f, 1.0f));
-    _right = normalize(cross(_front, kWorldUp));
-    _up = cross(_right, _front);
+    if (trace > 0.0f)
+    {
+        float s = 0.5f / std::sqrt(trace + 1.0f);
+        q.w = 0.25f / s;
+        q.x = (m21 - m12) * s;
+        q.y = (m02 - m20) * s;
+        q.z = (m10 - m01) * s;
+    }
+    else if (m00 > m11 && m00 > m22)
+    {
+        float s = 2.0f * std::sqrt(1.0f + m00 - m11 - m22);
+        q.w = (m21 - m12) / s;
+        q.x = 0.25f * s;
+        q.y = (m01 + m10) / s;
+        q.z = (m02 + m20) / s;
+    }
+    else if (m11 > m22)
+    {
+        float s = 2.0f * std::sqrt(1.0f + m11 - m00 - m22);
+        q.w = (m02 - m20) / s;
+        q.x = (m01 + m10) / s;
+        q.y = 0.25f * s;
+        q.z = (m12 + m21) / s;
+    }
+    else
+    {
+        float s = 2.0f * std::sqrt(1.0f + m22 - m00 - m11);
+        q.w = (m10 - m01) / s;
+        q.x = (m02 + m20) / s;
+        q.y = (m12 + m21) / s;
+        q.z = 0.25f * s;
+    }
 
-    _view = lookAt(_position, _position + _front, _up);
-
-    _projection = perspective(mutil::radians(_fov), _aspect, _near, _far);
+    return mutil::normalize(q);
 }
-#else
+
+static Quaternion safeSlerp(const Quaternion &a, const Quaternion &b, float t)
+{
+    Quaternion target = b;
+    float d = mutil::dot(a, b);
+    if (d < 0.0f)
+    {
+        target = -b;
+        d = -d;
+    }
+    if (d > 0.9995f)
+    {
+        return mutil::normalize(a * (1.0f - t) + target * t);
+    }
+    float theta = std::acos(d);
+    float sinTheta = std::sin(theta);
+    float w0 = std::sin((1.0f - t) * theta) / sinTheta;
+    float w1 = std::sin(t * theta) / sinTheta;
+    return mutil::normalize(a * w0 + target * w1);
+}
+
 void Camera::update()
 {
-    // Data given in row centric manner
-    Matrix3 R_psi = Matrix3(1, 0, 0, 0, cos((double)mutil::radians(_yaw)),
-        -sin((double)mutil::radians(_yaw)), 0, sin((double)mutil::radians(_yaw)),
-        cos((double)mutil::radians(_yaw)));
+    Vector3 front3 = mutil::rotatevector(_orientation, Vector3(0.0f, 0.0f, 1.0f));
+    Vector3 up3 = mutil::rotatevector(_orientation, Vector3(0.0f, 1.0f, 0.0f));
 
-    Matrix3 R_theta = Matrix3(cos((double)mutil::radians(_pitch)), 0, sin((double)mutil::radians(_pitch)),
-        0, 1, 0, -sin((double)mutil::radians(_pitch)), 0, cos((double)mutil::radians(_pitch)));
-    Matrix3 R_phi = Matrix3(cos((double)mutil::radians(_roll)), -sin((double)mutil::radians(_roll)), 0,
-        sin((double)mutil::radians(_roll)), cos((double)mutil::radians(_roll)), 0, 0, 0, 1);
-
-    Matrix3 Rtemp = R_phi * R_theta;
-    Matrix3 Rtemp2 = Rtemp * R_psi;
-    Matrix3 R = R_phi * R_theta * R_psi;
-
-    // Load R into _view
-    _view = Matrix4(1.0f);
-    _view.columns[0] = Vector4(R.columns[0].x, R.columns[0].y, R.columns[0].z, 0.0f);
-    _view.columns[1] = Vector4(R.columns[1].x, R.columns[1].y, R.columns[1].z, 0.0f);
-    _view.columns[2] = Vector4(R.columns[2].x, R.columns[2].y, R.columns[2].z, 0.0f);
-    _view.columns[3] = Vector4(_position.x, _position.y, _position.z, 1.0f);
-
-    /* Find the front vector and the up vector */
-    Vector4 front  = _view * Vector4(0.0f, 0.0f, 1.0f, 0.0f);
-    Vector3 front3 = Vector3(front.x, front.y, front.z);
-    Vector4 up = _view * Vector4(0.0f, 1.0f, 0.0f, 0.0f);
-    Vector3 up3 = Vector3(up.x, up.y, up.z);
-
-    _front = front3;
-    _up = up3;
+    _front = normalize(front3);
+    _up = normalize(up3);
     _right = normalize(cross(_front, _up));
     _view = lookAt(_position, _position + _front, _up);
     _projection = perspective(mutil::radians(_fov), _aspect, _near, _far);
 }
-#endif
 
 double Camera::getCurrentViewCenterOrbitZ(void)
 {
@@ -149,17 +172,99 @@ void Camera::addView(double *in_matrix, double z_center, int index, char *name)
     _views[index].pitch = mutil::degrees(pitch);
     _views[index].yaw = mutil::degrees(yaw);
     _views[index].roll = mutil::degrees(roll);
+    _views[index].orientation = matrixToQuaternion(_views[index].cam_pos);
+    Vector4 offset_vector = Vector4(0.0f, 0.0f, (float)z_center, 1.0f);
+    Vector4 world_pivot = _views[index].cam_pos * offset_vector;
+    _views[index].orbitCenter = Vector3(world_pivot.x, world_pivot.y, world_pivot.z);
 
     if (index == 0)
     {
-        Vector4 offset_vector = Vector4(0.0, 0.0, z_center, 1.0);
-        _modelWorldCenter = _views[index].cam_pos * offset_vector;
+        _modelWorldCenter = world_pivot;
     }
+}
+
+void Camera::upDateView(Product &product)
+{
+    if (_newViewIndex == _currentViewIndex)
+    {
+        return;
+    }
+
+    if (_viewConvexStep == 0.0)
+    {
+        _productModel = product.model();
+    }
+
+    _viewConvexStep += 1.0 / NUM_VIEW_STEPS;
+    float t = static_cast<float>(_viewConvexStep);
+    if (t > 1.0f)
+    {
+        t = 1.0f;
+    }
+
+    // Smooth ease-in / ease-out
+    float smoothT = t * t * (3.0f - 2.0f * t);
+
+    const View &v0 = _views[_currentViewIndex];
+    const View &v1 = _views[_newViewIndex];
+
+    // 1. Spherical interpolation of camera orientation
+    _orientation = safeSlerp(v0.orientation, v1.orientation, smoothT);
+
+    // 2. Orbit around the interpolated target center so the object stays framed
+    Vector3 pivot = v0.orbitCenter * (1.0f - smoothT) + v1.orbitCenter * smoothT;
+    float r0 = (v0.position - v0.orbitCenter).length();
+    float r1 = (v1.position - v1.orbitCenter).length();
+    float radius = r0 * (1.0f - smoothT) + r1 * smoothT;
+
+    Vector3 forward = mutil::rotatevector(_orientation, Vector3(0.0f, 0.0f, 1.0f));
+    _position = pivot - forward * radius;
+
+    // 3. Smoothly reset any arcball rotation/scale applied to the root product
+    //    (Using rigid quaternion + scale interpolation instead of matrix lerping)
+    Vector3 startScale(
+        Vector3(_productModel.columns[0].x, _productModel.columns[0].y, _productModel.columns[0].z).length(),
+        Vector3(_productModel.columns[1].x, _productModel.columns[1].y, _productModel.columns[1].z).length(),
+        Vector3(_productModel.columns[2].x, _productModel.columns[2].y, _productModel.columns[2].z).length()
+    );
+    Matrix4 rotOnly = _productModel;
+    if (startScale.x > 1e-6f) rotOnly.columns[0] /= startScale.x;
+    if (startScale.y > 1e-6f) rotOnly.columns[1] /= startScale.y;
+    if (startScale.z > 1e-6f) rotOnly.columns[2] /= startScale.z;
+
+    Quaternion qModelStart = matrixToQuaternion(rotOnly);
+    Quaternion qModelCurr = safeSlerp(qModelStart, Quaternion(), smoothT);
+
+    Vector3 transStart(_productModel.columns[3].x, _productModel.columns[3].y, _productModel.columns[3].z);
+    Vector3 transCurr = transStart * (1.0f - smoothT);
+    Vector3 scaleCurr = startScale * (1.0f - smoothT) + Vector3(1.0f, 1.0f, 1.0f) * smoothT;
+
+    Matrix4 modelMat = qModelCurr.torotation();
+    modelMat.columns[0] *= scaleCurr.x;
+    modelMat.columns[1] *= scaleCurr.y;
+    modelMat.columns[2] *= scaleCurr.z;
+    modelMat.columns[3] = Vector4(transCurr.x, transCurr.y, transCurr.z, 1.0f);
+    product.setModel(modelMat);
+
+    if (t >= 1.0f)
+    {
+        _viewConvexStep = 0.0;
+        _currentViewIndex = _newViewIndex;
+        _position = v1.position;
+        _orientation = v1.orientation;
+        _pitch = v1.pitch;
+        _yaw = v1.yaw;
+        _roll = v1.roll;
+        _productModel = Matrix4(1.0f);
+        product.setModel(_productModel);
+    }
+
+    update();
 }
 
 void Camera::setView(int index)
 {
-    if (index >= _numViews)
+    if (index < 0 || index >= (int)_numViews)
     {
         return;
     }
@@ -167,13 +272,16 @@ void Camera::setView(int index)
     _pitch = _views[index].pitch;
     _yaw = _views[index].yaw;
     _roll = _views[index].roll;
+    _orientation = _views[index].orientation;
     _currentViewIndex = index;
     _newViewIndex = index;
+    _viewConvexStep = 0.0;
     update();
 }
 
 Camera::Camera() : _pitch(0.0f), _yaw(0.0f), _roll(0.0f), _numViews(0), _views(nullptr),
                    _fov(45.0f), _near(0.1f), _far(400.0f), _aspect(16.0f / 9.0f)
 {
+    _orientation = Quaternion();
     update();
 }

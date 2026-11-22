@@ -332,6 +332,7 @@ static bool drawDebugMenu(Scene &scene, Camera &camera, float deltaTime, int sha
         {
             static int selectedValue = 0;
             uint32_t numViews = camera.getNumViews();
+            bool isTransitioning = (camera.getCurrentViewIndex() != camera.getNewViewIndex());
 
             if (numViews > 0)
             {
@@ -340,12 +341,16 @@ static bool drawDebugMenu(Scene &scene, Camera &camera, float deltaTime, int sha
                     const char *name = camera.getViewName(i);
                     if (name)
                     {
-                        ImGui::RadioButton(name, &selectedValue, i);
-                        if (ImGui::IsItemClicked())
+                        if (ImGui::RadioButton(name, &selectedValue, i))
                         {
-                            if (i != camera.getCurrentViewIndex())
+                            if (!isTransitioning && i != camera.getCurrentViewIndex())
                             {
                                 camera.setNewViewIndex(i);
+                            }
+                            else
+                            {
+                                // Keep the radio button highlight on the active/target view
+                                selectedValue = static_cast<int>(camera.getNewViewIndex());
                             }
                         }
                     }

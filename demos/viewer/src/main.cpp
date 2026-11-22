@@ -1718,6 +1718,7 @@ static bool debugMenu(float time, float deltaTime)
         if (ImGui::BeginTabItem("Views"))
         {
             static int selectedValue = 0;
+            bool isTransitioning = (_camera.getCurrentViewIndex() != _camera.getNewViewIndex());
 
             if (numViews > 0)
             {
@@ -1726,15 +1727,19 @@ static bool debugMenu(float time, float deltaTime)
                     const char *name = _camera.getViewName(i);
                     if (name)
                     {
-                        ImGui::RadioButton(name, &selectedValue, i);
-                        if (ImGui::IsItemClicked())
+                        if (ImGui::RadioButton(name, &selectedValue, i))
                         {
-                            /* If selected value is different than current one then update it */
-                            if (i != _camera.getCurrentViewIndex())
+                            if (!isTransitioning && i != _camera.getCurrentViewIndex())
                             {
                                 _camera.setNewViewIndex(i);
                             }
+                            else
+                            {
+                                // Keep the radio button highlight on the active/target view
+                                selectedValue = static_cast<int>(_camera.getNewViewIndex());
+                            }
                         }
+
                     }
                 }
             }

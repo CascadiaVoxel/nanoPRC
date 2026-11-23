@@ -1165,6 +1165,9 @@ public:
         result["text_height"] = primitive.text_height;
         result["text_width"] = primitive.text_width;
         result["origin"] = py::make_tuple(primitive.origin[0], primitive.origin[1], primitive.origin[2]);
+        result["mode"] = static_cast<int>(primitive.mode);
+        result["screen_offset"] = py::make_tuple(primitive.screen_offset[0], primitive.screen_offset[1]);
+        result["screen_scale"] = primitive.screen_scale;
         py::array_t<double> color(4);
         auto color_buf = color.mutable_unchecked<1>();
         for (size_t i = 0; i < 4; ++i) {

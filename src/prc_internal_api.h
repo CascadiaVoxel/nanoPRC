@@ -297,6 +297,9 @@ typedef struct prc_internal_api_wire_s
     prc_internal_graph_style style;
     prc_api_material material;
     prc_api_graphic_type_t type;
+    /* Markup lines only: the block the line was stored in (see prc_api_markup_block) */
+    prc_api_text_block_mode_t block_mode;
+    double block_origin[3];
 } prc_internal_api_wire;
 
 

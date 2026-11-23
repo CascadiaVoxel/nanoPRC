@@ -566,7 +566,22 @@ prc_decode_markup_tess(prc_context *ctx, prc_tess_markup *data)
                 data->decode_primitives[num_primitives].text_height = text_height;
                 data->decode_primitives[num_primitives].text_width = text_width;
                 data->decode_primitives[num_primitives].face_frame_draw_origin = frame_draw_origin;
-                prc_apply_matrix(ctx, markup_state, &data->decode_primitives[num_primitives].face_frame_draw_origin);
+                data->decode_primitives[num_primitives].text_offset_x = 0.0;
+                data->decode_primitives[num_primitives].text_offset_y = 0.0;
+                data->decode_primitives[num_primitives].text_scale = 1.0;
+                if (mode_stack->mode == PRC_FRAME_DRAW_MODE)
+                {
+                    /* The block draws in a 2D space about the projected origin, so a matrix inside it
+                       places and scales the label on the screen; the 3D origin is not passed through it. */
+                    if (!markup_state->is_identity)
+                    {
+                        data->decode_primitives[num_primitives].text_offset_x = markup_state->matrix[12];
+                        data->decode_primitives[num_primitives].text_offset_y = markup_state->matrix[13];
+                        data->decode_primitives[num_primitives].text_scale = markup_state->matrix[0];
+                    }
+                }
+                else
+                    prc_apply_matrix(ctx, markup_state, &data->decode_primitives[num_primitives].face_frame_draw_origin);
                 data->decode_primitives[num_primitives].primitive_type = MARKUP_TEXT;
                 data->decode_primitives[num_primitives].block_mode = mode_stack->mode;
                 num_primitives++;

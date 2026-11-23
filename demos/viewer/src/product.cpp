@@ -18,6 +18,11 @@
 #include <algorithm> // For std::sort
 #include <cassert>
 #include <vector>
+
+/* Markup that a file sizes in pixels (the text and lines of Frame Draw and Fixed Size blocks) is drawn this
+   many times larger: the file's pixels are those of a PDF page, and a 3D view on a screen reads small at that
+   size. Its offsets and lines are scaled with it, so the markup keeps its shape. */
+static const float kMarkupPixelScale = 1.5f;
 #include <unordered_map>
 #include <cstddef> /* For offsetof macro */
 #include <cstdint>
@@ -145,9 +150,46 @@ void releaseTextures()
     textureMap.clear();
 }
 
+void Product::renderText(MeshShader *shader) const
+{
+    if (_vao && _isText && _enabled)
+    {
+        glEnable(GL_BLEND);
+        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+        glBlendEquation(GL_FUNC_ADD);
+        /* Tested against the model, so a label behind a surface is hidden as in Acrobat. Markup lines write no
+           depth (see render), so a line never hides a label. */
+        glEnable(GL_DEPTH_TEST);
+        glDepthFunc(GL_LEQUAL);
+        glDepthMask(GL_FALSE);
+
+        glBindVertexArray(_vao);
+        shader->setModel(_local_to_world);
+
+        for (uint32_t i = 0; i < _numMeshes; i++)
+        {
+            const MeshSpec &mesh = _meshes[i];
+            shader->setMaterial(_material[mesh.faceIndex]);
+            shader->setIsLine(true);
+            shader->setVertexHasMaterial(mesh.verticesHaveStyle);
+            glDrawElements(mesh.primitive, mesh.numIndices, GL_UNSIGNED_INT,
+                (void *)(_meshes[i].offset * sizeof(GLuint)));
+        }
+
+        glDepthMask(GL_TRUE);
+        glDepthFunc(GL_LESS);
+    }
+
+    for (uint32_t i = 0; i < _nchildren; i++)
+    {
+        if (_children[i]->_enabled)
+            _children[i]->renderText(shader);
+    }
+}
+
 void Product::render(MeshShader *shader) const
 {
-    if (_vao)
+    if (_vao && !_isText)
     {
         glEnable(GL_BLEND);
         glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
@@ -174,6 +216,9 @@ void Product::render(MeshShader *shader) const
                 bool isMarkUp = mesh.isMarkup;
                 shader->setIsLine(isLine || isMarkUp);
                 shader->setVertexHasMaterial(mesh.verticesHaveStyle);
+                /* Markup lines are tested against the model but write no depth: a label is tested the same
+                   way, so a line crossing it cannot hide it */
+                glDepthMask(isMarkUp ? GL_FALSE : GL_TRUE);
 
                 glDrawElements(
                     mesh.primitive,
@@ -466,6 +511,7 @@ void Product::attachTextContent(prc_context *ctx, prc_api_data data,
     printf("attachTextContent: Processing %zu text primitives\n", tess->num_text_primitives);
 
     _hasTransparency = true;
+    _isText = true;
 
     _meshes = new MeshSpec[1];
     _numMeshes = 1;
@@ -485,7 +531,7 @@ void Product::attachTextContent(prc_context *ctx, prc_api_data data,
     if (sharedFont == nullptr)
     {
         prc_api_texture text_texture;
-        sharedFont = Font::CreateFromData("roboto_reg", (unsigned char *)roboto_reg, 0, 64, text_texture);
+        sharedFont = Font::CreateFromData("roboto_reg", (unsigned char *)roboto_reg, 0, 24, text_texture);
         if (sharedFont == NULL)
         {
             printf("Model::load: Font::CreateFromData failed\n");
@@ -580,7 +626,7 @@ void Product::attachTextContent(prc_context *ctx, prc_api_data data,
        block's matrix. Fixed Size: text height in pixels. Face View: text height in model units. Any mode the
        file does not give is drawn as a Frame Draw label, the way the other two are. */
     {
-        const float kFontPixels = 64.0f;
+        const float kFontPixels = 24.0f;
 
         for (const TextRange &r : textRanges)
         {
@@ -597,22 +643,31 @@ void Product::attachTextContent(prc_context *ctx, prc_api_data data,
             else if (tp.mode == PRC_API_TEXT_FIXED_SIZE_MODE)
             {
                 code = 4.0f;
+                size *= kMarkupPixelScale;
             }
             else
             {
-                size *= (float)tp.screen_scale;
-                offX = (float)tp.screen_offset[0];
-                offY = (float)tp.screen_offset[1];
+                size *= (float)tp.screen_scale * kMarkupPixelScale;
+                offX = (float)tp.screen_offset[0] * kMarkupPixelScale;
+                offY = (float)tp.screen_offset[1] * kMarkupPixelScale;
             }
             if (size <= 0.0f)
                 size = kFontPixels;
             float k2 = size / kFontPixels;
 
+            /* In a Frame Draw block the matrix's translation is not the baseline: it is 0.509 times the size
+               below it. The Pump's labels, in both of its sizes, store -0.509 times the size for a single line,
+               and for a stack of lines their offsets run symmetrically about that value, spaced 0.836 times the
+               size. The baselines are therefore the offsets raised by 0.509 times the size: a single line's on
+               the shelf (so the shelf meets the bottom left of the text), an odd stack's middle line on it, an
+               even stack centred on it, as Acrobat draws them. */
+            float baselineRise = (code == 3.0f) ? 0.5093f * size : 0.0f;
+
             for (size_t v = r.first; v < r.first + r.count; v++)
             {
                 prc_api_vertex &pv = textVertices[v];
                 float gx = pv.position[0] * k2 + offX;
-                float gy = -pv.position[1] * k2 + offY;
+                float gy = -pv.position[1] * k2 + offY + baselineRise;
 
                 pv.position[0] = (float)tp.origin[0];
                 pv.position[1] = (float)tp.origin[1];
@@ -1065,8 +1120,8 @@ void Product::attach(prc_context *ctx, prc_api_data data, const prc_api_tess *te
                         prc_api_vertex &pv = combined_vertices[at];
                         if (pv.normal[2] > 1.5f)
                             continue; /* Already placed: a vertex two lines share */
-                        pv.normal[0] = pv.position[0];
-                        pv.normal[1] = pv.position[1];
+                        pv.normal[0] = pv.position[0] * kMarkupPixelScale;
+                        pv.normal[1] = pv.position[1] * kMarkupPixelScale;
                         pv.normal[2] = 3.0f;
                         pv.position[0] = (float)block.origin[0];
                         pv.position[1] = (float)block.origin[1];
@@ -1290,7 +1345,8 @@ Product::Product() :
     _vao(0), _vbo(0), _ebo(0),
     _meshes(nullptr), _numMeshes(0),
     _material(nullptr), _numMaterials(0),
-    _hasTransparency(false)
+    _hasTransparency(false),
+    _isText(false)
 {
 }
 

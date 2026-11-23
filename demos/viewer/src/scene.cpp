@@ -1372,6 +1372,9 @@ void Scene::renderModels(Camera *camera) const
     root.update();
     root.render(_meshShader);
 
+    /* Markup text last and with no depth test, so a label is never behind a lead line or the model */
+    root.renderText(_meshShader);
+
     /* Render ground */
     if (_enableGround && 0)
     {

@@ -255,10 +255,6 @@ void main()
         return;
     }
 
-    // DEBUG: Test if back-facing fragments are even executing
-   // FragColor = gl_FrontFacing ? vec4(1.0, 0.0, 0.0, 1.0) : vec4(0.0, 0.0, 1.0, 1.0);
-   // return;
-
     if (uWireframe)
     {
         FragColor = vec4(1.0, 0.0, 0.0, 1.0);
@@ -273,15 +269,10 @@ void main()
             // TEXT RENDERING: Font atlas glyph coverage in ALPHA channel
             vec4 tex = texture(uMaterial.diffuseMap, TexCoords);
             
-            // Font atlas: RGB=white (ignored), Alpha=glyph coverage (0-1)
-            float glyphCoverage = tex.a;
-            
-            // Vertex color contains the desired text color
-            vec3 textColor = toLinear(Color * uMaterial.tint);
-            
-            // Use glyph coverage as the alpha for the text color
+            // Glyph coverage in alpha, sharpened so thin strokes are solid
+            float glyphCoverage = smoothstep(0.05, 0.5, tex.a);
+            vec3 textColor = toLinear(Color); // not times the tint (black here)
             FragColor = vec4(textColor, glyphCoverage * uMaterial.alpha);
-           // FragColor = vec4(textColor, glyphCoverage);
         }
         else
         {

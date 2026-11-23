@@ -68,6 +68,9 @@ public:
     };
 
     void render(MeshShader *shader) const;
+    /** Draws the markup text of this product and its children, with no depth test, so a label is in front of
+        every line and object. Call it after render. render leaves markup text out. */
+    void renderText(MeshShader *shader) const;
     void update();
     void invalidate();
 
@@ -182,6 +185,7 @@ private:
     std::vector<AttributeRow> _attributes;
 
     bool _hasTransparency;  // Flag indicating if this product has transparent geometry
+    bool _isText;           // Markup text: drawn last, in front of everything, by renderText
 
     void uploadGPU(uint32_t num_vertices, prc_api_vertex *vertices_in, std::vector<unsigned int> &indices_in);
 

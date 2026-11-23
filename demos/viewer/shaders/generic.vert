@@ -70,6 +70,8 @@ void main()
             placedClip = uProjection * uView * worldPos;
             if (uViewport.x > 0.0 && uViewport.y > 0.0)
                 placedClip.xy += aNormal.xy * (2.0 / uViewport) * placedClip.w;
+            /* A little toward the viewer: a label anchored on a surface is not hidden by it */
+            placedClip.z -= 0.002 * placedClip.w;
         }
     }
 

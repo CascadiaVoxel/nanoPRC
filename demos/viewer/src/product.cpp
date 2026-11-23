@@ -31,6 +31,7 @@ static const float kMarkupPixelScale = 1.5f;
 #include <glad/glad.h>
 #include "mesh.h"
 #include "roboto_font.h"
+#include "tinos_font.h"
 #include "graphics2d.h"
 #include <string.h>
 #include <cstdio>
@@ -545,7 +546,12 @@ void Product::attachTextContent(prc_context *ctx, prc_api_data data,
     if (sharedFont == nullptr)
     {
         prc_api_texture text_texture;
-        sharedFont = Font::CreateFromData("roboto_reg", (unsigned char *)roboto_reg, 0, 24, text_texture);
+        /* Acrobat sets markup text in a serif face when the file names none (the Pump's does not), so Tinos,
+           the metric-compatible Times New Roman substitute, is the face; Roboto is the fallback should it
+           not load. */
+        sharedFont = Font::CreateFromData("tinos_reg", (unsigned char *)tinos_reg, 0, 24, text_texture);
+        if (sharedFont == NULL)
+            sharedFont = Font::CreateFromData("roboto_reg", (unsigned char *)roboto_reg, 0, 24, text_texture);
         if (sharedFont == NULL)
         {
             printf("Model::load: Font::CreateFromData failed\n");
@@ -676,7 +682,11 @@ void Product::attachTextContent(prc_context *ctx, prc_api_data data,
                 size = kFontPixels;
             if (fileSize <= 0.0f)
                 fileSize = size;
-            float k2 = size / kFontPixels;
+            /* Tinos sets about 1.35 times narrower than the size Acrobat draws its serif face at (measured from
+               the same labels in both); only the glyphs are scaled, so the baselines and line spacing, which
+               are set from the size above, stay as they are. */
+            const float kFaceScale = 1.35f;
+            float k2 = size * kFaceScale / kFontPixels;
 
             /* In a Frame Draw block the matrix's translation is not the baseline: it is 0.509 times the size
                below it. The Pump's labels, in both of its sizes, store -0.509 times the size for a single line,
@@ -689,9 +699,9 @@ void Product::attachTextContent(prc_context *ctx, prc_api_data data,
             {
                 /* That puts a line's baseline at its own distance from the label's centre line. The file spaces
                    the lines 1.6716 times its size apart (double spacing); Acrobat sets them at an ordinary line
-                   spacing, 1.2 times the glyph size, about the same centre. */
+                   spacing, 1.3 times the label size, about the same centre. */
                 const float kFileLineSpacing = 1.6716f;
-                const float kLineSpacing = 1.2f;
+                const float kLineSpacing = 1.3f;
                 float fromCentre = offY + baselineRise;
                 fromCentre *= (kLineSpacing * size) / (kFileLineSpacing * fileSize);
                 offY = fromCentre;

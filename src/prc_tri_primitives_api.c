@@ -3976,6 +3976,21 @@ prc_api_get_tessellation_vertices_impl(prc_context *ctx, prc_api_data data_in,
                 prc_error(ctx, PRC_API_ERROR_PARAMETER, "Failed to get face style in prc_api_get_tessellation_vertices\n");
                 goto uncompressed_failure;
             }
+
+            /* The face's own style has replaced the one from the reference data, so
+               its colour is the face's: pure_color was taken from the reference
+               data's style above, before this. In
+               3D_PDF_Pump_Maintenance_Manual.stream-359 every part names style 0
+               (black, for its edges) and every face names style 1 (the part's
+               colour); the whole pump drew black. */
+            uncompressed_data.has_pure_color = is_pure_color;
+            if (is_pure_color)
+            {
+                for (k = 0; k < 4; k++)
+                {
+                    uncompressed_data.pure_color[k] = face_color[k];
+                }
+            }
         }
 
         /* Get the index into the array of vertex indices for this face */

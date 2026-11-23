@@ -699,6 +699,14 @@ void Scene::convertTree(prc_context *ctx, prc_api_data data, prc_api_product *ap
 
         for (k = 0; k < num_markups; k++)
         {
+            /* A markup that is hidden (see prc_api_markup.visible) is loaded switched off, and kept out of
+               the scene's bounds so the view fits what is drawn, as a removed item is. Adobe Acrobat does not
+               draw it. */
+            const bool hiddenMarkup = !api_product->markup[k].visible;
+            Vector4 hiddenMin = Vector4(FLT_MAX), hiddenMax = Vector4(-FLT_MAX);
+            Vector4 *markupMin = hiddenMarkup ? &hiddenMin : minBound;
+            Vector4 *markupMax = hiddenMarkup ? &hiddenMax : maxBound;
+
             /* If it has both graphics and text primitives we will create a
              * parent and then two children, one for the graphics and one for
              * the text. If it has only graphics or only text, we will not create
@@ -715,6 +723,8 @@ void Scene::convertTree(prc_context *ctx, prc_api_data data, prc_api_product *ap
                 *product_count += 1;
                 app_child->setParent(app_product);
                 app_child->setName(api_product->markup[k].name);
+                if (hiddenMarkup)
+                    app_child->setEnabled(false);
                 app_child->setModel(Matrix4(1.0f));
                 continue;
             }
@@ -729,9 +739,11 @@ void Scene::convertTree(prc_context *ctx, prc_api_data data, prc_api_product *ap
                 app_markup_parent->createChildren(2);
                 app_markup_parent->setParent(app_product);
                 app_markup_parent->setName(api_product->markup[k].name);
+                if (hiddenMarkup)
+                    app_markup_parent->setEnabled(false);
                 app_markup_parent->setModel(Matrix4(1.0f));
-                setBounds(ctx, app_markup_parent, tess, matrix, location.is_identity, minBound,
-                    maxBound);
+                setBounds(ctx, app_markup_parent, tess, matrix, location.is_identity, markupMin,
+                    markupMax);
 
                 /* Set the the markup (non-text) child */
                 Product *app_child = app_markup_parent->getChildFromHeap(0, heap, product_count);
@@ -743,8 +755,8 @@ void Scene::convertTree(prc_context *ctx, prc_api_data data, prc_api_product *ap
                 app_child->setName(markup_name.c_str());
 
                 app_child->setModel(Matrix4(1.0f));
-                setBounds(ctx, app_child, tess, matrix, location.is_identity, minBound,
-                    maxBound);
+                setBounds(ctx, app_child, tess, matrix, location.is_identity, markupMin,
+                    markupMax);
                 app_child->attach(ctx, data, tess, *getTextRenderPtr());
 
                 /* Now handle the text portion */
@@ -757,8 +769,8 @@ void Scene::convertTree(prc_context *ctx, prc_api_data data, prc_api_product *ap
                 app_child_text->setName(markup_name2.c_str());
 
                 app_child_text->setModel(Matrix4(1.0f));
-                setBounds(ctx, app_child_text, tess, matrix, location.is_identity, minBound,
-                    maxBound);
+                setBounds(ctx, app_child_text, tess, matrix, location.is_identity, markupMin,
+                    markupMax);
                 app_child_text->attachTextContent(ctx, data, tess, *getTextRenderPtr());
             }
             else if (tess->num_line_primitives > 0 || tess->num_text_primitives > 0)
@@ -770,9 +782,11 @@ void Scene::convertTree(prc_context *ctx, prc_api_data data, prc_api_product *ap
                 /* Get the tessellation for this model (part) */
                 tess = prc_api_get_markup_tessellation(ctx, api_product, k);
                 app_child->setName(api_product->markup[k].name);
+                if (hiddenMarkup)
+                    app_child->setEnabled(false);
                 app_child->setModel(Matrix4(1.0f));
-                setBounds(ctx, app_child, tess, matrix, location.is_identity, minBound,
-                    maxBound);
+                setBounds(ctx, app_child, tess, matrix, location.is_identity, markupMin,
+                    markupMax);
 
                 /* Just a single child for this markup */
                 if (tess->num_line_primitives > 0)
@@ -791,9 +805,11 @@ void Scene::convertTree(prc_context *ctx, prc_api_data data, prc_api_product *ap
                 *product_count += 1;
                 app_child->setParent(app_product);
                 app_child->setName(api_product->markup[k].name);
+                if (hiddenMarkup)
+                    app_child->setEnabled(false);
                 app_child->setModel(Matrix4(1.0f));
-                setBounds(ctx, app_child, tess, matrix, location.is_identity, minBound,
-                    maxBound);
+                setBounds(ctx, app_child, tess, matrix, location.is_identity, markupMin,
+                    markupMax);
                 /* Just don't attach it though */
             }
         }

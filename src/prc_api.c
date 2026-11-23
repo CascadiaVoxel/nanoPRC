@@ -2892,6 +2892,12 @@ prc_api_helper_add_markups(prc_context *ctx, prc_api_data data, uint32_t num_fil
             product->markups.markups[k].biased_index_tessellation;
         markup->tess = NULL;
         markup->file_index = curr_file_index;
+        markup->behavior_bit_field1 =
+            product->markups.markups[k].base.graphics_content.behavior_bit_field1;
+        markup->behavior_bit_field2 =
+            product->markups.markups[k].base.graphics_content.behavior_bit_field2;
+        markup->behavior_is_set = product->markups.markups[k].base.graphics_content.is_set;
+        markup->visible = 1; /* prc_api_create_model_tree works the rest out */
     }
     return 0;
 }
@@ -3681,6 +3687,15 @@ prc_api_helper_set_visibility(prc_context *ctx, prc_api_product *root)
             prc_api_visibility_state s = prc_api_visibility_step(item.state,
                 p->behavior_bit_field1, p->behavior_bit_field2, p->behavior_is_set, 0, &p->visible);
 
+            /* A markup takes its visibility the way an item does: its own Show
+               bit where no flag along the path decides */
+            for (k = 0; p->markup != NULL && k < p->num_markups; k++)
+            {
+                prc_api_markup *mk = &p->markup[k];
+
+                (void)prc_api_visibility_step(s, mk->behavior_bit_field1, mk->behavior_bit_field2,
+                    mk->behavior_is_set, 1, &mk->visible);
+            }
             if (p->part != NULL)
                 code = prc_api_visibility_push(ctx, &list, &size, &capacity, NULL, p->part, s);
             for (k = 0; code == 0 && k < p->num_children; k++)

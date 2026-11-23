@@ -60,6 +60,8 @@ public:
     inline void setModel(const Matrix4 &model) { _shader.setMatrix4(uModel, model); }
     inline void setView(const Matrix4 &view) { _shader.setMatrix4(uView, view); }
     inline void setProjection(const Matrix4 &projection) { _shader.setMatrix4(uProjection, projection); }
+    /* The pixel size of the viewport drawn to: markup placed in pixels needs it */
+    inline void setViewport(float width, float height) { _shader.setVector2(uViewport, Vector2(width, height)); }
 
     inline void setViewPos(const Vector3 &viewPos)
     {
@@ -136,6 +138,7 @@ private:
     int uModel;
     int uView;
     int uProjection;
+    int uViewport;
 
     int uViewPos;
 

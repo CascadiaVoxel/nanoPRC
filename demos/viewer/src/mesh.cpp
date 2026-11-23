@@ -104,6 +104,7 @@ void MeshShader::load()
     uModel = _shader.getUniformLocation("uModel");
     uView = _shader.getUniformLocation("uView");
     uProjection = _shader.getUniformLocation("uProjection");
+    uViewport = _shader.getUniformLocation("uViewport");
 
     uViewPos = _shader.getUniformLocation("uViewPos");
 
@@ -140,7 +141,7 @@ void MeshShader::load()
     uDebugMode = _shader.getUniformLocation("uDebugMode");
 }
 
-MeshShader::MeshShader() : uModel(-1), uView(-1), uProjection(-1),
+MeshShader::MeshShader() : uModel(-1), uView(-1), uProjection(-1), uViewport(-1),
                            uViewPos(-1),
                            uDirLight_direction(-1), uDirLight_color(-1), uDirLight_intensity(-1),
                            uPointLight_position(-1), uPointLight_color(-1), uPointLight_intensity(-1),

@@ -509,6 +509,17 @@ void Product::attachTextContent(prc_context *ctx, prc_api_data data,
     textRenderer.SetFont(sharedFont);
     _material[0].setDiffuseTexture(sharedAtlasTexture);
 
+    /* Each label is built around (0, 0) in the font's own pixels and then placed from its anchor, below, by
+       how its block mode says. These are the labels' vertex ranges, to place them with. */
+    struct TextRange
+    {
+        size_t first;
+        size_t count;
+        prc_api_text_primitive primitive;
+    };
+    std::vector<TextRange> textRanges;
+    textRanges.reserve(tess->num_text_primitives);
+
     for (uint32_t k = 0; k < tess->num_text_primitives; k++)
     {
         prc_api_text_primitive text_primitive;
@@ -527,10 +538,12 @@ void Product::attachTextContent(prc_context *ctx, prc_api_data data,
         textRenderer.SetColor(Vector4(text_primitive.color[0], text_primitive.color[1],
             text_primitive.color[2], 1.0f));
 
-        textRenderer.DrawText(text_primitive.text,
-            (float)text_primitive.origin[0],
-            (float)text_primitive.origin[1],
-            (float)text_primitive.origin[2]);
+        TextRange range;
+        range.first = textRenderer.GetNumVertices();
+        textRenderer.DrawText(text_primitive.text, 0.0f, 0.0f, 0.0f);
+        range.count = textRenderer.GetNumVertices() - range.first;
+        range.primitive = text_primitive;
+        textRanges.push_back(range);
     }
 
     size_t numTextVertices = textRenderer.GetNumVertices();
@@ -560,6 +573,56 @@ void Product::attachTextContent(prc_context *ctx, prc_api_data data,
 
     prc_api_vertex *textVertices = new prc_api_vertex[numTextVertices];
     textRenderer.GetVertices(textVertices, _material[0]);
+
+    /* Place each label from its anchor (see generic.vert for how a placed vertex is read). The font is baked
+       at kFontPixels; a label's glyph offsets, which are in those pixels with y down, are scaled to the label's
+       size. Frame Draw: size = text height times the block's scale, in pixels, offset on the screen by the
+       block's matrix. Fixed Size: text height in pixels. Face View: text height in model units. Any mode the
+       file does not give is drawn as a Frame Draw label, the way the other two are. */
+    {
+        const float kFontPixels = 64.0f;
+
+        for (const TextRange &r : textRanges)
+        {
+            const prc_api_text_primitive &tp = r.primitive;
+            float size = (float)tp.text_height;
+            float offX = 0.0f;
+            float offY = 0.0f;
+            float code = 3.0f; /* Frame Draw */
+
+            if (tp.mode == PRC_API_TEXT_FACE_VIEW_MODE)
+            {
+                code = 2.0f;
+            }
+            else if (tp.mode == PRC_API_TEXT_FIXED_SIZE_MODE)
+            {
+                code = 4.0f;
+            }
+            else
+            {
+                size *= (float)tp.screen_scale;
+                offX = (float)tp.screen_offset[0];
+                offY = (float)tp.screen_offset[1];
+            }
+            if (size <= 0.0f)
+                size = kFontPixels;
+            float k2 = size / kFontPixels;
+
+            for (size_t v = r.first; v < r.first + r.count; v++)
+            {
+                prc_api_vertex &pv = textVertices[v];
+                float gx = pv.position[0] * k2 + offX;
+                float gy = -pv.position[1] * k2 + offY;
+
+                pv.position[0] = (float)tp.origin[0];
+                pv.position[1] = (float)tp.origin[1];
+                pv.position[2] = (float)tp.origin[2];
+                pv.normal[0] = gx;
+                pv.normal[1] = gy;
+                pv.normal[2] = code;
+            }
+        }
+    }
 
     // Diagnostic: Check first vertex
     printf("First text vertex: pos=(%.2f, %.2f, %.2f) uv=(%.4f, %.4f) color=(%.2f, %.2f, %.2f, %.2f)\n",
@@ -982,6 +1045,34 @@ void Product::attach(prc_context *ctx, prc_api_data data, const prc_api_tess *te
             {
                 printf("Model::load: prc_api_get_graphics_primitive failed\n");
                 exit(1);
+            }
+
+            /* The lines of a Frame Draw block have vertices that are pixel offsets from the block's origin, not model
+               coordinates: put the vertex at the origin and its offset in the normal, for generic.vert to place. Each
+               markup primitive has vertices of its own. */
+            if (tess->type == PRC_API_TESS_MarkUp)
+            {
+                prc_api_markup_block block;
+
+                if (prc_api_get_markup_line_block(ctx, data, tess, j, &block) == 0 &&
+                    block.mode == PRC_API_TEXT_FRAME_DRAW_MODE)
+                {
+                    for (size_t idx = 0; idx < primitive.num_indices; idx++)
+                    {
+                        size_t at = (size_t)vertex_offset + primitive.indices[idx];
+                        if (at >= combined_vertices.size())
+                            continue;
+                        prc_api_vertex &pv = combined_vertices[at];
+                        if (pv.normal[2] > 1.5f)
+                            continue; /* Already placed: a vertex two lines share */
+                        pv.normal[0] = pv.position[0];
+                        pv.normal[1] = pv.position[1];
+                        pv.normal[2] = 3.0f;
+                        pv.position[0] = (float)block.origin[0];
+                        pv.position[1] = (float)block.origin[1];
+                        pv.position[2] = (float)block.origin[2];
+                    }
+                }
             }
 
             /* Create a mesh */

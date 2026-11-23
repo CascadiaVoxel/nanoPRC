@@ -1335,6 +1335,13 @@ void Scene::renderModels(Camera *camera) const
     _meshShader->setProjection(camera->projection());
     _meshShader->setViewPos(camera->position());
 
+    {
+        /* Markup placed in pixels (labels, Frame Draw lines) is sized against the viewport drawn to */
+        GLint viewport[4];
+        glGetIntegerv(GL_VIEWPORT, viewport);
+        _meshShader->setViewport((float)viewport[2], (float)viewport[3]);
+    }
+
     /* Lighting */
     _meshShader->setDirLight(_dirLight);
     _meshShader->setPointLight(_pointLight);

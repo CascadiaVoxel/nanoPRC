@@ -1196,13 +1196,11 @@ static void run(Config &config, SDL_Window *window, const char *file, bool headl
             }
             else
             {
-                /* Make a scaling matrix based upon the wheel value */
-                float scaleFactor = mouse_wheel_delta * 0.1f;
-                Matrix4 scaleMat = Matrix4(1.0f);
-                scaleMat = mutil::scale(scaleMat, Vector3(1.0f + scaleFactor, 1.0f + scaleFactor, 1.0f + scaleFactor));
-                mat = scaleMat * curr_mat;
+                float scaleFactor = 1.0f + mouse_wheel_delta * 0.1f;
+                Matrix4 scaleMat = mutil::scale(Matrix4(1.0f), Vector3(scaleFactor, scaleFactor, scaleFactor));
+                // Scale around the orbit center so the model never drifts off the trackball pivot!
+                mat = transFromCenter *scaleMat *transToCenter * curr_mat;
             }
-
             _scene.models()[0].setModel(mat);
             mouseMoved = false;
         }
@@ -1719,6 +1717,28 @@ static bool debugMenu(float time, float deltaTime)
         {
             static int selectedValue = 0;
             bool isTransitioning = (_camera.getCurrentViewIndex() != _camera.getNewViewIndex());
+            bool isOrtho = _camera.isOrthographic();
+            if (ImGui::Checkbox("Orthographic View", &isOrtho))
+            {
+                _camera.isOrthographic() = isOrtho;
+                if (isOrtho)
+                {
+                    float dist = (_camera.position() - _camera.getCurrentOrbitCenter()).length();
+                    float currentScale = 1.0f;
+
+                    if (_scene.models() != nullptr && _scene.mumProducts() > 0)
+                    {
+                        const Matrix4 &m = _scene.models()[0].model();
+                        currentScale = Vector3(m.columns[0].x, m.columns[0].y, m.columns[0].z).length();
+                        if (currentScale < 1e-5f)
+                            currentScale = 1.0f;
+                    }
+
+                    _camera.setOrthoSize((dist * std::tan(mutil::radians(_camera.fov()) * 0.5f)) / currentScale);
+                }
+                _camera.update();
+            }
+            ImGui::Separator();
 
             if (numViews > 0)
             {

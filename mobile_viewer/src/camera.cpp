@@ -93,7 +93,33 @@ void Camera::update()
     _up = normalize(up3);
     _right = normalize(cross(_front, _up));
     _view = lookAt(_position, _position + _front, _up);
-    _projection = perspective(mutil::radians(_fov), _aspect, _near, _far);
+    _perspectiveProjection = perspective(mutil::radians(_fov), _aspect, _near, _far);
+
+    if (_isOrthographic)
+    {
+        float right = _orthoSize * _aspect;
+        float left = -right;
+        float top = _orthoSize;
+        float bottom = -top;
+        float zNear = -_far;
+        float zFar = _far;
+
+        _projection = Matrix4(
+            Vector4(2.0f / (right - left), 0.0f, 0.0f, 0.0f),
+            Vector4(0.0f, 2.0f / (top - bottom), 0.0f, 0.0f),
+            Vector4(0.0f, 0.0f, -2.0f / (zFar - zNear), 0.0f),
+            Vector4(
+                -(right + left) / (right - left),
+                -(top + bottom) / (top - bottom),
+                -(zFar + zNear) / (zFar - zNear),
+                1.0f
+            )
+        );
+    }
+    else
+    {
+        _projection = _perspectiveProjection;
+    }
 }
 
 double Camera::getCurrentViewCenterOrbitZ(void)
@@ -218,6 +244,17 @@ void Camera::upDateView(Product &product)
     float r1 = (v1.position - v1.orbitCenter).length();
     float radius = r0 * (1.0f - smoothT) + r1 * smoothT;
 
+    float targetOrthoSize = r1 * std::tan(mutil::radians(_fov) * 0.5f);
+    if (_isOrthographic)
+    {
+        // Smoothly transition from current _orthoSize to the new view's framing
+        _orthoSize = _orthoSize * (1.0f - smoothT) + targetOrthoSize * smoothT;
+    }
+    else
+    {
+        _orthoSize = targetOrthoSize;
+    }
+
     Vector3 forward = mutil::rotatevector(_orientation, Vector3(0.0f, 0.0f, 1.0f));
     _position = pivot - forward * radius;
 
@@ -257,6 +294,7 @@ void Camera::upDateView(Product &product)
         _yaw = v1.yaw;
         _roll = v1.roll;
         _productModel = Matrix4(1.0f);
+        _orthoSize = targetOrthoSize;
         product.setModel(_productModel);
     }
 
@@ -277,6 +315,13 @@ void Camera::setView(int index)
     _currentViewIndex = index;
     _newViewIndex = index;
     _viewConvexStep = 0.0;
+
+    float distToPivot = (_position - _views[index].orbitCenter).length();
+    if (distToPivot > 0.001f)
+    {
+        _orthoSize = distToPivot * std::tan(mutil::radians(_fov) * 0.5f);
+    }
+
     update();
 }
 
@@ -284,7 +329,8 @@ Camera::Camera() : _pitch(0.0f), _yaw(0.0f), _roll(0.0f),
 _fov(45.0f), _near(0.1f), _far(400.0f), _aspect(16.0f / 9.0f),
 _views(nullptr), _numViews(0),
 _currentViewIndex(0), _newViewIndex(0),
-_viewConvexStep(0.0), _modelWorldCenter(0.0f, 0.0f, 0.0f, 1.0f)
+_viewConvexStep(0.0), _modelWorldCenter(0.0f, 0.0f, 0.0f, 1.0f),
+_isOrthographic(false), _orthoSize(10.0f)
 {
     _orientation = Quaternion();
     update();

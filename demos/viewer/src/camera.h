@@ -82,6 +82,20 @@ public:
     constexpr uint32_t getCurrentViewIndex() const { return _currentViewIndex; }
     constexpr uint32_t getNewViewIndex() const { return _newViewIndex; }
 
+    bool &isOrthographic() { return _isOrthographic; }
+    const bool &isOrthographic() const { return _isOrthographic; }
+
+    constexpr void setOrthoSize(float size) { _orthoSize = size; }
+    constexpr float orthoSize() const { return _orthoSize; }
+    constexpr const Matrix4 &perspectiveProjection() const { return _perspectiveProjection; }
+
+    Vector3 getCurrentOrbitCenter() const
+    {
+        if (_views != nullptr && _currentViewIndex < _numViews)
+            return _views[_currentViewIndex].orbitCenter;
+        return Vector3(_modelWorldCenter.x, _modelWorldCenter.y, _modelWorldCenter.z);
+    }
+
     Camera();
 
 private:
@@ -96,11 +110,15 @@ private:
 
     Vector3 _front, _up, _right;
     Matrix4 _view, _projection;
+    Matrix4 _perspectiveProjection;
 
     View *_views;
     uint32_t _numViews;
     uint32_t _currentViewIndex;
     uint32_t _newViewIndex;
+
+    bool _isOrthographic;
+    float _orthoSize; // Half-height of the orthographic view volume
 
     double _viewConvexStep;
     Vector4 _modelWorldCenter; /* This is what we will rotate the camera about */

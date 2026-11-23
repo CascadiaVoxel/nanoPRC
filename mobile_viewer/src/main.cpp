@@ -333,7 +333,29 @@ static bool drawDebugMenu(Scene &scene, Camera &camera, float deltaTime, int sha
             static int selectedValue = 0;
             uint32_t numViews = camera.getNumViews();
             bool isTransitioning = (camera.getCurrentViewIndex() != camera.getNewViewIndex());
+            bool isOrtho = camera.isOrthographic();
 
+            if (ImGui::Checkbox("Orthographic View", &isOrtho))
+            {
+                camera.isOrthographic() = isOrtho;
+                if (isOrtho)
+                {
+                    float dist = (camera.position() - camera.getCurrentOrbitCenter()).length();
+                    float currentScale = 1.0f;
+
+                    if (scene.models() != nullptr && scene.mumProducts() > 0)
+                    {
+                        const Matrix4 &m = scene.models()[0].model();
+                        currentScale = Vector3(m.columns[0].x, m.columns[0].y, m.columns[0].z).length();
+                        if (currentScale < 1e-5f)
+                            currentScale = 1.0f;
+                    }
+
+                    camera.setOrthoSize((dist * std::tan(mutil::radians(camera.fov()) * 0.5f)) / currentScale);
+                }
+                camera.update();
+            }
+            ImGui::Separator();
             if (numViews > 0)
             {
                 for (uint32_t i = 0; i < numViews; i++)
@@ -642,7 +664,8 @@ int main(int argc, char *argv[])
             {
                 float scaleFactor = 1.0f + wheelDelta * 0.1f;
                 Matrix4 scaleMat = mutil::scale(Matrix4(1.0f), Vector3(scaleFactor, scaleFactor, scaleFactor));
-                engine.viewerScene.models()[0].setModel(scaleMat * currMat);
+                // Scale around the orbit center so the model never drifts off the trackball pivot!
+                engine.viewerScene.models()[0].setModel(transFromCenter * scaleMat * transToCenter * currMat);
             }
             mouseMoved = false;
         }

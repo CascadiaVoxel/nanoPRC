@@ -351,6 +351,9 @@ void Scene::render(Camera *camera)
 
     glDisable(GL_CULL_FACE);
 
+    /* Resolve the multisampled scene into the texture that bloom and the composite read */
+    _compositor->resolve();
+
     if (!_wireframe)
     {
         /* Bloom */
@@ -1331,7 +1334,7 @@ Scene::Scene() : _products(nullptr), _nproducts(0),
                  _normalDebugMode(0), _backfaceCull(false),
                  _enableBloom(true), _bloom(nullptr),
                  _enableToneMapping(true), _enableMotion(true),
-                 _showExtraWireOverlays(true),
+                 _showExtraWireOverlays(false),
                  _width(0), _height(0), _textRenderer(nullptr),
                  _renderWidth(0), _renderHeight(0), _outputFramebuffer(0)
 {

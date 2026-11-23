@@ -836,7 +836,7 @@ static void run(Config &config, SDL_Window *window, const char *file, bool headl
     _atmosphere.sunTightness = config.getFloat("Atmosphere.sun_tightness", 500.0f);
 
     _scene.fullbright() = config.getBool("Lighting.fullbright", false);
-    _scene.setShowExtraWireOverlays(config.getBool("Display.extra_wire_overlays", true));
+    _scene.setShowExtraWireOverlays(config.getBool("Display.extra_wire_overlays", false));
     _atmosphere.sunAltitude = fmodf(config.getFloat("Lighting.sun_altitude", 40.0f), 360.0f);
     _atmosphere.sunAzimuth = fmodf(config.getFloat("Lighting.sun_azimuth", 0.0f), 360.0f);
     _atmosphere.sunColor = clamp(Vector3(config.getIntVector3("Lighting.sun_color", IntVector3(255))) / 255.0f, 0.0f, 1.0f);

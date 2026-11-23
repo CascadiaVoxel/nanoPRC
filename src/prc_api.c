@@ -1880,6 +1880,23 @@ prc_api_count_items_push(prc_context *ctx, prc_api_count_items_work **worklist,
     return 0;
 }
 
+/* The product occurrence that supplies this one's content, as an index into the
+   product array of the file structure the reference names (biased, 0 for none).
+   Normally that is its prototype. An occurrence that has neither a part nor a
+   prototype but names external data is an empty stand-in for the product in the
+   other file structure: the Pump's assemblies (3D_PDF_Pump_Maintenance_Manual.
+   stream-359) are 81 such stand-ins, and the parts are all in the products they
+   name, so without this none of them is reached. */
+static uint32_t
+prc_api_helper_content_source_index(const prc_references_of_product_occurrence *refs)
+{
+    if (refs->biased_index_prototype != 0)
+        return refs->biased_index_prototype;
+    if (refs->biased_index_part == 0 && refs->biased_index_external_data != 0)
+        return refs->biased_index_external_data;
+    return 0;
+}
+
 /* A method that goes through all the trees and figures out what we need to
    allocate node wise. It also looks at the bit behavior fields as we traverse
    the tree, looking at the ChildHerit settings to catch cases where the RI
@@ -2019,16 +2036,19 @@ prc_api_helper_count_items(prc_context *ctx, prc_api_data data, uint32_t num_fil
             this call so don't add it here. Guarded by the same
             wants_cross_file_ref/biased_file_index check as the part block
             above -- see its comment. */
-        if (!(wants_cross_file_ref && biased_file_index == 0) && product_refs->biased_index_prototype != 0)
+        if (!(wants_cross_file_ref && biased_file_index == 0) &&
+            prc_api_helper_content_source_index(product_refs) != 0)
         {
-            if (!prc_api_helper_tree_index_ok(data_in, file_index, product_refs->biased_index_prototype, 0))
+            uint32_t source_index = prc_api_helper_content_source_index(product_refs);
+
+            if (!prc_api_helper_tree_index_ok(data_in, file_index, source_index, 0))
             {
                 prc_error(ctx, PRC_ERROR_PARSE, "Prototype index past the end of the tree\n");
                 result = PRC_ERROR_PARSE;
                 goto cleanup;
             }
             prototype_product =
-                &data_in->file_struct[file_index].tree->products[product_refs->biased_index_prototype - 1];
+                &data_in->file_struct[file_index].tree->products[source_index - 1];
             prc_api_helper_set_inheritance_data(ctx, &work_product->style_inheritance,
                 &prototype_product->base.graphics_content, &prototype_product->style_inheritance,
                 file_index);
@@ -3299,19 +3319,21 @@ prc_api_helper_add_product(prc_context *ctx, prc_api_data data, uint32_t num_fil
                is an index into. Fall through to the "last prototype" case
                instead of reading out of range. */
             if (!(wants_cross_file_ref && biased_file_index == 0) &&
-                product_refs->biased_index_prototype != 0 &&
+                prc_api_helper_content_source_index(product_refs) != 0 &&
                 product_refs->number_of_child_product_occurrences == 0)
             {
+                uint32_t source_index = prc_api_helper_content_source_index(product_refs);
+
                 /* IMPORTANT: pass product_style as the parent for the prototype
                    chain so it builds as a single-child lineage under this node. */
-                if (!prc_api_helper_tree_index_ok(data_in, file_index, product_refs->biased_index_prototype, 0))
+                if (!prc_api_helper_tree_index_ok(data_in, file_index, source_index, 0))
                 {
                     prc_error(ctx, PRC_ERROR_PARSE, "Prototype index past the end of the tree\n");
                     result = PRC_ERROR_PARSE;
                     goto cleanup;
                 }
                 prototype_product =
-                    &data_in->file_struct[file_index].tree->products[product_refs->biased_index_prototype - 1];
+                    &data_in->file_struct[file_index].tree->products[source_index - 1];
                 prc_api_helper_update_parent_style(ctx, prototype_product, file_index,
                     &work_parent_biased_style_index, &work_parent_biased_style_file_index);
 

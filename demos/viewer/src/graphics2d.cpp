@@ -235,8 +235,13 @@ void Graphics2D::DrawText(const char *text, float x, float y, float z)
 	GLuint texture = _font->GetTexture();
 
 	DrawList2D *dl;
-	if (texture != _texture)
+	if (!_draw_list_count || texture != _texture)
+	{
 		dl = NewDrawList();
+		/* Remember it: without this every DrawText started a list of its own, and the text a markup took
+		   from several text entities (the lines of a label) was cut to the first, as only list 0 is read. */
+		_texture = texture;
+	}
 	else
 		dl = _draw_lists + _draw_list_count - 1;
 

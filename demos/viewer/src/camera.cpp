@@ -93,7 +93,33 @@ void Camera::update()
     _up = normalize(up3);
     _right = normalize(cross(_front, _up));
     _view = lookAt(_position, _position + _front, _up);
-    _projection = perspective(mutil::radians(_fov), _aspect, _near, _far);
+    _perspectiveProjection = perspective(mutil::radians(_fov), _aspect, _near, _far);
+
+    if (_isOrthographic)
+    {
+        float right = _orthoSize * _aspect;
+        float left = -right;
+        float top = _orthoSize;
+        float bottom = -top;
+        float zNear = -_far;
+        float zFar = _far;
+
+        _projection = Matrix4(
+            Vector4(2.0f / (right - left), 0.0f, 0.0f, 0.0f),
+            Vector4(0.0f, 2.0f / (top - bottom), 0.0f, 0.0f),
+            Vector4(0.0f, 0.0f, -2.0f / (zFar - zNear), 0.0f),
+            Vector4(
+                -(right + left) / (right - left),
+                -(top + bottom) / (top - bottom),
+                -(zFar + zNear) / (zFar - zNear),
+                1.0f
+            )
+        );
+    }
+    else
+    {
+        _projection = _perspectiveProjection;
+    }
 }
 
 double Camera::getCurrentViewCenterOrbitZ(void)
@@ -280,7 +306,8 @@ void Camera::setView(int index)
 }
 
 Camera::Camera() : _pitch(0.0f), _yaw(0.0f), _roll(0.0f), _numViews(0), _views(nullptr),
-                   _fov(45.0f), _near(0.1f), _far(400.0f), _aspect(16.0f / 9.0f)
+                   _fov(45.0f), _near(0.1f), _far(400.0f), _aspect(16.0f / 9.0f),
+                   _isOrthographic(false), _orthoSize(10.0f)
 {
     _orientation = Quaternion();
     update();

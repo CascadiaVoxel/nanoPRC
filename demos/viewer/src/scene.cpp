@@ -1382,7 +1382,7 @@ void Scene::renderSkybox(Camera *camera) const
     Matrix4 skyView = Matrix4(Matrix3(camera->view()));
     _skyboxShader->setSkyView(skyView);
 
-    _skyboxShader->setProjection(camera->projection());
+    _skyboxShader->setProjection(camera->perspectiveProjection());
 
     _skyboxShader->setSunDir(_dirLight.direction);
     _skyboxShader->setSunColor(_dirLight.color);

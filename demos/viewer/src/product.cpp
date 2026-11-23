@@ -634,6 +634,7 @@ void Product::attachTextContent(prc_context *ctx, prc_api_data data,
             float size = (float)tp.text_height;
             float offX = 0.0f;
             float offY = 0.0f;
+            float fileSize = 0.0f; /* the size the file's own matrix scale gives the label */
             float code = 3.0f; /* Frame Draw */
 
             if (tp.mode == PRC_API_TEXT_FACE_VIEW_MODE)
@@ -647,12 +648,20 @@ void Product::attachTextContent(prc_context *ctx, prc_api_data data,
             }
             else
             {
-                size *= (float)tp.screen_scale * kMarkupPixelScale;
+                /* The file gives its labels two scales (8 and 10 pixels in the Pump), set when the
+                   callouts were made; Acrobat draws every label the same size. So the glyphs are all drawn at
+                   the smaller scale, kLabelScale, and each label keeps its own offset and its own size for
+                   where its baseline is (below). */
+                const float kLabelScale = 1.20755f;
+                fileSize = size * (float)tp.screen_scale * kMarkupPixelScale;
+                size *= kLabelScale * kMarkupPixelScale;
                 offX = (float)tp.screen_offset[0] * kMarkupPixelScale;
                 offY = (float)tp.screen_offset[1] * kMarkupPixelScale;
             }
             if (size <= 0.0f)
                 size = kFontPixels;
+            if (fileSize <= 0.0f)
+                fileSize = size;
             float k2 = size / kFontPixels;
 
             /* In a Frame Draw block the matrix's translation is not the baseline: it is 0.509 times the size
@@ -661,7 +670,19 @@ void Product::attachTextContent(prc_context *ctx, prc_api_data data,
                size. The baselines are therefore the offsets raised by 0.509 times the size: a single line's on
                the shelf (so the shelf meets the bottom left of the text), an odd stack's middle line on it, an
                even stack centred on it, as Acrobat draws them. */
-            float baselineRise = (code == 3.0f) ? 0.5093f * size : 0.0f;
+            float baselineRise = (code == 3.0f) ? 0.5093f * fileSize : 0.0f;
+            if (code == 3.0f)
+            {
+                /* That puts a line's baseline at its own distance from the label's centre line. The file spaces
+                   the lines 1.6716 times its size apart (double spacing); Acrobat sets them at an ordinary line
+                   spacing, 1.2 times the glyph size, about the same centre. */
+                const float kFileLineSpacing = 1.6716f;
+                const float kLineSpacing = 1.2f;
+                float fromCentre = offY + baselineRise;
+                fromCentre *= (kLineSpacing * size) / (kFileLineSpacing * fileSize);
+                offY = fromCentre;
+                baselineRise = 0.0f;
+            }
 
             for (size_t v = r.first; v < r.first + r.count; v++)
             {

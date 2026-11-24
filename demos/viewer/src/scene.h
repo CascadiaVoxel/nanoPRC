@@ -174,7 +174,8 @@ private:
 
     void convertTree(prc_context *ctx, prc_api_data data, prc_api_product *api_product,
         Product *app_product, Product *heap, uint32_t *product_count,
-        Vector4 *minBound, Vector4 *maxBound, uint8_t *font_atlas_created);
+        Vector4 *minBound, Vector4 *maxBound, uint8_t *font_atlas_created,
+        const Matrix4 &parentMatrix = Matrix4(1.0f), uint8_t parentIdentity = 1);
 
     void addRepItems(prc_context *ctx, prc_api_data data, prc_api_part *api_part,
         Product *app_product, Product *heap, uint32_t *product_count,

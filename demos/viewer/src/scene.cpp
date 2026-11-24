@@ -426,8 +426,24 @@ static void setBounds(prc_context *ctx, Product *app_child, prc_api_tess *tess,
     /* Adjust the bounding boxes for the model by the matrix */
     if (!is_identity)
     {
-        min_bound = matrix * app_child->bboxMin();
-        max_bound = matrix * app_child->bboxMax();
+        /* A rotation turns the box's two corners into corners that are no longer the least and the
+           greatest: carry all eight and take the box of them */
+        Vector4 lo = app_child->bboxMin();
+        Vector4 hi = app_child->bboxMax();
+        min_bound = Vector4(FLT_MAX);
+        max_bound = Vector4(-FLT_MAX);
+        for (int c = 0; c < 8; c++)
+        {
+            Vector4 corner = matrix * Vector4((c & 1) ? hi.x : lo.x, (c & 2) ? hi.y : lo.y,
+                (c & 4) ? hi.z : lo.z, lo.w);
+
+            min_bound.x = std::fmin(min_bound.x, corner.x);
+            min_bound.y = std::fmin(min_bound.y, corner.y);
+            min_bound.z = std::fmin(min_bound.z, corner.z);
+            max_bound.x = std::fmax(max_bound.x, corner.x);
+            max_bound.y = std::fmax(max_bound.y, corner.y);
+            max_bound.z = std::fmax(max_bound.z, corner.z);
+        }
         app_child->setBoundingBox(min_bound, max_bound);
     }
 
@@ -568,7 +584,8 @@ void Scene::addRepItems(prc_context *ctx, prc_api_data data, prc_api_part *api_p
    convert it to the tree that is used by this application */
 void Scene::convertTree(prc_context *ctx, prc_api_data data, prc_api_product *api_product,
                  Product *app_product, Product *heap, uint32_t *product_count,
-                 Vector4 *minBound, Vector4 *maxBound, uint8_t *font_atlas_created)
+                 Vector4 *minBound, Vector4 *maxBound, uint8_t *font_atlas_created,
+                 const Matrix4 &parentMatrix, uint8_t parentIdentity)
 {
     uint8_t has_tess = prc_api_model_item_is_part(ctx, api_product);
     prc_api_tess *tess;
@@ -613,6 +630,13 @@ void Scene::convertTree(prc_context *ctx, prc_api_data data, prc_api_product *ap
         app_product->setModel(Matrix4(1.0f));
     }
 
+    /* The product's place in the scene is its own location within its parent's, so the whole chain of
+       locations from the root: the matrix is what the drawing composes down the tree (Product::update),
+       and what the bounds must use, or everything below a placed sub-assembly is bounded where it is not
+       drawn and the view centres on the wrong point. */
+    const uint8_t world_identity = parentIdentity && location.is_identity;
+    const Matrix4 world_matrix = world_identity ? Matrix4(1.0f) : parentMatrix * matrix;
+
     if (api_product->attributes.num_base_attributes > 0)
     {
         app_product->setAttributes(&api_product->attributes);
@@ -641,8 +665,8 @@ void Scene::convertTree(prc_context *ctx, prc_api_data data, prc_api_product *ap
 
             /* The part can carry its own local coordinate system, and be
                removed, as its items can (see addRepItems) */
-            Matrix4 part_matrix = matrix;
-            uint8_t part_identity = location.is_identity;
+            Matrix4 part_matrix = world_matrix;
+            uint8_t part_identity = world_identity;
             Vector4 partRemovedMin = Vector4(FLT_MAX), partRemovedMax = Vector4(-FLT_MAX);
             Vector4 *partMin = minBound, *partMax = maxBound;
 
@@ -691,7 +715,7 @@ void Scene::convertTree(prc_context *ctx, prc_api_data data, prc_api_product *ap
             Product *app_child = app_product->getChildFromHeap(i + start_index, heap, product_count); /* Note no + after this as it occurs in convertTree */
             app_child->setParent(app_product);
             convertTree(ctx, data, api_product->children + i, app_child, heap,
-                product_count, minBound, maxBound, font_atlas_created);
+                product_count, minBound, maxBound, font_atlas_created, world_matrix, world_identity);
         }
     }
 
@@ -745,7 +769,7 @@ void Scene::convertTree(prc_context *ctx, prc_api_data data, prc_api_product *ap
                 if (hiddenMarkup)
                     app_markup_parent->setEnabled(false);
                 app_markup_parent->setModel(Matrix4(1.0f));
-                setBounds(ctx, app_markup_parent, tess, matrix, location.is_identity, markupMin,
+                setBounds(ctx, app_markup_parent, tess, world_matrix, world_identity, markupMin,
                     markupMax);
 
                 /* Set the the markup (non-text) child */
@@ -758,7 +782,7 @@ void Scene::convertTree(prc_context *ctx, prc_api_data data, prc_api_product *ap
                 app_child->setName(markup_name.c_str());
 
                 app_child->setModel(Matrix4(1.0f));
-                setBounds(ctx, app_child, tess, matrix, location.is_identity, markupMin,
+                setBounds(ctx, app_child, tess, world_matrix, world_identity, markupMin,
                     markupMax);
                 app_child->attach(ctx, data, tess, *getTextRenderPtr());
 
@@ -772,7 +796,7 @@ void Scene::convertTree(prc_context *ctx, prc_api_data data, prc_api_product *ap
                 app_child_text->setName(markup_name2.c_str());
 
                 app_child_text->setModel(Matrix4(1.0f));
-                setBounds(ctx, app_child_text, tess, matrix, location.is_identity, markupMin,
+                setBounds(ctx, app_child_text, tess, world_matrix, world_identity, markupMin,
                     markupMax);
                 app_child_text->attachTextContent(ctx, data, tess, *getTextRenderPtr());
             }
@@ -788,7 +812,7 @@ void Scene::convertTree(prc_context *ctx, prc_api_data data, prc_api_product *ap
                 if (hiddenMarkup)
                     app_child->setEnabled(false);
                 app_child->setModel(Matrix4(1.0f));
-                setBounds(ctx, app_child, tess, matrix, location.is_identity, markupMin,
+                setBounds(ctx, app_child, tess, world_matrix, world_identity, markupMin,
                     markupMax);
 
                 /* Just a single child for this markup */
@@ -811,7 +835,7 @@ void Scene::convertTree(prc_context *ctx, prc_api_data data, prc_api_product *ap
                 if (hiddenMarkup)
                     app_child->setEnabled(false);
                 app_child->setModel(Matrix4(1.0f));
-                setBounds(ctx, app_child, tess, matrix, location.is_identity, markupMin,
+                setBounds(ctx, app_child, tess, world_matrix, world_identity, markupMin,
                     markupMax);
                 /* Just don't attach it though */
             }

@@ -18,6 +18,11 @@
 #include <algorithm> // For std::sort
 #include <cassert>
 #include <vector>
+
+/* Markup that a file sizes in pixels (the text and lines of Frame Draw and Fixed Size blocks) is drawn this
+   many times larger: the file's pixels are those of a PDF page, and a 3D view on a screen reads small at that
+   size. Its offsets and lines are scaled with it, so the markup keeps its shape. */
+static const float kMarkupPixelScale = 1.5f;
 #include <unordered_map>
 #include <cstddef> /* For offsetof macro */
 #include <cstdint>
@@ -145,9 +150,46 @@ void releaseTextures()
     textureMap.clear();
 }
 
+void Product::renderText(MeshShader *shader) const
+{
+    if (_vao && _isText && _enabled)
+    {
+        glEnable(GL_BLEND);
+        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+        glBlendEquation(GL_FUNC_ADD);
+        /* Tested against the model, so a label behind a surface is hidden as in Acrobat. Markup lines write no
+           depth (see render), so a line never hides a label. */
+        glEnable(GL_DEPTH_TEST);
+        glDepthFunc(GL_LEQUAL);
+        glDepthMask(GL_FALSE);
+
+        glBindVertexArray(_vao);
+        shader->setModel(_local_to_world);
+
+        for (uint32_t i = 0; i < _numMeshes; i++)
+        {
+            const MeshSpec &mesh = _meshes[i];
+            shader->setMaterial(_material[mesh.faceIndex]);
+            shader->setIsLine(true);
+            shader->setVertexHasMaterial(mesh.verticesHaveStyle);
+            glDrawElements(mesh.primitive, mesh.numIndices, GL_UNSIGNED_INT,
+                (void *)(_meshes[i].offset * sizeof(GLuint)));
+        }
+
+        glDepthMask(GL_TRUE);
+        glDepthFunc(GL_LESS);
+    }
+
+    for (uint32_t i = 0; i < _nchildren; i++)
+    {
+        if (_children[i]->_enabled)
+            _children[i]->renderText(shader);
+    }
+}
+
 void Product::render(MeshShader *shader) const
 {
-    if (_vao)
+    if (_vao && !_isText)
     {
         glEnable(GL_BLEND);
         glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
@@ -174,6 +216,9 @@ void Product::render(MeshShader *shader) const
                 bool isMarkUp = mesh.isMarkup;
                 shader->setIsLine(isLine || isMarkUp);
                 shader->setVertexHasMaterial(mesh.verticesHaveStyle);
+                /* Markup lines are tested against the model but write no depth: a label is tested the same
+                   way, so a line crossing it cannot hide it */
+                glDepthMask(isMarkUp ? GL_FALSE : GL_TRUE);
 
                 glDrawElements(
                     mesh.primitive,
@@ -466,6 +511,7 @@ void Product::attachTextContent(prc_context *ctx, prc_api_data data,
     printf("attachTextContent: Processing %zu text primitives\n", tess->num_text_primitives);
 
     _hasTransparency = true;
+    _isText = true;
 
     _meshes = new MeshSpec[1];
     _numMeshes = 1;
@@ -485,7 +531,7 @@ void Product::attachTextContent(prc_context *ctx, prc_api_data data,
     if (sharedFont == nullptr)
     {
         prc_api_texture text_texture;
-        sharedFont = Font::CreateFromData("roboto_reg", (unsigned char *)roboto_reg, 0, 64, text_texture);
+        sharedFont = Font::CreateFromData("roboto_reg", (unsigned char *)roboto_reg, 0, 24, text_texture);
         if (sharedFont == NULL)
         {
             printf("Model::load: Font::CreateFromData failed\n");
@@ -509,6 +555,17 @@ void Product::attachTextContent(prc_context *ctx, prc_api_data data,
     textRenderer.SetFont(sharedFont);
     _material[0].setDiffuseTexture(sharedAtlasTexture);
 
+    /* Each label is built around (0, 0) in the font's own pixels and then placed from its anchor, below, by
+       how its block mode says. These are the labels' vertex ranges, to place them with. */
+    struct TextRange
+    {
+        size_t first;
+        size_t count;
+        prc_api_text_primitive primitive;
+    };
+    std::vector<TextRange> textRanges;
+    textRanges.reserve(tess->num_text_primitives);
+
     for (uint32_t k = 0; k < tess->num_text_primitives; k++)
     {
         prc_api_text_primitive text_primitive;
@@ -527,10 +584,12 @@ void Product::attachTextContent(prc_context *ctx, prc_api_data data,
         textRenderer.SetColor(Vector4(text_primitive.color[0], text_primitive.color[1],
             text_primitive.color[2], 1.0f));
 
-        textRenderer.DrawText(text_primitive.text,
-            (float)text_primitive.origin[0],
-            (float)text_primitive.origin[1],
-            (float)text_primitive.origin[2]);
+        TextRange range;
+        range.first = textRenderer.GetNumVertices();
+        textRenderer.DrawText(text_primitive.text, 0.0f, 0.0f, 0.0f);
+        range.count = textRenderer.GetNumVertices() - range.first;
+        range.primitive = text_primitive;
+        textRanges.push_back(range);
     }
 
     size_t numTextVertices = textRenderer.GetNumVertices();
@@ -560,6 +619,86 @@ void Product::attachTextContent(prc_context *ctx, prc_api_data data,
 
     prc_api_vertex *textVertices = new prc_api_vertex[numTextVertices];
     textRenderer.GetVertices(textVertices, _material[0]);
+
+    /* Place each label from its anchor (see generic.vert for how a placed vertex is read). The font is baked
+       at kFontPixels; a label's glyph offsets, which are in those pixels with y down, are scaled to the label's
+       size. Frame Draw: size = text height times the block's scale, in pixels, offset on the screen by the
+       block's matrix. Fixed Size: text height in pixels. Face View: text height in model units. Any mode the
+       file does not give is drawn as a Frame Draw label, the way the other two are. */
+    {
+        const float kFontPixels = 24.0f;
+
+        for (const TextRange &r : textRanges)
+        {
+            const prc_api_text_primitive &tp = r.primitive;
+            float size = (float)tp.text_height;
+            float offX = 0.0f;
+            float offY = 0.0f;
+            float fileSize = 0.0f; /* the size the file's own matrix scale gives the label */
+            float code = 3.0f; /* Frame Draw */
+
+            if (tp.mode == PRC_API_TEXT_FACE_VIEW_MODE)
+            {
+                code = 2.0f;
+            }
+            else if (tp.mode == PRC_API_TEXT_FIXED_SIZE_MODE)
+            {
+                code = 4.0f;
+                size *= kMarkupPixelScale;
+            }
+            else
+            {
+                /* The file gives its labels two scales (8 and 10 pixels in the Pump), set when the
+                   callouts were made; Acrobat draws every label the same size. So the glyphs are all drawn at
+                   the smaller scale, kLabelScale, and each label keeps its own offset and its own size for
+                   where its baseline is (below). */
+                const float kLabelScale = 1.20755f;
+                fileSize = size * (float)tp.screen_scale * kMarkupPixelScale;
+                size *= kLabelScale * kMarkupPixelScale;
+                offX = (float)tp.screen_offset[0] * kMarkupPixelScale;
+                offY = (float)tp.screen_offset[1] * kMarkupPixelScale;
+            }
+            if (size <= 0.0f)
+                size = kFontPixels;
+            if (fileSize <= 0.0f)
+                fileSize = size;
+            float k2 = size / kFontPixels;
+
+            /* In a Frame Draw block the matrix's translation is not the baseline: it is 0.509 times the size
+               below it. The Pump's labels, in both of its sizes, store -0.509 times the size for a single line,
+               and for a stack of lines their offsets run symmetrically about that value, spaced 0.836 times the
+               size. The baselines are therefore the offsets raised by 0.509 times the size: a single line's on
+               the shelf (so the shelf meets the bottom left of the text), an odd stack's middle line on it, an
+               even stack centred on it, as Acrobat draws them. */
+            float baselineRise = (code == 3.0f) ? 0.5093f * fileSize : 0.0f;
+            if (code == 3.0f)
+            {
+                /* That puts a line's baseline at its own distance from the label's centre line. The file spaces
+                   the lines 1.6716 times its size apart (double spacing); Acrobat sets them at an ordinary line
+                   spacing, 1.2 times the glyph size, about the same centre. */
+                const float kFileLineSpacing = 1.6716f;
+                const float kLineSpacing = 1.2f;
+                float fromCentre = offY + baselineRise;
+                fromCentre *= (kLineSpacing * size) / (kFileLineSpacing * fileSize);
+                offY = fromCentre;
+                baselineRise = 0.0f;
+            }
+
+            for (size_t v = r.first; v < r.first + r.count; v++)
+            {
+                prc_api_vertex &pv = textVertices[v];
+                float gx = pv.position[0] * k2 + offX;
+                float gy = -pv.position[1] * k2 + offY + baselineRise;
+
+                pv.position[0] = (float)tp.origin[0];
+                pv.position[1] = (float)tp.origin[1];
+                pv.position[2] = (float)tp.origin[2];
+                pv.normal[0] = gx;
+                pv.normal[1] = gy;
+                pv.normal[2] = code;
+            }
+        }
+    }
 
     // Diagnostic: Check first vertex
     printf("First text vertex: pos=(%.2f, %.2f, %.2f) uv=(%.4f, %.4f) color=(%.2f, %.2f, %.2f, %.2f)\n",
@@ -984,6 +1123,34 @@ void Product::attach(prc_context *ctx, prc_api_data data, const prc_api_tess *te
                 exit(1);
             }
 
+            /* The lines of a Frame Draw block have vertices that are pixel offsets from the block's origin, not model
+               coordinates: put the vertex at the origin and its offset in the normal, for generic.vert to place. Each
+               markup primitive has vertices of its own. */
+            if (tess->type == PRC_API_TESS_MarkUp)
+            {
+                prc_api_markup_block block;
+
+                if (prc_api_get_markup_line_block(ctx, data, tess, j, &block) == 0 &&
+                    block.mode == PRC_API_TEXT_FRAME_DRAW_MODE)
+                {
+                    for (size_t idx = 0; idx < primitive.num_indices; idx++)
+                    {
+                        size_t at = (size_t)vertex_offset + primitive.indices[idx];
+                        if (at >= combined_vertices.size())
+                            continue;
+                        prc_api_vertex &pv = combined_vertices[at];
+                        if (pv.normal[2] > 1.5f)
+                            continue; /* Already placed: a vertex two lines share */
+                        pv.normal[0] = pv.position[0] * kMarkupPixelScale;
+                        pv.normal[1] = pv.position[1] * kMarkupPixelScale;
+                        pv.normal[2] = 3.0f;
+                        pv.position[0] = (float)block.origin[0];
+                        pv.position[1] = (float)block.origin[1];
+                        pv.position[2] = (float)block.origin[2];
+                    }
+                }
+            }
+
             /* Create a mesh */
             MeshSpec &mesh = _meshes[counter];
             mesh.faceIndex = i;
@@ -1199,7 +1366,8 @@ Product::Product() :
     _vao(0), _vbo(0), _ebo(0),
     _meshes(nullptr), _numMeshes(0),
     _material(nullptr), _numMaterials(0),
-    _hasTransparency(false)
+    _hasTransparency(false),
+    _isText(false)
 {
 }
 

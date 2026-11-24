@@ -245,7 +245,23 @@ typedef struct prc_api_text_primitive_s
     unsigned char *font;
     double color[4];
     prc_api_text_block_mode_t mode;
+    /** In a Frame Draw block (mode PRC_API_TEXT_FRAME_DRAW_MODE) the label is placed on the screen: origin is
+        the 3D point it is anchored to, screen_offset is where the text starts from that point's projection,
+        in pixels (x to the right, y up), and screen_scale scales text_width and text_height to pixels.
+        In any other mode screen_offset is 0 and screen_scale is 1. */
+    double screen_offset[2];
+    double screen_scale;
 } prc_api_text_primitive;
+
+/** The block a markup line primitive was stored in. */
+typedef struct prc_api_markup_block_s
+{
+    /** PRC_API_TEXT_NO_MODE when the line is in no block: its vertices are model coordinates. In a Frame Draw
+        block the line's vertices are pixel offsets (x, y; z is 0) from the projection of origin. */
+    prc_api_text_block_mode_t mode;
+    /** The origin of the block's coordinate system. 0 when mode is PRC_API_TEXT_NO_MODE. */
+    double origin[3];
+} prc_api_markup_block;
 
 /* A tessellation can have a material associated with it. But if the tessellation
    has faces, the material associated with the face, will contain the material
@@ -942,6 +958,10 @@ PRC_EXPORT int prc_api_get_texture_layer(prc_context *ctx, const prc_api_texture
  * @return 0 on success, negative PRC_API_ERROR_* code on failure.
  */
 PRC_EXPORT int prc_api_get_text_primitive(prc_context *ctx, prc_api_data data, const prc_api_tess *tess, uint32_t text_index, prc_api_text_primitive *text_primitive);
+
+/** The block line_index'th line primitive of a markup tessellation was stored in: see prc_api_markup_block.
+    Returns 0, or an error if tess is not a markup tessellation or line_index is not below num_line_primitives. */
+PRC_EXPORT int prc_api_get_markup_line_block(prc_context *ctx, prc_api_data data, const prc_api_tess *tess, uint32_t line_index, prc_api_markup_block *block);
 
 /**
  * @brief Return number of materials represented by a tessellation.

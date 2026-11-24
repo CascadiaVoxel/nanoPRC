@@ -281,11 +281,25 @@ prc_decode_markup_tess(prc_context *ctx, prc_tess_markup *data)
                 if (mode_stack->mode == PRC_FACE_VIEW_MODE)
                 {
                     code = prc_pop_mode_stack(ctx, &mode_stack);
+                    frame_draw_origin.x = 0.0;
+                    frame_draw_origin.y = 0.0;
+                    frame_draw_origin.z = 0.0;
                 }
                 else
                 {
                     code = prc_push_mode_stack(ctx, &mode_stack, PRC_FACE_VIEW_MODE);
                     num_entites_in_block = num_inner_codes;
+
+                    /* The beginning of the block stores the origin of the coordinate system the
+                       block draws in, as three doubles; the ending stores none. */
+                    if (num_doubles >= 3)
+                    {
+                        MKP_NEED_DOUBLES(3);
+                        frame_draw_origin.x = data->tessellation_coordinates.coordinates[doubles_count];
+                        frame_draw_origin.y = data->tessellation_coordinates.coordinates[doubles_count + 1];
+                        frame_draw_origin.z = data->tessellation_coordinates.coordinates[doubles_count + 2];
+                        doubles_count += 3;
+                    }
                 }
                 if (code < 0)
                     goto fail;
@@ -330,11 +344,27 @@ prc_decode_markup_tess(prc_context *ctx, prc_tess_markup *data)
                 /* If current mode on stack is PRC_FIXED_SIZE_MODE then pop else push */
                 num_doubles = data->code_numbers[k + 1]; /* Number of doubles in the block */
                 if (mode_stack->mode == PRC_FIXED_SIZE_MODE)
+                {
                     code = prc_pop_mode_stack(ctx, &mode_stack);
+                    frame_draw_origin.x = 0.0;
+                    frame_draw_origin.y = 0.0;
+                    frame_draw_origin.z = 0.0;
+                }
                 else
                 {
                     code = prc_push_mode_stack(ctx, &mode_stack, PRC_FIXED_SIZE_MODE);
                     num_entites_in_block = num_inner_codes;
+
+                    /* As for Face View: the beginning of the block stores its origin. Left unread,
+                       every double after it in the tessellation is read three places early. */
+                    if (num_doubles >= 3)
+                    {
+                        MKP_NEED_DOUBLES(3);
+                        frame_draw_origin.x = data->tessellation_coordinates.coordinates[doubles_count];
+                        frame_draw_origin.y = data->tessellation_coordinates.coordinates[doubles_count + 1];
+                        frame_draw_origin.z = data->tessellation_coordinates.coordinates[doubles_count + 2];
+                        doubles_count += 3;
+                    }
                 }
                 if (code < 0)
                     goto fail;
@@ -536,7 +566,22 @@ prc_decode_markup_tess(prc_context *ctx, prc_tess_markup *data)
                 data->decode_primitives[num_primitives].text_height = text_height;
                 data->decode_primitives[num_primitives].text_width = text_width;
                 data->decode_primitives[num_primitives].face_frame_draw_origin = frame_draw_origin;
-                prc_apply_matrix(ctx, markup_state, &data->decode_primitives[num_primitives].face_frame_draw_origin);
+                data->decode_primitives[num_primitives].text_offset_x = 0.0;
+                data->decode_primitives[num_primitives].text_offset_y = 0.0;
+                data->decode_primitives[num_primitives].text_scale = 1.0;
+                if (mode_stack->mode == PRC_FRAME_DRAW_MODE)
+                {
+                    /* The block draws in a 2D space about the projected origin, so a matrix inside it
+                       places and scales the label on the screen; the 3D origin is not passed through it. */
+                    if (!markup_state->is_identity)
+                    {
+                        data->decode_primitives[num_primitives].text_offset_x = markup_state->matrix[12];
+                        data->decode_primitives[num_primitives].text_offset_y = markup_state->matrix[13];
+                        data->decode_primitives[num_primitives].text_scale = markup_state->matrix[0];
+                    }
+                }
+                else
+                    prc_apply_matrix(ctx, markup_state, &data->decode_primitives[num_primitives].face_frame_draw_origin);
                 data->decode_primitives[num_primitives].primitive_type = MARKUP_TEXT;
                 data->decode_primitives[num_primitives].block_mode = mode_stack->mode;
                 num_primitives++;

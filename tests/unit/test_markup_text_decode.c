@@ -156,6 +156,95 @@ test_text_in_frame_draw(prc_context *ctx)
 }
 
 static void
+test_origin_of_fixed_size_block(prc_context *ctx)
+{
+    /* The shape of a callout in a real file: a Fixed Size block (three doubles of origin, then a two-point
+       line), then a Frame Draw block holding the label. The Fixed Size origin was never read, so the line
+       took the origin's doubles and the Frame Draw block took the line's: the label sat at the wrong place. */
+    const uint32_t codes[] = { EXTRA(PRC_FIXED_SIZE_MODEL, 1), 9, 0, 6, EXTRA(PRC_FIXED_SIZE_MODEL, 0), 0,
+                               EXTRA(PRC_FRAME_DRAW_MODEL, 1), 3, EXTRA(PRC_TEXT_ENTITY, 1), 2, 0,
+                               EXTRA(PRC_FRAME_DRAW_MODEL, 0), 0 };
+    const double coords[] = { 100, 200, 300, 1, 2, 3, 4, 5, 6, 10.0, 20.0, 30.0, 6.5, 8.0 };
+    const char *const strings[] = { "Inlet" };
+    prc_tess_markup m;
+
+    printf("  sub-case: a Fixed Size block's origin is read, so the label's Frame Draw origin is the right doubles\n");
+    build_markup(&m, codes, 13, coords, 14, strings, 1);
+    PRC_ASSERT_EQ(prc_decode_markup_tess(ctx, &m), 0);
+    PRC_ASSERT_EQ(m.decode_number_primitives, 2);
+    PRC_ASSERT_EQ(m.decode_primitives[0].primitive_type, MARKUP_LINE_STRIP);
+    PRC_ASSERT_EQ(m.decode_primitives[0].block_mode, PRC_FIXED_SIZE_MODE);
+    PRC_ASSERT(m.decode_primitives[0].face_frame_draw_origin.x == 100.0);
+    PRC_ASSERT(m.decode_vertices[0].x == 1.0 && m.decode_vertices[0].z == 3.0);
+    PRC_ASSERT(m.decode_vertices[1].x == 4.0 && m.decode_vertices[1].z == 6.0);
+    PRC_ASSERT_EQ(m.decode_primitives[1].primitive_type, MARKUP_TEXT);
+    PRC_ASSERT_EQ(m.decode_primitives[1].block_mode, PRC_FRAME_DRAW_MODE);
+    PRC_ASSERT(m.decode_primitives[1].face_frame_draw_origin.x == 10.0);
+    PRC_ASSERT(m.decode_primitives[1].face_frame_draw_origin.y == 20.0);
+    PRC_ASSERT(m.decode_primitives[1].face_frame_draw_origin.z == 30.0);
+    PRC_ASSERT(m.decode_primitives[1].text_width == 6.5);
+    release_markup(ctx, &m);
+}
+
+static void
+test_frame_draw_matrix_is_screen_placement(prc_context *ctx)
+{
+    /* The Frame Draw block of a Pump callout: the origin (a 3D point), a matrix block holding the label (scale
+       1.2, translation 8, -4 pixels), then a short shelf line after the matrix, in pixels from the origin. */
+    const uint32_t codes[] = { EXTRA(PRC_FRAME_DRAW_MODEL, 3), 27,
+                               PRC_MARKUP_IsMatrix | 2, 18, EXTRA(PRC_TEXT_ENTITY, 1), 2, 0,
+                               PRC_MARKUP_IsMatrix, 0, 0, 6,
+                               EXTRA(PRC_FRAME_DRAW_MODEL, 0), 0 };
+    const double coords[] = { 35.5, 454.5, 683.5,
+                              1.25, 0, 0, 0,  0, 1.25, 0, 0,  0, 0, 0, 0,  8, -4, 0, 1,
+                              68.0, 6.5,
+                              0, 0, 0, 8, 0, 0 };
+    const char *const strings[] = { "Bearing Housing" };
+    prc_tess_markup m;
+
+    printf("  sub-case: in a Frame Draw block a matrix is the label's screen offset and scale, and the origin stays 3D\n");
+    build_markup(&m, codes, 13, coords, 27, strings, 1);
+    PRC_ASSERT_EQ(prc_decode_markup_tess(ctx, &m), 0);
+    PRC_ASSERT_EQ(m.decode_number_primitives, 2);
+    PRC_ASSERT_EQ(m.decode_primitives[0].primitive_type, MARKUP_TEXT);
+    PRC_ASSERT_EQ(m.decode_primitives[0].block_mode, PRC_FRAME_DRAW_MODE);
+    PRC_ASSERT(m.decode_primitives[0].face_frame_draw_origin.x == 35.5);
+    PRC_ASSERT(m.decode_primitives[0].face_frame_draw_origin.y == 454.5);
+    PRC_ASSERT(m.decode_primitives[0].face_frame_draw_origin.z == 683.5);
+    PRC_ASSERT(m.decode_primitives[0].text_offset_x == 8.0);
+    PRC_ASSERT(m.decode_primitives[0].text_offset_y == -4.0);
+    PRC_ASSERT(m.decode_primitives[0].text_scale == 1.25);
+    PRC_ASSERT(m.decode_primitives[0].text_width == 68.0);
+    PRC_ASSERT_EQ(m.decode_primitives[1].primitive_type, MARKUP_LINE_STRIP);
+    PRC_ASSERT_EQ(m.decode_primitives[1].block_mode, PRC_FRAME_DRAW_MODE);
+    PRC_ASSERT(m.decode_primitives[1].face_frame_draw_origin.x == 35.5);
+    PRC_ASSERT(m.decode_vertices[0].x == 0.0 && m.decode_vertices[1].x == 8.0);
+    release_markup(ctx, &m);
+}
+
+static void
+test_origin_of_face_view_block(prc_context *ctx)
+{
+    const uint32_t codes[] = { EXTRA(PRC_FACE_VIEW_MODEL, 1), 5, EXTRA(PRC_TEXT_ENTITY, 1), 2, 0,
+                               EXTRA(PRC_FACE_VIEW_MODEL, 0), 0 };
+    const double coords[] = { 5.0, 6.0, 7.0, 2.5, 3.5 };
+    const char *const strings[] = { "Vent" };
+    prc_tess_markup m;
+
+    printf("  sub-case: a label in a Face View block carries the block's origin and mode\n");
+    build_markup(&m, codes, 7, coords, 5, strings, 1);
+    PRC_ASSERT_EQ(prc_decode_markup_tess(ctx, &m), 0);
+    PRC_ASSERT_EQ(m.decode_number_primitives, 1);
+    PRC_ASSERT_EQ(m.decode_primitives[0].block_mode, PRC_FACE_VIEW_MODE);
+    PRC_ASSERT(m.decode_primitives[0].face_frame_draw_origin.x == 5.0);
+    PRC_ASSERT(m.decode_primitives[0].face_frame_draw_origin.y == 6.0);
+    PRC_ASSERT(m.decode_primitives[0].face_frame_draw_origin.z == 7.0);
+    PRC_ASSERT(m.decode_primitives[0].text_width == 2.5);
+    PRC_ASSERT(m.decode_primitives[0].text_height == 3.5);
+    release_markup(ctx, &m);
+}
+
+static void
 test_bad_string_index_refused(prc_context *ctx)
 {
     /* The text entity names string 5 and there is one. A markup like that is refused, not drawn
@@ -183,6 +272,9 @@ main(void)
     test_text_alone(ctx);
     test_text_after_lines_and_colour(ctx);
     test_text_in_frame_draw(ctx);
+    test_origin_of_fixed_size_block(ctx);
+    test_origin_of_face_view_block(ctx);
+    test_frame_draw_matrix_is_screen_placement(ctx);
     test_bad_string_index_refused(ctx);
 
     PRC_ASSERT_EQ(prc_api_release_context(ctx), 0);

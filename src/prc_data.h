@@ -1547,6 +1547,11 @@ typedef struct prc_markup_primitive_decode_s
     double line_width;
     prc_markup_block_mode_t block_mode;
     prc_vec3 face_frame_draw_origin;
+    /* A text entity in a Frame Draw block: the block's matrix is a 2D transform of the screen (pixels), not
+       of the 3D origin. Its translation and its scale are kept here; the origin above is left untouched. */
+    double text_offset_x;
+    double text_offset_y;
+    double text_scale;
 } prc_markup_primitive_decode;
 
 /* Table 147 � prc_tess_markup */

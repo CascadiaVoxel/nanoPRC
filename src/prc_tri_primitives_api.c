@@ -6409,6 +6409,12 @@ wire_failure:
                     tess->decode_primitives[k].text_height;
                 api_tess->text_primitives[text_prim_count].mode =
                     (prc_api_text_block_mode_t) tess->decode_primitives[k].block_mode;
+                api_tess->text_primitives[text_prim_count].screen_offset[0] =
+                    tess->decode_primitives[k].text_offset_x;
+                api_tess->text_primitives[text_prim_count].screen_offset[1] =
+                    tess->decode_primitives[k].text_offset_y;
+                api_tess->text_primitives[text_prim_count].screen_scale =
+                    tess->decode_primitives[k].text_scale;
 
                 /* Now the font */
 
@@ -6429,6 +6435,12 @@ wire_failure:
 
                 memcpy(wire[line_prim_count].vertex_indices, tess->decode_primitives[k].indices,
                     wire[line_prim_count].num_indices * sizeof(uint32_t));
+
+                wire[line_prim_count].block_mode =
+                    (prc_api_text_block_mode_t) tess->decode_primitives[k].block_mode;
+                wire[line_prim_count].block_origin[0] = tess->decode_primitives[k].face_frame_draw_origin.x;
+                wire[line_prim_count].block_origin[1] = tess->decode_primitives[k].face_frame_draw_origin.y;
+                wire[line_prim_count].block_origin[2] = tess->decode_primitives[k].face_frame_draw_origin.z;
 
                 /* Each markup primitive has vertices of its own, so its colour goes on them. The colour index
                    counts doubles in the colour array, three per colour, as for text above. */
@@ -6739,6 +6751,27 @@ prc_api_get_text_primitive(prc_context *ctx, prc_api_data data,
 
     memcpy(text_primitive, &tess->text_primitives[text_index],
                                                     sizeof(prc_api_text_primitive));
+    return 0;
+}
+
+PRC_EXPORT int
+prc_api_get_markup_line_block(prc_context *ctx, prc_api_data data,
+    const prc_api_tess *tess, uint32_t line_index, prc_api_markup_block *block)
+{
+    const prc_internal_api_wire *wire;
+
+    (void)ctx;
+    (void)data;
+    if (tess == NULL || block == NULL || tess->type != PRC_API_TESS_MarkUp)
+        return PRC_API_ERROR_PARAMETER;
+    if (tess->reserved == NULL || line_index >= tess->num_line_primitives)
+        return PRC_API_ERROR_PARAMETER;
+
+    wire = prc_tess_internal_wire(tess);
+    block->mode = wire[line_index].block_mode;
+    block->origin[0] = wire[line_index].block_origin[0];
+    block->origin[1] = wire[line_index].block_origin[1];
+    block->origin[2] = wire[line_index].block_origin[2];
     return 0;
 }
 

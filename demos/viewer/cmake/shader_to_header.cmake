@@ -4,7 +4,9 @@ endif()
 
 file(READ ${INPUT_FILE} SHADER_CONTENT)
 
-string(REPLACE "\n" "\\n" SHADER_CONTENT "${SHADER_CONTENT}")
+# One string literal per line, which the compiler joins: MSVC refuses a single literal of more than about
+# 16 KB (C2026), and generic.frag has grown to that size.
+string(REPLACE "\n" "\\n\"\n\"" SHADER_CONTENT "${SHADER_CONTENT}")
 string(REPLACE "\r" "\\r" SHADER_CONTENT "${SHADER_CONTENT}")
 string(REPLACE "\t" "\\t" SHADER_CONTENT "${SHADER_CONTENT}")
 

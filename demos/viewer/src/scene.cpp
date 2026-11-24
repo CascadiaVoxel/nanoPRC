@@ -1392,7 +1392,12 @@ void Scene::renderModels(Camera *camera) const
     root.render(_meshShader);
 
     /* Markup text last and with no depth test, so a label is never behind a lead line or the model */
+    /* A label's quads face the camera whichever way round they are wound, so back-face culling must not
+       reach them, or the labels vanish when it is on */
+    glDisable(GL_CULL_FACE);
     root.renderText(_meshShader);
+    if (_backfaceCull)
+        glEnable(GL_CULL_FACE);
 
     /* Render ground */
     if (_enableGround && 0)

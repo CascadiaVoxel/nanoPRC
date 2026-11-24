@@ -67,6 +67,9 @@ public:
     constexpr bool &backfaceCull() { return _backfaceCull; }
     constexpr float &ambientWeight() { return _ambientWeight; }
     constexpr float ambientWeight() const { return _ambientWeight; }
+    /** How strongly the light that follows the camera shines; 0 is off. */
+    constexpr float &fillIntensity() { return _fillIntensity; }
+    constexpr float fillIntensity() const { return _fillIntensity; }
     constexpr float &diffuseWeight() { return _diffuseWeight; }
     constexpr float diffuseWeight() const { return _diffuseWeight; }
     constexpr int &normalDebugMode() { return _normalDebugMode; }
@@ -140,6 +143,7 @@ private:
     bool _fullbright;
     float _ambientWeight;
     float _diffuseWeight;
+    float _fillIntensity;
     int _normalDebugMode;
 
     DirLight _dirLight;

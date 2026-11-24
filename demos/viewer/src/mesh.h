@@ -85,6 +85,16 @@ public:
         _shader.setFloat(uPointLight_intensity, light.intensity);
     }
 
+    /** The light that follows the camera: toward_camera is the direction from the scene to the camera, in
+        world space; toward_highlight is the direction to where its highlight shines from. An intensity of 0
+        switches it off. */
+    inline void setFillLight(const Vector3 &toward_camera, const Vector3 &toward_highlight, float intensity)
+    {
+        _shader.setVector3(uFillDir, toward_camera);
+        _shader.setVector3(uFillSpecDir, toward_highlight);
+        _shader.setFloat(uFillIntensity, intensity);
+    }
+
     inline void setSkyColorHorizon(const Vector3 &skyColorHorizon) { _shader.setVector3(uSkyColorHorizon, skyColorHorizon); }
     inline void setSkyColorZenith(const Vector3 &skyColorZenith) { _shader.setVector3(uSkyColorZenith, skyColorZenith); }
 
@@ -148,6 +158,9 @@ private:
     int uPointLight_position;
     int uPointLight_color;
     int uPointLight_intensity;
+    int uFillDir;
+    int uFillSpecDir;
+    int uFillIntensity;
     int uSkyColorHorizon;
     int uSkyColorZenith;
 

@@ -814,6 +814,8 @@ static void run(Config &config, SDL_Window *window, const char *file, bool headl
             clamp(config.getFloat("Lighting.diffuse_weight", recommendedDiffuse), 0.0f, 2.5f) :
             recommendedDiffuse;
 
+        _scene.fillIntensity() = max(config.getFloat("Lighting.fill_intensity", _scene.fillIntensity()), 0.0f);
+
         _atmosphere.sunIntensity = config.hasKey("Lighting.sun_intensity") ?
             max(config.getFloat("Lighting.sun_intensity", recommendedSunIntensity), 0.0f) :
             recommendedSunIntensity;
@@ -1297,6 +1299,7 @@ static void run(Config &config, SDL_Window *window, const char *file, bool headl
     config.setBool("Lighting.fullbright", _scene.fullbright());
     config.setFloat("Lighting.ambient_weight", _scene.ambientWeight());
     config.setFloat("Lighting.diffuse_weight", _scene.diffuseWeight());
+    config.setFloat("Lighting.fill_intensity", _scene.fillIntensity());
     config.setFloat("Lighting.sun_altitude", _atmosphere.sunAltitude);
     config.setFloat("Lighting.sun_azimuth", _atmosphere.sunAzimuth);
     config.setIntVector3("Lighting.sun_color", IntVector3(_atmosphere.sunColor * 255.0f));
@@ -1615,6 +1618,8 @@ static bool debugMenu(float time, float deltaTime)
             }
             ImGui::SliderFloat("Ambient Weight", &_scene.ambientWeight(), 0.0f, 2.5f, "%.3f");
             ImGui::SliderFloat("Diffuse Weight", &_scene.diffuseWeight(), 0.0f, 2.5f, "%.3f");
+
+            ImGui::SliderFloat("Camera Light", &_scene.fillIntensity(), 0.0f, 3.0f, "%.3f");
 
             ImGui::SeparatorText("Sun");
             ImGui::SliderFloat("Altitude", &_atmosphere.sunAltitude, 0.0f, 360.0f);

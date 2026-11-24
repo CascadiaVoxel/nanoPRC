@@ -2433,12 +2433,17 @@ prc_api_helper_get_face_style(prc_context *ctx, prc_api_data data_in,
 static int
 prc_api_helper_get_style_index_from_leaf(prc_context *ctx, prc_data *data,
     uint32_t face_index, prc_api_object_style *style_in,
-    int32_t *style_unbiased_index, uint32_t *file_index)
+    int32_t *style_unbiased_index, uint32_t *file_index, uint8_t *colour_forced)
 {
     uint32_t done = 0;
     uint8_t child_herit_found = 0;
     *style_unbiased_index = -1;
     *file_index = 0;
+    /* 1 when the style found was given by a node that sets ChildHeritColor or ParentHeritColor, and so wins
+       over the style a face names in its own tessellation data; 0 when it is just the style a node holds
+       for itself, or came from an entity reference */
+    if (colour_forced != NULL)
+        *colour_forced = 0;
     prc_misc_entity_reference *entity_reference = NULL;
     uint32_t biased_file_index = 0;
     int32_t entity_ref_file_index = -1;
@@ -2493,6 +2498,9 @@ prc_api_helper_get_style_index_from_leaf(prc_context *ctx, prc_data *data,
         {
             *file_index = style->base_with_graphics->base.file_index;
             *style_unbiased_index = style->base_with_graphics->graphics_content.biased_index_of_line_style - 1;
+            if (colour_forced != NULL)
+                *colour_forced = (style->base_with_graphics->graphics_content.behavior_bit_field1 &
+                    (PRC_GRAPHICS_ParentHeritColor | PRC_GRAPHICS_ChildHeritColor)) ? 1 : 0;
             if (style->base_with_graphics->graphics_content.behavior_bit_field1 & PRC_GRAPHICS_ChildHeritColor)
                 child_herit_found = 1;
         }
@@ -3165,7 +3173,7 @@ prc_api_get_exact_geometry_tessellation_vertices(prc_context *ctx, prc_api_data 
             dealing with inheritance etc along the way */
         code = prc_api_helper_get_style_index_from_leaf(ctx, data, face_index,
             (prc_api_object_style *)data->exact_geom_tess_part[exact_object_index].style_leaf,
-            &leaf_style_unbiased_index, &leaf_style_file_index);
+            &leaf_style_unbiased_index, &leaf_style_file_index, NULL);
         if (code < 0)
         {
             prc_error(ctx, code,
@@ -3671,7 +3679,7 @@ prc_api_get_tessellation_vertices_impl(prc_context *ctx, prc_api_data data_in,
                dealing with inheritance etc along the way */
             code = prc_api_helper_get_style_index_from_leaf(ctx, data, face_index,
                 (prc_api_object_style *)api_tess->style_leaf,
-                &leaf_style_unbiased_index, &leaf_style_file_index);
+                &leaf_style_unbiased_index, &leaf_style_file_index, NULL);
             if (code < 0)
             {
                 PRC_API_FAIL(code,
@@ -3782,7 +3790,7 @@ prc_api_get_tessellation_vertices_impl(prc_context *ctx, prc_api_data data_in,
                     /* Face index is k here */
                     code = prc_api_helper_get_style_index_from_leaf(ctx, data, k,
                         (prc_api_object_style *)api_tess->style_leaf,
-                        &leaf_style_unbiased_index, &leaf_style_file_index);
+                        &leaf_style_unbiased_index, &leaf_style_file_index, NULL);
                     if (code < 0)
                     {
                         PRC_API_FAIL(code,
@@ -3833,7 +3841,7 @@ prc_api_get_tessellation_vertices_impl(prc_context *ctx, prc_api_data data_in,
                    still costs O(1), not O(0), per call. */
                 code = prc_api_helper_get_style_index_from_leaf(ctx, data, last_k,
                     (prc_api_object_style *)api_tess->style_leaf,
-                    &leaf_style_unbiased_index, &leaf_style_file_index);
+                    &leaf_style_unbiased_index, &leaf_style_file_index, NULL);
                 if (code < 0)
                 {
                     PRC_API_FAIL(code,
@@ -3961,6 +3969,28 @@ prc_api_get_tessellation_vertices_impl(prc_context *ctx, prc_api_data data_in,
            entire face. */
         if (face.size_of_line_attributes != 0 && face.line_attributes[0] > 0)
         {
+            /* A style the face names in its own tessellation data replaces the one from the reference data
+               (the Pump's parts name a black one for their edges and each face names its own colour), unless
+               a node above sets the colour for what is below it (ChildHeritColor, ParentHeritColor): then
+               that colour stands, as it does in Adobe Acrobat. In 3D-PDF-Machine-BOM.stream-211 the case is
+               tan and see-through by its parent's style, over faces that each name a lavender of their own. */
+            uint8_t reference_style_forced = 0;
+            int32_t forced_style_index;
+            uint32_t forced_file_index;
+
+            if (api_tess->style_leaf != NULL)
+            {
+                code = prc_api_helper_get_style_index_from_leaf(ctx, data, face_index,
+                    (prc_api_object_style *)api_tess->style_leaf, &forced_style_index,
+                    &forced_file_index, &reference_style_forced);
+                if (code < 0)
+                {
+                    prc_error(ctx, code,
+                        "Failed to get style from leaf in uncompressed branch of prc_api_get_tessellation_vertices\n");
+                    goto uncompressed_failure;
+                }
+            }
+
             /* line_attributes is biased */
             face_out_reserved->style->face_style_index = face.line_attributes[0] - 1;
 
@@ -3978,17 +4008,20 @@ prc_api_get_tessellation_vertices_impl(prc_context *ctx, prc_api_data data_in,
             }
 
             /* The face's own style has replaced the one from the reference data, so
-               its colour is the face's: pure_color was taken from the reference
-               data's style above, before this. In
+               its colour is the face's (unless forced above): pure_color was taken
+               from the reference data's style earlier, before this. In
                3D_PDF_Pump_Maintenance_Manual.stream-359 every part names style 0
                (black, for its edges) and every face names style 1 (the part's
                colour); the whole pump drew black. */
-            uncompressed_data.has_pure_color = is_pure_color;
-            if (is_pure_color)
+            if (!reference_style_forced)
             {
-                for (k = 0; k < 4; k++)
+                uncompressed_data.has_pure_color = is_pure_color;
+                if (is_pure_color)
                 {
-                    uncompressed_data.pure_color[k] = face_color[k];
+                    for (k = 0; k < 4; k++)
+                    {
+                        uncompressed_data.pure_color[k] = face_color[k];
+                    }
                 }
             }
         }

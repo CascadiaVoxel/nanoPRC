@@ -922,8 +922,8 @@ prc_helix_unit(prc_vec3 v, prc_vec3 fallback)
    Type 0: o is start projected onto the axis, Z the axis direction, and X
    runs from o to start. TRUE turns clockwise seen from +Z, so the branches
    are exchanged against the pseudocode, as Adobe Acrobat draws it (#853).
-   With start on the axis X has no direction; it is then Z x (1, 0, 0), or
-   Z x (0, 1, 0) for an axis along x, which starts a +z helix along +y as
+   With start on the axis X has no direction; it is then Z x (1, 0, 0), and
+   for an axis along x, where that is zero, world +y (both +x and -x), as
    Acrobat does.
    Type 1: o is start, Z is unit_z, and X is unit_u made orthogonal to Z:
    Acrobat draws a type 1 helix whose unit_u is not orthogonal to unit_z as
@@ -974,8 +974,8 @@ prc_evaluate_helix(prc_context *ctx, void *params, double input)
         }
         else
         {
-            prc_vec_cross(z_axis, fabs(z_axis.x) > 0.9 ? unit_y : unit_x, &x_axis);
-            x_axis = prc_helix_unit(x_axis, unit_x);
+            prc_vec_cross(z_axis, unit_x, &x_axis);
+            x_axis = prc_helix_unit(x_axis, unit_y);
         }
         radius += input * helix->type0_helix.radius;
         angle = helix->orientation ? -input : input;

@@ -407,6 +407,21 @@ typedef struct prc_api_markup_s
     uint32_t biased_tess_index;
     uint32_t biased_style_index;
     uint32_t file_index;
+    /** The markup's graphics behaviour, as stored: the low and high bytes of
+        its behaviour field, as for prc_api_part (0x01 in behavior_bit_field1
+        is PRC_GRAPHICS_Show). */
+    uint8_t behavior_bit_field1;
+    uint8_t behavior_bit_field2;
+    /** 1 if the file gives this markup behaviour bits of its own (see
+        prc_api_product.behavior_is_set). */
+    uint8_t behavior_is_set;
+    /** 1 if this markup is shown, 0 if it is hidden or removed, as worked out
+        by prc_api_create_model_tree from the behaviour fields along its path
+        from the root, as for prc_api_part.visible. A markup whose own Show bit
+        is clear and which takes its visibility from its parent is hidden unless
+        an ancestor shows it: the Pump Maintenance Manual's part-name labels are
+        such markups, and Adobe Acrobat does not draw them. */
+    uint8_t visible;
 } prc_api_markup;
 
 typedef struct prc_api_product_s prc_api_product;

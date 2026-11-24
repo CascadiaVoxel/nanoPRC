@@ -220,12 +220,26 @@ void Product::render(MeshShader *shader) const
                    way, so a line crossing it cannot hide it */
                 glDepthMask(isMarkUp ? GL_FALSE : GL_TRUE);
 
+                /* Faces are drawn a little behind where they are, so the lines along their edges (the
+                   extra wire overlays) are in front of them, not stitched into them as the two compete for
+                   the same depth. */
+                if (isLine || isMarkUp)
+                {
+                    glDisable(GL_POLYGON_OFFSET_FILL);
+                }
+                else
+                {
+                    glEnable(GL_POLYGON_OFFSET_FILL);
+                    glPolygonOffset(1.0f, 1.0f);
+                }
+
                 glDrawElements(
                     mesh.primitive,
                     mesh.numIndices,
                     GL_UNSIGNED_INT,
                     (void *)(_meshes[i].offset * sizeof(GLuint)));
             }
+            glDisable(GL_POLYGON_OFFSET_FILL);
         }
 
         // PASS 2: Render all transparent meshes (only if this Product IS transparent)

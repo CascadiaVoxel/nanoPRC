@@ -28,10 +28,14 @@ public:
 
     void resize(int width, int height);
 
+    /* The scene is drawn into a multisampled target (anti-aliased edges), when the driver has one;
+       resolve() then writes it to the texture, which is what bloom and the composite read. */
     inline void use() const
     {
-        glBindFramebuffer(GL_FRAMEBUFFER, _fbo);
+        glBindFramebuffer(GL_FRAMEBUFFER, _msFbo ? _msFbo : _fbo);
     }
+
+    void resolve() const;
 
     constexpr GLuint texture() const { return _texture; }
 
@@ -46,6 +50,8 @@ public:
 
 private:
     GLuint _fbo, _rbo;
+    GLuint _msFbo, _msColorRbo, _msDepthRbo; /* 0 where there is no multisampled target */
+    GLenum _colorFormat;
     GLuint _texture;
 
     GLuint _vao, _vbo, _ebo;

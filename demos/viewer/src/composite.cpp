@@ -83,11 +83,20 @@ void Compositor::resize(int width, int height)
     if (_rbo)
         glDeleteRenderbuffers(1, &_rbo);
 
+    if (_msFbo)
+        glDeleteFramebuffers(1, &_msFbo);
+    if (_msColorRbo)
+        glDeleteRenderbuffers(1, &_msColorRbo);
+    if (_msDepthRbo)
+        glDeleteRenderbuffers(1, &_msDepthRbo);
+    _msFbo = _msColorRbo = _msDepthRbo = 0;
+
     glGenFramebuffers(1, &_fbo);
     glBindFramebuffer(GL_FRAMEBUFFER, _fbo);
 
     glGenTextures(1, &_texture);
     glBindTexture(GL_TEXTURE_2D, _texture);
+    _colorFormat = GL_R11F_G11F_B10F;
     glTexImage2D(GL_TEXTURE_2D, 0, GL_R11F_G11F_B10F, width, height, 0, GL_RGB, GL_FLOAT, NULL);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
@@ -110,6 +119,7 @@ void Compositor::resize(int width, int height)
     {
         /* Fallback for stricter drivers (notably some macOS stacks). */
         glBindTexture(GL_TEXTURE_2D, _texture);
+        _colorFormat = GL_RGBA16F;
         glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA16F, width, height, 0, GL_RGBA, GL_FLOAT, NULL);
         glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, _texture, 0);
 
@@ -120,13 +130,58 @@ void Compositor::resize(int width, int height)
         }
     }
 
+    /* The multisampled target the scene is drawn into: 4 samples, or fewer where the driver gives fewer. If
+       it cannot be made the scene is drawn straight into the texture's own framebuffer, without anti-aliasing. */
+    {
+        GLint maxSamples = 0;
+        GLsizei samples;
+        glGetIntegerv(GL_MAX_SAMPLES, &maxSamples);
+        samples = maxSamples < 4 ? (GLsizei)maxSamples : 4;
+
+        if (samples > 1)
+        {
+            glGenFramebuffers(1, &_msFbo);
+            glBindFramebuffer(GL_FRAMEBUFFER, _msFbo);
+
+            glGenRenderbuffers(1, &_msColorRbo);
+            glBindRenderbuffer(GL_RENDERBUFFER, _msColorRbo);
+            glRenderbufferStorageMultisample(GL_RENDERBUFFER, samples, _colorFormat, width, height);
+            glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_RENDERBUFFER, _msColorRbo);
+
+            glGenRenderbuffers(1, &_msDepthRbo);
+            glBindRenderbuffer(GL_RENDERBUFFER, _msDepthRbo);
+            glRenderbufferStorageMultisample(GL_RENDERBUFFER, samples, GL_DEPTH24_STENCIL8, width, height);
+            glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_STENCIL_ATTACHMENT, GL_RENDERBUFFER, _msDepthRbo);
+
+            if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE)
+            {
+                glDeleteFramebuffers(1, &_msFbo);
+                glDeleteRenderbuffers(1, &_msColorRbo);
+                glDeleteRenderbuffers(1, &_msDepthRbo);
+                _msFbo = _msColorRbo = _msDepthRbo = 0;
+            }
+        }
+    }
+
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
 
     _width = width;
     _height = height;
 }
 
-Compositor::Compositor() : _fbo(0), _rbo(0), _texture(0),
+void Compositor::resolve() const
+{
+    if (!_msFbo)
+        return;
+
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, _msFbo);
+    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, _fbo);
+    glBlitFramebuffer(0, 0, _width, _height, 0, 0, _width, _height, GL_COLOR_BUFFER_BIT, GL_NEAREST);
+    glBindFramebuffer(GL_FRAMEBUFFER, _fbo);
+}
+
+Compositor::Compositor() : _fbo(0), _rbo(0), _msFbo(0), _msColorRbo(0), _msDepthRbo(0),
+                           _colorFormat(GL_R11F_G11F_B10F), _texture(0),
                            _vao(0), _vbo(0), _ebo(0),
                            _width(0), _height(0),
                            _gamma(2.2f), _exposure(1.0f)
@@ -135,6 +190,15 @@ Compositor::Compositor() : _fbo(0), _rbo(0), _texture(0),
 
 Compositor::~Compositor()
 {
+    if (_msFbo)
+        glDeleteFramebuffers(1, &_msFbo);
+
+    if (_msColorRbo)
+        glDeleteRenderbuffers(1, &_msColorRbo);
+
+    if (_msDepthRbo)
+        glDeleteRenderbuffers(1, &_msDepthRbo);
+
     if (_rbo)
         glDeleteRenderbuffers(1, &_rbo);
 

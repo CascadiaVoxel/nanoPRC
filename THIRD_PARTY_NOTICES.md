@@ -19,6 +19,7 @@ The components below retain their own upstream licenses and are used as third-pa
 - **GLAD OpenGL Loader** (`demos/viewer/glad/`) is Copyright (c) 2013-2026 David Herberth and licensed under the MIT License.
 - **Khronos Platform Header** (`KHR/khrplatform.h`) is Copyright (c) 2008-2018 The Khronos Group Inc. and licensed under an MIT-style permissive license.
 - **Roboto Font** (`demos/viewer/src/roboto_font.h`, Roboto version 3.009) is Copyright 2011 The Roboto Project Authors and licensed under the SIL Open Font License, Version 1.1. See `thirdparty/Roboto_OFL.txt`.
+- **Tinos Font** (`demos/viewer/src/tinos_font.h`, Tinos Regular) is Copyright 2026 The Tinos Project Authors and licensed under the SIL Open Font License, Version 1.1. See `thirdparty/Tinos_OFL.txt`. It is the viewer's markup text face; Roboto is the fallback.
 
 ---
 

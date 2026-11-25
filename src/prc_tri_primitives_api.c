@@ -3564,6 +3564,51 @@ prc_internal_api_fans_strips_to_triangles(prc_context *ctx, prc_internal_api_fac
 /* tess_index_in is an index into the tessellations in part_details or
    markup_details in prc_data. prc_api_get_tessellation_vertices below calls
    this and then sets has_transparency. */
+/* Whether every one of count line attributes has the same value */
+static uint8_t
+prc_api_line_attributes_all_equal(const int32_t *line_attributes, uint32_t count)
+{
+    uint32_t k;
+
+    for (k = 1; k < count; k++)
+        if (line_attributes[k] != line_attributes[0])
+            return 0;
+    return 1;
+}
+
+/* Whether the style at style_index of file file_index names a texture that applies
+   as a diffuse map: a texture application, or a style whose material, by its
+   color index, has a texture definition, and that definition's mapping attributes
+   include the diffuse bit. A definition that states no mapping attributes does not
+   (in prc-db's unolinea-house-dwg, which gives no attributes, Adobe Acrobat draws the
+   style's colour and not the picture). A style the file does not have names none */
+static uint8_t
+prc_api_style_names_texture(prc_data *data, uint32_t file_index, int32_t style_index)
+{
+    prc_file_struct_internal_global_data *global_data;
+    prc_graph_style *graph_style;
+    prc_graph_material *material;
+    uint32_t texture_definition;
+
+    if (style_index < 0 || file_index >= data->file_structure_count)
+        return 0;
+    global_data = &data->file_struct[file_index].globals->global_data;
+    if ((uint32_t)style_index >= global_data->style_count)
+        return 0;
+    graph_style = &global_data->styles[style_index];
+    if (graph_style->tag != PRC_TYPE_GRAPH_TextureApplication &&
+        !(graph_style->tag == PRC_TYPE_GRAPH_Style && graph_style->is_material))
+        return 0;
+    if (graph_style->biased_color_index == 0 || graph_style->biased_color_index - 1 >= global_data->material_count)
+        return 0;
+    material = &global_data->materials[graph_style->biased_color_index - 1];
+    texture_definition = material->biased_texture_definition_index;
+    if (texture_definition == 0 || texture_definition - 1 >= global_data->texture_count)
+        return 0;
+    return (global_data->textures[texture_definition - 1].texture_mapping_attributes &
+            PRC_texture_mapping_attributes_diffuse) ? 1 : 0;
+}
+
 static int
 prc_api_get_tessellation_vertices_impl(prc_context *ctx, prc_api_data data_in,
     uint32_t tess_index_in, uint32_t face_index,
@@ -5131,6 +5176,41 @@ uncompressed_done:
                    no-style case. */
                 face_style_index = tess->triangle_styles[0];
                 face_style_file_index = file_index;
+            }
+        }
+
+        /* No style came through the tree, and the tessellation names one style for
+           all its faces, and that style is a texture: the face takes that texture
+           (the texture data, no_texture, and face_has_texture decide which
+           triangles have coordinates). The stored line attribute is the style
+           index plus 1, and 0 names no style; triangle_styles has lost that
+           difference (0 for both, see the unbiasing of the line attributes in the
+           decoder), so it is read from the stored array. A tessellation of one
+           face has one entry, which has_style does not count as a style of its own,
+           so this does not wait for has_style */
+        if (!has_ref_style_defined && !has_more_than_one_ref_style && !has_more_than_one_tri_style &&
+            !tess->no_texture && face_out_reserved != NULL &&
+            tess->line_attribute_array_size > 0 && tess->line_attribute_array != NULL &&
+            tess->line_attribute_array[0] > 0 &&
+            prc_api_line_attributes_all_equal(tess->line_attribute_array,
+                tess->line_attribute_array_size) &&
+            prc_api_style_names_texture(data, file_index, tess->line_attribute_array[0] - 1))
+        {
+            prc_internal_graph_style tess_style;
+            uint8_t tess_is_pure_color = 0, tess_has_ref_style = 0;
+            uint8_t tess_has_texture = 0;
+            float tess_face_color[4] = { 1.0f, 1.0f, 1.0f, 1.0f };
+
+            memset(&tess_style, 0, sizeof(tess_style));
+            code = prc_api_helper_get_face_style(ctx, data_in, file_index,
+                tess->line_attribute_array[0] - 1, alpha, false,
+                &api_tess->is_material, &tess_has_texture, &tess_is_pure_color,
+                &api_tess->tess_material, &tess_style, tess_face_color,
+                api_tess, face_out, &tess_has_ref_style);
+            if (code < 0)
+            {
+                prc_error(ctx, code, "Failed to get the tessellation's texture style in compressed branch\n");
+                goto compressed_failure;
             }
         }
 

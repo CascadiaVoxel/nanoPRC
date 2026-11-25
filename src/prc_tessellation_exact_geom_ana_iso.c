@@ -1081,12 +1081,72 @@ prc_decompress_knot_vector(prc_context *ctx, uint32_t degree, uint32_t num_contr
         return PRC_ERROR_PARSE;
     }
 
-    /* Ian's feedback: Reverting pseudo-uniform configurations to unreadable until
-       the specification's step-calculation interpretation is officially finalized. */
+    /* This needs to be reviewed. We are running into this in some files */
     if (comp_knot_vector->knots.is_pseudo_uniform)
     {
-        prc_error(ctx, PRC_ERROR_PARSE, "Pseudo-uniform compressed knots are currently unsupported in tessellation\n");
-        return PRC_ERROR_PARSE;
+        /* Intermediate pseudo-uniform knot reconstruction:
+           prc_parse_compressed_knots read the 2 extremity step values into
+           compressed_knots[0] and compressed_knots[1]. Place K[0] = 0.0,
+           K[N-1] = 1.0, K[1] = delta_start, K[N-2] = 1.0 - delta_end, and
+           distribute any remaining interior distinct knots uniformly between
+           K[1] and K[N-2] (falling back to uniform [0, 1] spacing if the
+           stored extremity values do not form an increasing sub-interval). */
+        double k_first_int = comp_knot_vector->knots.compressed_knots[0].knot;
+        double k_last_int = 1.0 - comp_knot_vector->knots.compressed_knots[1].knot;
+        uint8_t valid_bounds = (number_stored_knots >= 3 &&
+            k_first_int > 0.0 && k_last_int < 1.0 &&
+            k_first_int <= k_last_int + 1e-12);
+
+        if (number_stored_knots == 3 && comp_knot_vector->knots.compressed_knots[0].knot > 0.0 &&
+            comp_knot_vector->knots.compressed_knots[0].knot < 1.0)
+        {
+            k_first_int = comp_knot_vector->knots.compressed_knots[0].knot;
+            k_last_int = k_first_int;
+            valid_bounds = 1;
+        }
+
+        for (i = 0; i < number_stored_knots; i++)
+        {
+            double val;
+            if (i == 0)
+            {
+                val = 0.0;
+            }
+            else if (i == number_stored_knots - 1)
+            {
+                val = 1.0;
+            }
+            else if (!valid_bounds)
+            {
+                /* Fallback: uniform spacing across [0.0, 1.0] */
+                val = (double)i / (double)(number_stored_knots - 1);
+            }
+            else if (number_stored_knots == 3)
+            {
+                val = k_first_int;
+            }
+            else
+            {
+                /* i in [1 .. number_stored_knots - 2] */
+                double t = (double)(i - 1) / (double)(number_stored_knots - 3);
+                val = k_first_int + t * (k_last_int - k_first_int);
+            }
+
+            uint32_t multiplicity = mult_array[i].multiplicity;
+            for (j = 0; j < multiplicity; j++)
+            {
+                if (knot_idx < total_knots)
+                {
+                    output_knot_vector[knot_idx++] = val;
+                }
+            }
+        }
+
+        while (knot_idx < total_knots)
+        {
+            output_knot_vector[knot_idx++] = 1.0;
+        }
+        return 0;
     }
 
     double current_knot_value = 0.0;

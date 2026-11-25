@@ -2357,7 +2357,7 @@ prc_get_cylinder_data_from_iso_curves(prc_context *ctx, prc_ptr_topology *loop,
     }
 
     /* Get the normal of the cylinder */
-    prc_get_compressed_curve_start_end(ctx, line, &line_start, &line_end, NULL);
+    prc_get_compressed_curve_start_end(ctx, line, &line_start, &line_end, compressed_data);
     prc_vec_sub(line_end, line_start, &line_dir);
     if (is_line_reversed)
     {

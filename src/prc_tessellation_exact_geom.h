@@ -225,6 +225,9 @@ int prc_get_compressed_curve(prc_context *ctx, prc_ref_or_compressed_curve *ref_
 int prc_get_compressed_vertex(prc_context *ctx, prc_compressed_vertex *comp_vertex, prc_vec3 *vertex, prc_nano_brep_compressed_data *compressed_data);
 int prc_get_start_end_data(prc_context *ctx, prc_start_end_data *data, prc_vec3 *start, prc_vec3 *end, prc_nano_brep_compressed_data *compressed_data);
 int prc_choose_loop_curve_directions(const prc_vec3 *start, const prc_vec3 *end, const uint8_t *default_reversed, uint32_t count, uint8_t *reversed_out);
+/* Decode a compressed NURBS control net (net steps scaled by 100 x nurbs_tolerance;
+ * rational points returned weighted). Exposed for unit tests. */
+int prc_decompress_control_points(prc_context *ctx, uint32_t num_ctrl_u, uint32_t num_ctrl_v, prc_compressed_control_points *comp_cp, uint8_t is_rational, prc_compressed_weights *comp_weights, double nurbs_tolerance, prc_control_points_nurbs_surf *output_p);
 
 /* Utility prototypes */
 prc_vec3 prc_project_point_onto_surface(prc_context *ctx, surface_func eval_func, void *surface_params, double min_u, double max_u, double min_v, double max_v, prc_vec3 point, double *out_u, double *out_v);

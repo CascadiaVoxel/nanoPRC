@@ -224,6 +224,7 @@ int prc_get_ptr_vertex(prc_context *ctx, prc_nano_brep_ref_data *brep_ref_data, 
 int prc_get_compressed_curve(prc_context *ctx, prc_ref_or_compressed_curve *ref_or_comp_curve, prc_compressed_curve **comp_curve, prc_nano_brep_compressed_data *compressed_data);
 int prc_get_compressed_vertex(prc_context *ctx, prc_compressed_vertex *comp_vertex, prc_vec3 *vertex, prc_nano_brep_compressed_data *compressed_data);
 int prc_get_start_end_data(prc_context *ctx, prc_start_end_data *data, prc_vec3 *start, prc_vec3 *end, prc_nano_brep_compressed_data *compressed_data);
+int prc_choose_loop_curve_directions(const prc_vec3 *start, const prc_vec3 *end, const uint8_t *default_reversed, uint32_t count, uint8_t *reversed_out);
 
 /* Utility prototypes */
 prc_vec3 prc_project_point_onto_surface(prc_context *ctx, surface_func eval_func, void *surface_params, double min_u, double max_u, double min_v, double max_v, prc_vec3 point, double *out_u, double *out_v);

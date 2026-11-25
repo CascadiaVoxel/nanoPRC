@@ -712,6 +712,9 @@ prc_convert_compref_curve_to_coedge(prc_context *ctx,
     return 0;
 }
 
+static void prc_orient_ana_loop_coedges(prc_context *ctx, prc_ana_face_trim_loop *ana_loop,
+    prc_topo_loop *topo_loop, prc_nano_brep_compressed_data *compressed_data);
+
 /* In the ISO surface case, add the four curves to a loop */
 static int
 prc_convert_iso_curves_to_std_loop(prc_context *ctx, prc_compressed_curve **curves,
@@ -805,6 +808,8 @@ prc_convert_compressed_loop_to_std_loop(prc_context *ctx, prc_ana_face_trim_loop
             return code;
         }
     }
+
+    prc_orient_ana_loop_coedges(ctx, ana_loop, synthetic_loop->topo->topo_loop, compressed_data);
 
     /* loop_surface_orientation (Table 231 AnaFaceTrimLoop, spec-documented
        only as a bare "Orientation of loop with surface" boolean, no stated
@@ -1656,6 +1661,162 @@ prc_get_compressed_curve_start_end(prc_context *ctx, prc_compressed_curve *comp_
     }
 
     return code;
+}
+
+/* How many of the joints of a closed loop of count curves meet. Curve k is
+   walked from its start to its end, or from its end to its start when
+   reversed[k] is set; the joint after curve k is between the end of that walk
+   and the start of the walk of curve k + 1, and the last joint closes the loop */
+static uint32_t
+prc_count_closed_joints(const prc_vec3 *start, const prc_vec3 *end,
+    const uint8_t *reversed, uint32_t count, double tolerance)
+{
+    uint32_t k, closed = 0;
+
+    for (k = 0; k < count; k++)
+    {
+        uint32_t next = (k + 1) % count;
+        prc_vec3 walked_to = reversed[k] ? start[k] : end[k];
+        prc_vec3 walked_from = reversed[next] ? end[next] : start[next];
+
+        if (prc_vec_dist_between_two_points(walked_to, walked_from) <= tolerance)
+            closed++;
+    }
+    return closed;
+}
+
+/* Walk the curves in order, taking each one in whichever direction meets the
+   end the loop has reached, and the first one as given by first_reversed. A
+   curve with neither end at the point reached is taken as stored. */
+static void
+prc_walk_loop_meeting_ends(const prc_vec3 *start, const prc_vec3 *end, uint32_t count,
+    double tolerance, uint8_t first_reversed, uint8_t *reversed_out)
+{
+    uint32_t k;
+    prc_vec3 reached;
+
+    reversed_out[0] = first_reversed;
+    reached = first_reversed ? start[0] : end[0];
+    for (k = 1; k < count; k++)
+    {
+        if (prc_vec_dist_between_two_points(start[k], reached) <= tolerance)
+            reversed_out[k] = 0;
+        else if (prc_vec_dist_between_two_points(end[k], reached) <= tolerance)
+            reversed_out[k] = 1;
+        else
+            reversed_out[k] = 0;
+        reached = reversed_out[k] ? start[k] : end[k];
+    }
+}
+
+/* Choose which way to walk each curve of a loop of count curves, given the
+   direction each would be walked by default (default_reversed, 1 = from its
+   end to its start). The default is kept when it closes every joint. Otherwise
+   the loop is walked taking each curve in whichever direction meets the end
+   the loop has reached, once starting with the first curve as stored and once
+   starting with it reversed, and a walk that closes every joint is used in
+   place of the default; of the two, the one that differs from the default in
+   fewer curves. If no walk closes every joint the default is kept.
+   Returns 1 if reversed_out differs from default_reversed. */
+int
+prc_choose_loop_curve_directions(const prc_vec3 *start, const prc_vec3 *end,
+    const uint8_t *default_reversed, uint32_t count, uint8_t *reversed_out)
+{
+    double lo[3] = { 1e300, 1e300, 1e300 };
+    double hi[3] = { -1e300, -1e300, -1e300 };
+    double diagonal, tolerance;
+    uint32_t k, diff[2];
+    uint8_t walk[2][64];
+    int use = -1, w;
+
+    memcpy(reversed_out, default_reversed, count);
+    if (count < 2 || count > 64)
+        return 0;
+
+    for (k = 0; k < count; k++)
+    {
+        const double *pt[2];
+        int e, a;
+
+        pt[0] = &start[k].x;
+        pt[1] = &end[k].x;
+        for (e = 0; e < 2; e++)
+            for (a = 0; a < 3; a++)
+            {
+                if (pt[e][a] < lo[a]) lo[a] = pt[e][a];
+                if (pt[e][a] > hi[a]) hi[a] = pt[e][a];
+            }
+    }
+    diagonal = sqrt((hi[0] - lo[0]) * (hi[0] - lo[0]) + (hi[1] - lo[1]) * (hi[1] - lo[1]) +
+                    (hi[2] - lo[2]) * (hi[2] - lo[2]));
+    if (diagonal <= 0.0)
+        return 0;
+    tolerance = 1e-5 * diagonal;
+
+    if (prc_count_closed_joints(start, end, default_reversed, count, tolerance) == count)
+        return 0;
+
+    for (w = 0; w < 2; w++)
+    {
+        prc_walk_loop_meeting_ends(start, end, count, tolerance, (uint8_t)w, walk[w]);
+        diff[w] = 0;
+        for (k = 0; k < count; k++)
+            if (walk[w][k] != default_reversed[k])
+                diff[w]++;
+        if (prc_count_closed_joints(start, end, walk[w], count, tolerance) != count)
+            continue;
+        if (use < 0 || diff[w] < diff[use])
+            use = w;
+    }
+    if (use < 0)
+        return 0;
+
+    memcpy(reversed_out, walk[use], count);
+    return 1;
+}
+
+/* A curve of an analytic face's loop that the loop names by index was stored
+   by the face that shares it. In the files of some writers every such curve
+   runs the other way round in this face; in others (Bracket with PMI, the
+   Landing Gear and pmi_sample of prc-db) the file has them running either
+   way. The coedges are made with the first, which is right for the loops that
+   it closes. Where it leaves the loop open and walking each curve in whichever
+   direction meets the end the loop has reached closes it, that walk is used. */
+static void
+prc_orient_ana_loop_coedges(prc_context *ctx, prc_ana_face_trim_loop *ana_loop,
+    prc_topo_loop *topo_loop, prc_nano_brep_compressed_data *compressed_data)
+{
+    uint32_t count = ana_loop->curve_count;
+    uint32_t j;
+    prc_vec3 start[64], end[64];
+    uint8_t default_reversed[64], reversed[64];
+
+    if (count < 2 || count > 64 || topo_loop->number_of_coedges != count)
+        return;
+
+    for (j = 0; j < count; j++)
+    {
+        prc_compressed_curve *curve = NULL;
+        prc_topo_coedge *topo_coedge = topo_loop->coedge[j].next_coedge.topo->topo_coedge;
+
+        if (prc_get_compressed_curve(ctx, &ana_loop->trim_curves[j], &curve, compressed_data) < 0 ||
+            curve == NULL)
+            return;
+        /* Other curve types have no end points here: leave the loop as it is */
+        if (curve->curve_type != PRC_HCG_Line && curve->curve_type != PRC_HCG_Circle &&
+            curve->curve_type != PRC_HCG_BsplineHermiteCurve &&
+            curve->curve_type != PRC_HCG_CompositeCurve)
+            return;
+        if (prc_get_compressed_curve_start_end(ctx, curve, &start[j], &end[j], compressed_data) < 0)
+            return;
+        default_reversed[j] = !topo_coedge->coedge_orientation;
+    }
+
+    if (!prc_choose_loop_curve_directions(start, end, default_reversed, count, reversed))
+        return;
+
+    for (j = 0; j < count; j++)
+        topo_loop->coedge[j].next_coedge.topo->topo_coedge->coedge_orientation = !reversed[j];
 }
 
 /* Helper to deduce a single ISO trim curve, handling torus major/minor axis dependencies */

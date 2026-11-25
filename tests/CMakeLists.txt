@@ -281,3 +281,7 @@ add_executable(test_helix_start_direction tests/unit/test_helix_start_direction.
 target_link_libraries(test_helix_start_direction prc_static)
 target_include_directories(test_helix_start_direction PRIVATE tests)
 add_test(NAME test_helix_start_direction COMMAND test_helix_start_direction)
+add_executable(test_analytic_loop_direction tests/unit/test_analytic_loop_direction.c)
+target_link_libraries(test_analytic_loop_direction prc_static)
+target_include_directories(test_analytic_loop_direction PRIVATE tests)
+add_test(NAME test_analytic_loop_direction COMMAND test_analytic_loop_direction)

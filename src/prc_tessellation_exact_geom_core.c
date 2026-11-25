@@ -54,6 +54,26 @@ prc_uv_loop_max_x(const prc_loop_samples *loop)
     return max_x;
 }
 
+static double
+prc_uv_loop_max_y(const prc_loop_samples *loop)
+{
+    uint32_t count = (loop->num_samples > 0) ? (loop->num_samples - 1) : 0;
+    double max_y;
+    uint32_t i;
+
+    if (count == 0)
+        return 0.0;
+
+    max_y = loop->uv_samples[0].y;
+    for (i = 1; i < count; i++)
+    {
+        if (loop->uv_samples[i].y > max_y)
+            max_y = loop->uv_samples[i].y;
+    }
+
+    return max_y;
+}
+
 /* Twice the signed area (shoelace formula): positive for CCW, negative for CW */
 static double
 prc_uv_polygon_signed_area(uint32_t count, const prc_vec2 *pts)
@@ -459,7 +479,7 @@ prc_sample_loop(prc_context *ctx, prc_nano_brep_ref_data *brep_ref_data,
 
             for (s = 1; s < loop_samples->num_samples; s++)
             {
-                if (prc_vec_dist_between_two_points(first, loop_samples->samples[s]) > CURVE_PRECISION)
+                if (prc_vec_dist_between_two_points(first, loop_samples->samples[s]) > VERTEX_COINCIDENCE_TOLERANCE)
                 {
                     all_coincide = 0;
                     break;
@@ -541,9 +561,11 @@ prc_tri_is_ear(const prc_tri_vertex *verts, uint32_t idx)
 
         /* A bridged hole duplicates its entry/exit vertices elsewhere in the
            ring (see prc_tri_eliminate_hole); finding that duplicate here just
-           means it coincides with one of this triangle's own corners, which
-           is not a real obstruction */
-        if ((p.x == a.x && p.y == a.y) || (p.x == b.x && p.y == b.y) || (p.x == c.x && p.y == c.y))
+           means it coincides with one of this triangle's own corners (within
+           floating-point projection precision), which is not a real obstruction */
+        if ((fabs(p.x - a.x) < 1e-9 && fabs(p.y - a.y) < 1e-9) ||
+            (fabs(p.x - b.x) < 1e-9 && fabs(p.y - b.y) < 1e-9) ||
+            (fabs(p.x - c.x) < 1e-9 && fabs(p.y - c.y) < 1e-9))
             continue;
 
         if (prc_tri_point_in_triangle(p, a, b, c))
@@ -575,9 +597,20 @@ prc_tri_debug_dump_ring(prc_context *ctx, const prc_tri_vertex *verts, uint32_t 
 
         if (cross > 0.0)
         {
+            prc_vec2 a = verts[prev].uv;
+            prc_vec2 b = verts[cur].uv;
+            prc_vec2 c = verts[next].uv;
+
             for (k = verts[next].next; k != prev; k = verts[k].next)
             {
-                if (prc_tri_point_in_triangle(verts[k].uv, verts[prev].uv, verts[cur].uv, verts[next].uv))
+                prc_vec2 p = verts[k].uv;
+
+                if ((fabs(p.x - a.x) < 1e-9 && fabs(p.y - a.y) < 1e-9) ||
+                    (fabs(p.x - b.x) < 1e-9 && fabs(p.y - b.y) < 1e-9) ||
+                    (fabs(p.x - c.x) < 1e-9 && fabs(p.y - c.y) < 1e-9))
+                    continue;
+
+                if (prc_tri_point_in_triangle(p, a, b, c))
                 {
                     blocker = k;
                     break;
@@ -737,6 +770,24 @@ prc_tri_find_hole_bridge(const prc_tri_vertex *verts, uint32_t outer_head,
                 have_bridge = 1;
             }
         }
+        else if (b.y == h.y && b.x >= h.x)
+        {
+            /* Ray hits vertex nxt directly at its exact y-coordinate: if the
+               edge entering nxt (cur->nxt) or leaving nxt (nxt->nxt2) extends
+               below h.y, the ray cannot pass through nxt without crossing it */
+            uint32_t nxt2 = verts[nxt].next;
+            prc_vec2 c = verts[nxt2].uv;
+
+            if (a.y < h.y || c.y < h.y)
+            {
+                if (!have_bridge || b.x < best_x)
+                {
+                    best_x = b.x;
+                    bridge = nxt;
+                    have_bridge = 1;
+                }
+            }
+        }
 
         cur = nxt;
     } while (cur != outer_head);
@@ -795,11 +846,15 @@ prc_tri_eliminate_hole(prc_context *ctx, prc_tri_vertex *verts, uint32_t *next_f
     uint32_t old_after_bridge;
     int code;
 
-    /* The rightmost hole vertex is the conventional bridge entry point */
+    /* The rightmost (and topmost on ties) hole vertex is the bridge entry point */
     for (k = 1; k < hole_count; k++)
     {
-        if (verts[cur].uv.x > verts[hole_start].uv.x)
+        if (verts[cur].uv.x > verts[hole_start].uv.x + 1e-9 ||
+            (fabs(verts[cur].uv.x - verts[hole_start].uv.x) <= 1e-9 &&
+                verts[cur].uv.y > verts[hole_start].uv.y))
+        {
             hole_start = cur;
+        }
         cur = verts[cur].next;
     }
 
@@ -908,17 +963,30 @@ prc_triangulate_planar_loops(prc_context *ctx, uint32_t num_loops, prc_loop_samp
                 hole_order[idx++] = k;
         }
 
-        /* Merge farthest-right holes first so bridge segments cannot cross */
+        /* Merge farthest-right holes first (breaking ties top-to-bottom)
+           so bridge segments in the same vertical column cannot cross */
         for (k = 1; k < num_holes; k++)
         {
             uint32_t cand = hole_order[k];
             double cand_max_x = prc_uv_loop_max_x(&loop_samples[cand]);
+            double cand_max_y = prc_uv_loop_max_y(&loop_samples[cand]);
             int m = (int)k - 1;
 
-            while (m >= 0 && prc_uv_loop_max_x(&loop_samples[hole_order[m]]) < cand_max_x)
+            while (m >= 0)
             {
-                hole_order[m + 1] = hole_order[m];
-                m--;
+                double prev_max_x = prc_uv_loop_max_x(&loop_samples[hole_order[m]]);
+                double prev_max_y = prc_uv_loop_max_y(&loop_samples[hole_order[m]]);
+
+                if (prev_max_x < cand_max_x - 1e-9 ||
+                    (fabs(prev_max_x - cand_max_x) <= 1e-9 && prev_max_y < cand_max_y))
+                {
+                    hole_order[m + 1] = hole_order[m];
+                    m--;
+                }
+                else
+                {
+                    break;
+                }
             }
             hole_order[m + 1] = cand;
         }

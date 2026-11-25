@@ -820,6 +820,36 @@ prc_convert_compressed_loop_to_std_loop(prc_context *ctx, prc_ana_face_trim_loop
        (non-ana) B-rep loops that carry the same bit */
     synthetic_loop->topo->topo_loop->loop_orientation = ana_loop->loop_surface_orientation;
 
+#if 1
+    printf("=== ANA LOOP DEBUG (curve_count=%u, loop_orient=%u) ===\n",
+        curve_count, ana_loop->loop_surface_orientation);
+    for (j = 0; j < curve_count; j++)
+    {
+        prc_compressed_curve *dbg_curve = NULL;
+        prc_get_compressed_curve(ctx, &ana_loop->trim_curves[j], &dbg_curve, compressed_data);
+        printf("  curve[%u]: not_stored=%u, deduced=%u, type=%d\n",
+            j,
+            ana_loop->trim_curves[j].curve_is_not_already_stored,
+            ana_loop->trim_curves[j].is_deduced_curve,
+            dbg_curve ? (int)dbg_curve->curve_type : -1);
+    }
+    if (wire_data != NULL)
+    {
+        printf("  wire_data: num_points=%u", wire_data->number_of_points);
+        if (wire_data->number_of_points > 0)
+        {
+            prc_vec3 p_first = wire_data->points[0];
+            prc_vec3 p_last = wire_data->points[wire_data->number_of_points - 1];
+            printf(", first=(%.4f, %.4f, %.4f), last=(%.4f, %.4f, %.4f), gap=%.6f",
+                p_first.x, p_first.y, p_first.z,
+                p_last.x, p_last.y, p_last.z,
+                prc_vec_dist_between_two_points(p_first, p_last));
+        }
+        printf("\n");
+    }
+
+#endif
+
     return 0;
 }
 
@@ -1051,12 +1081,72 @@ prc_decompress_knot_vector(prc_context *ctx, uint32_t degree, uint32_t num_contr
         return PRC_ERROR_PARSE;
     }
 
-    /* Ian's feedback: Reverting pseudo-uniform configurations to unreadable until
-       the specification's step-calculation interpretation is officially finalized. */
+    /* This needs to be reviewed. We are running into this in some files */
     if (comp_knot_vector->knots.is_pseudo_uniform)
     {
-        prc_error(ctx, PRC_ERROR_PARSE, "Pseudo-uniform compressed knots are currently unsupported in tessellation\n");
-        return PRC_ERROR_PARSE;
+        /* Intermediate pseudo-uniform knot reconstruction:
+           prc_parse_compressed_knots read the 2 extremity step values into
+           compressed_knots[0] and compressed_knots[1]. Place K[0] = 0.0,
+           K[N-1] = 1.0, K[1] = delta_start, K[N-2] = 1.0 - delta_end, and
+           distribute any remaining interior distinct knots uniformly between
+           K[1] and K[N-2] (falling back to uniform [0, 1] spacing if the
+           stored extremity values do not form an increasing sub-interval). */
+        double k_first_int = comp_knot_vector->knots.compressed_knots[0].knot;
+        double k_last_int = 1.0 - comp_knot_vector->knots.compressed_knots[1].knot;
+        uint8_t valid_bounds = (number_stored_knots >= 3 &&
+            k_first_int > 0.0 && k_last_int < 1.0 &&
+            k_first_int <= k_last_int + 1e-12);
+
+        if (number_stored_knots == 3 && comp_knot_vector->knots.compressed_knots[0].knot > 0.0 &&
+            comp_knot_vector->knots.compressed_knots[0].knot < 1.0)
+        {
+            k_first_int = comp_knot_vector->knots.compressed_knots[0].knot;
+            k_last_int = k_first_int;
+            valid_bounds = 1;
+        }
+
+        for (i = 0; i < number_stored_knots; i++)
+        {
+            double val;
+            if (i == 0)
+            {
+                val = 0.0;
+            }
+            else if (i == number_stored_knots - 1)
+            {
+                val = 1.0;
+            }
+            else if (!valid_bounds)
+            {
+                /* Fallback: uniform spacing across [0.0, 1.0] */
+                val = (double)i / (double)(number_stored_knots - 1);
+            }
+            else if (number_stored_knots == 3)
+            {
+                val = k_first_int;
+            }
+            else
+            {
+                /* i in [1 .. number_stored_knots - 2] */
+                double t = (double)(i - 1) / (double)(number_stored_knots - 3);
+                val = k_first_int + t * (k_last_int - k_first_int);
+            }
+
+            uint32_t multiplicity = mult_array[i].multiplicity;
+            for (j = 0; j < multiplicity; j++)
+            {
+                if (knot_idx < total_knots)
+                {
+                    output_knot_vector[knot_idx++] = val;
+                }
+            }
+        }
+
+        while (knot_idx < total_knots)
+        {
+            output_knot_vector[knot_idx++] = 1.0;
+        }
+        return 0;
     }
 
     double current_knot_value = 0.0;
@@ -1240,7 +1330,8 @@ static int
 prc_create_deduced_curve(prc_context *ctx, prc_compressed_curve *src_curve,
     uint8_t src_reversed, prc_iso_torus_circle *torus_data,
     prc_compressed_curve *des_curve, prc_vec3 des_start,
-    prc_vec3 des_end, prc_nano_brep_compressed_data *compressed_data)
+    prc_vec3 des_end, uint32_t curve_index,
+    prc_nano_brep_compressed_data *compressed_data)
 {
     int code = 0;
 
@@ -1492,6 +1583,29 @@ prc_create_deduced_curve(prc_context *ctx, prc_compressed_curve *src_curve,
         prc_error(ctx, PRC_ERROR_PARSE, "Unsupported curve type in prc_get_compressed_curve_start_end\n");
         return PRC_ERROR_PARSE;
     }
+
+    /* Now that we have created the deduced curve, we need to update the place holder
+       in compressed_data in case this deduced curve is later referenced. It should
+       always be that the place holder exists and is of type PRC_HCG_Deduced otherwise
+       there is something very wrong. Check this as a sanity check */
+    if (curve_index < compressed_data->current_curve_index &&
+        compressed_data->curves[curve_index]->curve_type == PRC_HCG_Deduced)
+    {
+        /* Replace the contents of the one that we have there */
+        *compressed_data->curves[curve_index] = *des_curve;
+    }
+    else
+    {
+        /* We really should not be in this situation, as two different deduced
+           curves are referencing the same index on the same exact geom object.
+           But I have seen a file for which this occurs. Make the best of it. I
+           have it separated out here to catch as a break point of odd things */
+        if (curve_index >= compressed_data->current_curve_index)
+        {
+            prc_error(ctx, PRC_ERROR_PARSE, "Invalid deduced curve index\n");
+            return PRC_ERROR_PARSE;
+        }
+    }
     return 0;
 }
 
@@ -1544,11 +1658,71 @@ prc_get_compressed_curve_start_end(prc_context *ctx, prc_compressed_curve *comp_
     return code;
 }
 
+/* Helper to deduce a single ISO trim curve, handling torus major/minor axis dependencies */
+static int
+prc_deduce_iso_trim_curve(prc_context *ctx,
+    prc_compressed_curve *src_curve, uint8_t src_reversed,
+    prc_compressed_curve *ref_torus_major_curve,
+    uint8_t is_torus, uint8_t is_torus_major,
+    prc_iso_torus_circle *torus_data,
+    prc_compressed_curve *dst_curve_storage,
+    prc_vec3 des_start, prc_vec3 des_end,
+    uint32_t curve_index,
+    prc_nano_brep_compressed_data *compressed_data)
+{
+    if (is_torus)
+    {
+        if (is_torus_major)
+        {
+            torus_data->type = PRC_MAJOR_ISO_TORUS_CIRCLE;
+        }
+        else
+        {
+            torus_data->type = PRC_MINOR_ISO_TORUS_CIRCLE;
+
+            /* If the major circle was already loaded by reference (rather than
+               deduced earlier in this loop), extract its center and normal now. */
+            if (ref_torus_major_curve != NULL)
+            {
+                prc_hcg_circle_information maj_info;
+                int code = prc_get_hcg_circle_data(ctx, &ref_torus_major_curve->hcg_circle,
+                    &maj_info, compressed_data);
+                if (code < 0)
+                {
+                    return code;
+                }
+
+                torus_data->center = maj_info.center;
+                if (maj_info.has_normal)
+                {
+                    torus_data->normal = maj_info.normal;
+                }
+                else
+                {
+                    prc_vec3 v1, v2;
+                    prc_vec_sub(maj_info.start_point, maj_info.center, &v1);
+                    prc_vec_sub(maj_info.end_point, maj_info.center, &v2);
+                    prc_vec_cross(v1, v2, &torus_data->normal);
+                }
+                prc_vec_normalize(&torus_data->normal);
+            }
+        }
+    }
+    else
+    {
+        torus_data->type = 0;
+    }
+
+    return prc_create_deduced_curve(ctx, src_curve, src_reversed,
+        torus_data, dst_curve_storage, des_start, des_end,
+        curve_index, compressed_data);
+}
+
 /* In the case of the ISO surfaces we have 4 curves, two of which are given
    and two that are given by ref or deduced from the first two and a vertex.
    Here we assemble these into a single loop making sure to add any information
    about the direction of the curves as we add them. For example referenced
-   curves will always be reversed.  We label the curves, 0, 1, 2, 3 here  */
+   curves will always be reversed. We label the curves 0, 1, 2, 3 here. */
 static int
 prc_construct_loop_from_iso_curves(prc_context *ctx, prc_content_compressed_face *face,
     prc_topo_face *synthetic_face, uint8_t is_torus, uint8_t first_curve_is_torus_major,
@@ -1556,7 +1730,8 @@ prc_construct_loop_from_iso_curves(prc_context *ctx, prc_content_compressed_face
 {
     int code;
     prc_compressed_curve *curve[4] = { 0 };
-    uint8_t coedge_orientation[4];
+    uint8_t coedge_orientation[4] = { 0 };
+    uint8_t curve_deduced[4] = { 0 };
     prc_compressed_curve curve3_deduced = { 0 };
     prc_compressed_curve curve4_deduced = { 0 };
     prc_vec3 start_curve0, end_curve0, start_curve1, end_curve1;
@@ -1564,14 +1739,12 @@ prc_construct_loop_from_iso_curves(prc_context *ctx, prc_content_compressed_face
     prc_vec3 common_vertex;
     uint8_t reverse_curve0 = 0;
     uint8_t reverse_curve1 = 0;
-    uint8_t reverse_curve2 = 0;
-    uint8_t reverse_curve3 = 0;
-    uint8_t curve_is_torus_minor = 0;
-    prc_vec3 torus_major_center = { 0 };
-    prc_vec3 torus_major_normal = { 0 };
     prc_iso_torus_circle torus_data = { 0 };
-    uint8_t curve_deduced[4] = { 0 };
 
+    uint8_t deduce_curve3 = face->iso_face.third_trim_curve_is_not_yet_saved;
+    uint8_t deduce_curve4 = face->iso_face.fourth_trim_curve_is_not_yet_saved;
+
+    /* 1. Load the first two curves (always explicitly provided or referenced) */
     code = prc_get_compressed_curve(ctx, &face->iso_face.first_trim_curve,
         &curve[0], compressed_data);
     if (code < 0)
@@ -1580,39 +1753,70 @@ prc_construct_loop_from_iso_curves(prc_context *ctx, prc_content_compressed_face
         return code;
     }
     reverse_curve0 = prc_compressed_curve_is_ref(ctx, &face->iso_face.first_trim_curve);
-    code = prc_get_compressed_curve_start_end(ctx, curve[0], &start_curve0, &end_curve0, compressed_data);
+    code = prc_get_compressed_curve_start_end(ctx, curve[0], &start_curve0,
+                                              &end_curve0, compressed_data);
     if (code < 0)
     {
         prc_error(ctx, code, "Failed to get start and end points of first trim curve in prc_construct_loop_from_iso_curves\n");
         return code;
     }
 
-    code = prc_get_compressed_curve(ctx, &face->iso_face.second_trim_curve, &curve[1], compressed_data);
+    code = prc_get_compressed_curve(ctx, &face->iso_face.second_trim_curve,
+                                    &curve[1], compressed_data);
     if (code < 0)
     {
         prc_error(ctx, code, "Failed to get second trim curve by id in prc_construct_loop_from_iso_curves\n");
         return code;
     }
     reverse_curve1 = prc_compressed_curve_is_ref(ctx, &face->iso_face.second_trim_curve);
-    code = prc_get_compressed_curve_start_end(ctx, curve[1], &start_curve1, &end_curve1, compressed_data);
+    code = prc_get_compressed_curve_start_end(ctx, curve[1], &start_curve1,
+                                              &end_curve1, compressed_data);
     if (code < 0)
     {
         prc_error(ctx, code, "Failed to get start and end points of second trim curve in prc_construct_loop_from_iso_curves\n");
         return code;
     }
 
-    /* Per discussion with Patrick, the curves ARE ordered to form a loop,
-       however, if they are referenced due to being from another face,
-       then we have to flip them around. We can denote this in the
-       construction of the loop. At this point, lets see if we are
-       deducing the third and fourth curves or if we are getting them
-       as references. If they are references, then they are reversed.
-       The deduced ones we will have in the proper direction */
-    if (face->iso_face.fourth_trim_curve_is_not_yet_saved &&
-        face->iso_face.third_trim_curve_is_not_yet_saved)
+    /* 2. Load any referenced curves among 3 & 4, and resolve common_vertex */
+    if (!deduce_curve3)
     {
-        /* In this case, we will be deducing the third and fourth curves
-           using the first and second curve AND the vertex. First get the vertex */
+        code = prc_get_compressed_curve(ctx, &face->iso_face.third_trim_curve,
+                                        &curve[2], compressed_data);
+        if (code < 0)
+        {
+            prc_error(ctx, code, "Failed to get third trim curve in prc_construct_loop_from_iso_curves\n");
+            return code;
+        }
+        if (!prc_compressed_curve_is_ref(ctx, &face->iso_face.third_trim_curve))
+        {
+            prc_error(ctx, PRC_ERROR_PARSE, "Third trim curve should be a reference\n");
+            return PRC_ERROR_PARSE;
+        }
+        coedge_orientation[2] = 0; /* Reversed since it comes from another face */
+    }
+
+    if (!deduce_curve4)
+    {
+        code = prc_get_compressed_curve(ctx, &face->iso_face.fourth_trim_curve,
+                                        &curve[3], compressed_data);
+        if (code < 0)
+        {
+            prc_error(ctx, code, "Failed to get fourth trim curve in prc_construct_loop_from_iso_curves\n");
+            return code;
+        }
+        if (!prc_compressed_curve_is_ref(ctx, &face->iso_face.fourth_trim_curve))
+        {
+            prc_error(ctx, PRC_ERROR_PARSE, "Fourth trim curve should be a reference\n");
+            return PRC_ERROR_PARSE;
+        }
+        coedge_orientation[3] = 0; /* Reversed since it comes from another face */
+    }
+
+    prc_vec3 loop_end_of_1 = reverse_curve1 ? start_curve1 : end_curve1;
+    prc_vec3 loop_start_of_0 = reverse_curve0 ? end_curve0 : start_curve0;
+
+    if (deduce_curve3 && deduce_curve4)
+    {
         code = prc_get_compressed_vertex(ctx, &face->iso_face.common_third_fourth_vertex,
             &common_vertex, compressed_data);
         if (code < 0)
@@ -1620,158 +1824,156 @@ prc_construct_loop_from_iso_curves(prc_context *ctx, prc_content_compressed_face
             prc_error(ctx, code, "Failed to get common vertex in prc_construct_loop_from_iso_curves\n");
             return code;
         }
-
-        /* Curve 3 is created using curve 1 and the vertex. It *is* possible
-           that curve 1 was referenced and so is reversed. In any event first
-           lets get the start and end point of curve 3. These come from curve 2
-           and from the vertex */
-        if (reverse_curve1)
+    }
+    else if (!deduce_curve3)
+    {
+        /* Curve 3 (index 2) is referenced: one of its endpoints connects to loop_end_of_1,
+           and the other endpoint is common_vertex. */
+        code = prc_get_compressed_curve_start_end(ctx, curve[2], &start_curve2, &end_curve2, compressed_data);
+        if (code < 0)
         {
-            start_curve2 = start_curve1;
+            prc_error(ctx, code, "Failed to get start and end points of third trim curve in prc_construct_loop_from_iso_curves\n");
+            return code;
+        }
+
+        double d_start = prc_vec_dist_between_two_points(start_curve2, loop_end_of_1);
+        double d_end = prc_vec_dist_between_two_points(end_curve2, loop_end_of_1);
+        if (d_start <= d_end)
+        {
+            /* Curve 3 runs forward: loop_end_of_1 -> common_vertex */
+            common_vertex = end_curve2;
+            coedge_orientation[2] = 1;
         }
         else
         {
-            start_curve2 = end_curve1;
+            /* Curve 3 runs reversed: common_vertex -> loop_end_of_1 */
+            common_vertex = start_curve2;
+            coedge_orientation[2] = 0;
         }
+    }
+    else /* !deduce_curve4 */
+    {
+        /* Curve 4 (index 3) is referenced: one of its endpoints connects to loop_start_of_0,
+           and the other endpoint is common_vertex. */
+        code = prc_get_compressed_curve_start_end(ctx, curve[3], &start_curve3, &end_curve3, compressed_data);
+        if (code < 0)
+        {
+            prc_error(ctx, code, "Failed to get start and end points of fourth trim curve in prc_construct_loop_from_iso_curves\n");
+            return code;
+        }
+
+        double d_start = prc_vec_dist_between_two_points(start_curve3, loop_start_of_0);
+        double d_end = prc_vec_dist_between_two_points(end_curve3, loop_start_of_0);
+        if (d_end <= d_start)
+        {
+            /* Curve 4 runs forward: common_vertex -> loop_start_of_0 */
+            common_vertex = start_curve3;
+            coedge_orientation[3] = 1;
+        }
+        else
+        {
+            /* Curve 4 runs reversed: loop_start_of_0 -> common_vertex */
+            common_vertex = end_curve3;
+            coedge_orientation[3] = 0;
+        }
+    }
+
+    /* 3. Deduce whichever of curves 3 & 4 were not yet saved */
+    if (deduce_curve3 || deduce_curve4)
+    {
+        /* Curve 3 (index 2) runs from end of Curve 2 (index 1) to common_vertex */
+        start_curve2 = reverse_curve1 ? start_curve1 : end_curve1;
         end_curve2 = common_vertex;
 
-
-        /* And curve 4 which is based upon curve 2 */
-        if (reverse_curve0)
-        {
-            end_curve3 = end_curve0;
-        }
-        else
-        {
-            end_curve3 = start_curve0;
-        }
+        /* Curve 4 (index 3) runs from common_vertex to start of Curve 1 (index 0) */
         start_curve3 = common_vertex;
+        end_curve3 = reverse_curve0 ? end_curve0 : start_curve0;
 
-        /* Now create a curve 3 equivalent to curve 1 but using different
-           start and end points AND perhaps reversed from curve 1. If we
-           are in a torus situation and !first_curve_is_torus_major, then
-           we actually have some work to do as we should go ahead and do the
-           major curve first as we need the normal and center of that circle
-           so we know how to locate where the minor is */
-        if (is_torus)
+        /* On a torus, if both curves are deduced and curve 4 is the major axis,
+           deduce curve 4 first so torus_data gets populated for curve 3. */
+        if (deduce_curve3 && deduce_curve4 && is_torus && !first_curve_is_torus_major)
         {
-            /* Just do this separately to keep things clear */
-            if (first_curve_is_torus_major)
+            /* Deduce Curve 4 (Major) first */
+            curve[3] = &curve4_deduced;
+            code = prc_deduce_iso_trim_curve(ctx, curve[1], reverse_curve1,
+                NULL, is_torus, 1, &torus_data, curve[3],
+                start_curve3, end_curve3,
+                face->iso_face.fourth_trim_curve.index_compressed_curve,
+                compressed_data);
+            if (code < 0)
             {
-                /* Major first */
-                curve[2] = &curve3_deduced;
-                torus_data.type = PRC_MAJOR_ISO_TORUS_CIRCLE;
-                code = prc_create_deduced_curve(ctx, curve[0], reverse_curve0,
-                    &torus_data, curve[2], start_curve2, end_curve2, compressed_data);
-                if (code < 0)
-                {
-                    prc_error(ctx, code, "Failed to create deduced curve in prc_construct_loop_from_iso_curves\n");
-                    return code;
-                }
-
-                /* Now the minor axis. We already should have the data from
-                   the major axis */
-                curve[3] = &curve4_deduced;
-                torus_data.type = PRC_MINOR_ISO_TORUS_CIRCLE;
-                code = prc_create_deduced_curve(ctx, curve[1], reverse_curve1,
-                    &torus_data, curve[3], start_curve3, end_curve3, compressed_data);
-                if (code < 0)
-                {
-                    prc_error(ctx, code, "Failed to create deduced curve in prc_construct_loop_from_iso_curves\n");
-                    return code;
-                }
+                prc_error(ctx, code, "Failed to create deduced fourth curve in prc_construct_loop_from_iso_curves\n");
+                return code;
             }
-            else
+            coedge_orientation[3] = 1;
+            curve_deduced[3] = 1;
+
+            /* Deduce Curve 3 (Minor) using torus_data populated above */
+            curve[2] = &curve3_deduced;
+            code = prc_deduce_iso_trim_curve(ctx, curve[0], reverse_curve0,
+                NULL, is_torus, 0, &torus_data, curve[2],
+                start_curve2, end_curve2,
+                face->iso_face.third_trim_curve.index_compressed_curve,
+                compressed_data);
+            if (code < 0)
             {
-                /* In this case the curve1 is the minor torus axis. So we do curve 4 (major) first */
-                curve[3] = &curve4_deduced;
-                torus_data.type = PRC_MAJOR_ISO_TORUS_CIRCLE;
-                code = prc_create_deduced_curve(ctx, curve[1], reverse_curve1,
-                    &torus_data, curve[3], start_curve3, end_curve3, compressed_data);
-                if (code < 0)
-                {
-                    prc_error(ctx, code, "Failed to create deduced curve in prc_construct_loop_from_iso_curves\n");
-                    return code;
-                }
-
-                /* And now curve 3 (minor) */
-                curve[2] = &curve3_deduced;
-                torus_data.type = PRC_MINOR_ISO_TORUS_CIRCLE;
-                code = prc_create_deduced_curve(ctx, curve[0], reverse_curve0,
-                    &torus_data, curve[2], start_curve2, end_curve2, compressed_data);
-                if (code < 0)
-                {
-                    prc_error(ctx, code, "Failed to create deduced curve in prc_construct_loop_from_iso_curves\n");
-                    return code;
-                }
+                prc_error(ctx, code, "Failed to create deduced third curve in prc_construct_loop_from_iso_curves\n");
+                return code;
             }
+            coedge_orientation[2] = 1;
+            curve_deduced[2] = 1;
         }
         else
         {
-            curve[2] = &curve3_deduced;
-            code = prc_create_deduced_curve(ctx, curve[0], reverse_curve0,
-                &torus_data, curve[2], start_curve2, end_curve2, compressed_data);
-            if (code < 0)
+            if (deduce_curve3)
             {
-                prc_error(ctx, code, "Failed to create deduced curve in prc_construct_loop_from_iso_curves\n");
-                return code;
-            }
+                /* If curve 4 is referenced and curve 3 is torus minor, curve[3] is the major circle */
+                prc_compressed_curve *ref_major = (!deduce_curve4 && is_torus && !first_curve_is_torus_major)
+                    ? curve[3] : NULL;
 
-            /* Now create a curve 4 equivalent to curve 2 but using different
-               start and end points AND perhaps reversed from curve 2 */
-            curve[3] = &curve4_deduced;
-            code = prc_create_deduced_curve(ctx, curve[1], reverse_curve1,
-                &torus_data, curve[3], start_curve3, end_curve3, compressed_data);
-            if (code < 0)
+                curve[2] = &curve3_deduced;
+                code = prc_deduce_iso_trim_curve(ctx, curve[0], reverse_curve0,
+                    ref_major, is_torus, first_curve_is_torus_major, &torus_data,
+                    curve[2], start_curve2, end_curve2,
+                    face->iso_face.third_trim_curve.index_compressed_curve,
+                    compressed_data);
+                if (code < 0)
+                {
+                    prc_error(ctx, code, "Failed to create deduced third curve in prc_construct_loop_from_iso_curves\n");
+                    return code;
+                }
+                coedge_orientation[2] = 1;
+                curve_deduced[2] = 1;
+            }
+            if (deduce_curve4)
             {
-                prc_error(ctx, code, "Failed to create deduced curve in prc_construct_loop_from_iso_curves\n");
-                return code;
+                /* If curve 3 is referenced and curve 4 is torus minor, curve[2] is the major circle */
+                prc_compressed_curve *ref_major = (!deduce_curve3 && is_torus && first_curve_is_torus_major)
+                    ? curve[2] : NULL;
+                curve[3] = &curve4_deduced;
+                code = prc_deduce_iso_trim_curve(ctx, curve[1], reverse_curve1,
+                    ref_major, is_torus, !first_curve_is_torus_major, &torus_data,
+                    curve[3], start_curve3, end_curve3,
+                    face->iso_face.fourth_trim_curve.index_compressed_curve,
+                    compressed_data);
+                if (code < 0)
+                {
+                    prc_error(ctx, code, "Failed to create deduced fourth curve in prc_construct_loop_from_iso_curves\n");
+                    return code;
+                }
+                coedge_orientation[3] = 1;
+                curve_deduced[3] = 1;
             }
         }
-        coedge_orientation[2] = 1; /* These should be in the proper direction */
-        coedge_orientation[3] = 1;
-
-        /* Mark curve3 and curve4 as deduced. It is from this that we will know
-           that we need to make an allocation, copy, and then free */
-        curve_deduced[2] = 1;
-        curve_deduced[3] = 1;
-    }
-    else
-    {
-        /* In this case we get curve three and four from the reference
-           and they should be reversed. No need to do any creation of curves */
-        code = prc_get_compressed_curve(ctx, &face->iso_face.third_trim_curve, &curve[2], compressed_data);
-        if (code < 0)
-        {
-            prc_error(ctx, code, "Failed to third curve in prc_construct_loop_from_iso_curves\n");
-            return code;
-        }
-        code = prc_get_compressed_curve(ctx, &face->iso_face.fourth_trim_curve, &curve[3], compressed_data);
-        if (code < 0)
-        {
-            prc_error(ctx, code, "Failed to fourth curve in prc_construct_loop_from_iso_curves\n");
-            return code;
-        }
-
-        /* Lets check that they are indeed references though */
-        if (!prc_compressed_curve_is_ref(ctx, &face->iso_face.fourth_trim_curve) ||
-            !prc_compressed_curve_is_ref(ctx, &face->iso_face.third_trim_curve))
-        {
-            prc_error(ctx, code, "Fourth and third trim curves should be references\n");
-            return code;
-        }
-        coedge_orientation[2] = 0; /* These should be reversed since they are from another face */
-        coedge_orientation[3] = 0;
     }
 
+    /* 4. Assemble the synthetic loop */
     synthetic_face->loops = (prc_ptr_topology *)prc_calloc(ctx, 1, sizeof(prc_ptr_topology));
     if (synthetic_face->loops == NULL)
     {
         prc_error(ctx, PRC_ERROR_INTERNAL, "Failed to allocate memory for synthetic_face.loops\n");
         return PRC_ERROR_INTERNAL;
     }
-
-    /* Now add the four curves to the loop. */
     coedge_orientation[0] = !reverse_curve0;
     coedge_orientation[1] = !reverse_curve1;
     code = prc_convert_iso_curves_to_std_loop(ctx, curve, synthetic_face->loops,
@@ -1803,106 +2005,124 @@ prc_get_plane_data_from_iso_curves(prc_context *ctx, prc_ptr_topology *loop,
     prc_nano_brep_compressed_data *compressed_data)
 {
     int code = 0;
-    prc_compressed_curve *curve1, *curve2;
-    uint8_t is_reversed1, is_reversed2;
-    prc_vec3 curve1_start, curve1_end;
-    prc_vec3 curve2_start, curve2_end;
+    prc_compressed_curve *curves[4];
+    uint8_t is_reversed[4];
+    prc_vec3 pts[4];
     prc_hcg_circle_information circle_info;
+    uint8_t have_circle_normal = 0;
+    prc_vec3 circle_normal = { 0 };
     prc_vec3 vec_v, plane_normal;
 
-    /* Lets dig in and get curve1 and curve2. One should be circle the other
-       a line. */
-    curve1 = prc_get_compressed_curve_from_iso_loop(ctx, loop, 0, &is_reversed1);
-    curve2 = prc_get_compressed_curve_from_iso_loop(ctx, loop, 1, &is_reversed2);
-
-    if (curve1->curve_type == PRC_HCG_Circle)
+    for (uint8_t i = 0; i < 4; i++)
     {
-        code = prc_get_hcg_circle_data(ctx, &curve1->hcg_circle, &circle_info, compressed_data);
-        if (code < 0)
+        prc_vec3 s, e;
+        curves[i] = prc_get_compressed_curve_from_iso_loop(ctx, loop, i, &is_reversed[i]);
+
+        if (curves[i]->curve_type == PRC_HCG_Circle)
         {
-            prc_error(ctx, code, "Failed in prc_get_hcg_circle_data\n");
-            return code;
-        }
-        curve1_start = circle_info.start_point;
-        curve1_end = circle_info.end_point;
-    }
-    else if (curve1->curve_type == PRC_HCG_Line)
-    {
-        prc_get_compressed_curve_start_end(ctx, curve1, &curve1_start, &curve1_end, NULL);
-    }
-    else
-    {
-        prc_error(ctx, PRC_ERROR_PARSE, "Unsupported curve type in ISO plane\n");
-        return PRC_ERROR_PARSE;
-    }
+            code = prc_get_hcg_circle_data(ctx, &curves[i]->hcg_circle, &circle_info, compressed_data);
+            if (code < 0)
+            {
+                prc_error(ctx, code, "Failed in prc_get_hcg_circle_data\n");
+                return code;
+            }
+            s = circle_info.start_point;
+            e = circle_info.end_point;
 
-    if (curve2->curve_type == PRC_HCG_Circle)
-    {
-        code = prc_get_hcg_circle_data(ctx, &curve2->hcg_circle, &circle_info, compressed_data);
-        if (code < 0)
+            if (!have_circle_normal && circle_info.has_normal)
+            {
+                circle_normal = circle_info.normal;
+                have_circle_normal = 1;
+            }
+        }
+        else if (curves[i]->curve_type == PRC_HCG_Line)
         {
-            prc_error(ctx, code, "Failed in prc_get_hcg_circle_data\n");
-            return code;
+            code = prc_get_compressed_curve_start_end(ctx, curves[i], &s, &e, compressed_data);
+            if (code < 0)
+            {
+                prc_error(ctx, code, "Failed to get line endpoints in prc_get_plane_data_from_iso_curves\n");
+                return code;
+            }
         }
-        curve2_start = circle_info.start_point;
-        curve2_end = circle_info.end_point;
-    }
-    else if (curve2->curve_type == PRC_HCG_Line)
-    {
-        prc_get_compressed_curve_start_end(ctx, curve2, &curve2_start, &curve2_end, NULL);
-    }
-    else
-    {
-        prc_error(ctx, PRC_ERROR_PARSE, "Unsupported curve type in ISO plane\n");
-        return PRC_ERROR_PARSE;
+        else
+        {
+            prc_error(ctx, PRC_ERROR_PARSE, "Unsupported curve type in ISO plane\n");
+            return PRC_ERROR_PARSE;
+        }
+
+        /* Oriented start corner of edge i */
+        pts[i] = is_reversed[i] ? e : s;
     }
 
-    if (curve2->curve_type == PRC_HCG_Circle && curve1->curve_type == PRC_HCG_Circle)
-    {
-        prc_error(ctx, PRC_ERROR_PARSE, "Unsupported curve types in ISO plane\n");
-        return PRC_ERROR_PARSE;
-    }
-
-    /* Define our plane using the 3 points curve1_start, curve1_end, curve2_end.
-     * pick curve1_start as the "origin" of the plane, which we will map
-     * [0,0,0] to. Also figure out the rotation values so that we rotate the
-     * z-axis to the normal of the plane defined by these 3 points. */
-
-     /* Initialize transform struct */
     *transform = (prc_trans_3d){ 0 };
     transform->behavior = PRC_TRANSFORMATION_Translate | PRC_TRANSFORMATION_Rotate;
+    transform->translation = pts[0];
 
-    /* 1. Map translation origin to the selected plane origin point */
-    transform->translation = curve1_start;
-
-    /* 2. X-Axis (rotation[0]): Direction from curve1_start to curve1_end */
-    prc_vec_sub(curve1_end, curve1_start, &transform->rotation[0]);
-    code = prc_vec_normalize_sqrt(&transform->rotation[0]);
-    if (code < 0)
+    /* 1. Find a non-degenerate X-axis along the loop edges */
+    uint8_t found_x = 0;
+    for (uint8_t i = 0; i < 4; i++)
     {
-        prc_error(ctx, code, "Failed to normalize X-axis vector in prc_get_plane_data_from_iso_curves\n");
-        return code;
+        prc_vec_sub(pts[(i + 1) % 4], pts[i], &transform->rotation[0]);
+        if (prc_vec_length_sqrt(transform->rotation[0]) > 1e-9)
+        {
+            prc_vec_normalize_sqrt(&transform->rotation[0]);
+            found_x = 1;
+            break;
+        }
+    }
+    if (!found_x)
+    {
+        prc_error(ctx, PRC_ERROR_PARSE, "Degenerate ISO plane loop\n");
+        return PRC_ERROR_PARSE;
     }
 
-    /* 3. Get vector from origin towards curve2_end to help build the plane normal frame */
-    prc_vec_sub(curve2_end, curve1_start, &vec_v);
-
-    /* 4. Compute temporary plane normal vector via cross product (X x V) */
-    prc_vec_cross(transform->rotation[0], vec_v, &plane_normal);
-    code = prc_vec_normalize_sqrt(&plane_normal);
-    if (code < 0)
+    /* 2. Determine plane normal: prefer explicit circle normal if available,
+          otherwise cross X with a non-collinear corner vector */
+    if (have_circle_normal)
     {
-        prc_error(ctx, code, "Failed to normalize plane normal vector in prc_get_plane_data_from_iso_curves\n");
-        return code;
+        plane_normal = circle_normal;
+        code = prc_vec_normalize_sqrt(&plane_normal);
+        if (code < 0)
+        {
+            prc_error(ctx, code, "Failed to normalize circle normal in prc_get_plane_data_from_iso_curves\n");
+            return code;
+        }
+    }
+    else
+    {
+        uint8_t found_normal = 0;
+        for (uint8_t i = 1; i < 4; i++)
+        {
+            prc_vec_sub(pts[i], pts[0], &vec_v);
+            prc_vec_cross(transform->rotation[0], vec_v, &plane_normal);
+            if (prc_vec_length_sqrt(plane_normal) > 1e-9)
+            {
+                prc_vec_normalize_sqrt(&plane_normal);
+                found_normal = 1;
+                break;
+            }
+        }
+        if (!found_normal)
+        {
+            prc_error(ctx, PRC_ERROR_PARSE, "Collinear vertices in ISO plane loop\n");
+            return PRC_ERROR_PARSE;
+        }
     }
 
-    /* 5. Enforce the positive_z condition on the normal vector */
+    /* 3. Enforce the positive_z condition on the normal vector */
     if ((positive_z && plane_normal.z < 0.0) || (!positive_z && plane_normal.z > 0.0))
     {
         prc_vec_negate(&plane_normal);
     }
 
-    /* 6. Y-Axis (rotation[1]): Orthogonal complement computed via cross product (Z x X) */
+    /* 4. Re-orthogonalize X against plane_normal (in case circle_normal was used)
+          and compute Y = Z x X */
+    double dot_xz = prc_vec_dot_product(transform->rotation[0], plane_normal);
+    transform->rotation[0].x -= dot_xz * plane_normal.x;
+    transform->rotation[0].y -= dot_xz * plane_normal.y;
+    transform->rotation[0].z -= dot_xz * plane_normal.z;
+    prc_vec_normalize_sqrt(&transform->rotation[0]);
+
     prc_vec_cross(plane_normal, transform->rotation[0], &transform->rotation[1]);
     code = prc_vec_normalize_sqrt(&transform->rotation[1]);
     if (code < 0)
@@ -1910,6 +2130,7 @@ prc_get_plane_data_from_iso_curves(prc_context *ctx, prc_ptr_topology *loop,
         prc_error(ctx, code, "Failed to normalize Y-axis vector in prc_get_plane_data_from_iso_curves\n");
         return code;
     }
+
     return 0;
 }
 
@@ -2488,8 +2709,6 @@ prc_tessellate_compressed_face(prc_context *ctx, prc_data *data, uint32_t shell_
             goto free_loops;
         }
 
-        /* From the loop we need to get the parameters of the cylinder so
-           that we can determine the transformation as well the radius */
         code = prc_get_plane_data_from_iso_curves(ctx, synthetic_face.loops, positive_z,
                                                   &plane.transform, compressed_data);
         if (code < 0)
@@ -3449,12 +3668,29 @@ prc_tessellate_compressed_face(prc_context *ctx, prc_data *data, uint32_t shell_
                 goto free_loops;
             }
 
+            /* Find the one with the largest radius */
             uint32_t loop_index = 0;
             uint32_t num_samples = wire_data[0].number_of_points;
-            for (uint32_t i = 1; i < ana_face->trim_loop_count; i++)
+            double best_max_r = -1.0;
+
+            for (uint32_t i = 0; i < ana_face->trim_loop_count; i++)
             {
-                if (wire_data[i].number_of_points > num_samples)
+                if (wire_data[i].number_of_points < 2)
+                    continue;
+
+                double loop_max_r = 0.0;
+                for (uint32_t j = 0; j < wire_data[i].number_of_points; j++)
                 {
+                    prc_vec3 canonical_pt = prc_exact_geom_apply_transform(ctx,
+                        &inv_geom_matrix, wire_data[i].points[j]);
+                    double r = sqrt(canonical_pt.x * canonical_pt.x + canonical_pt.y * canonical_pt.y);
+                    if (r > loop_max_r)
+                        loop_max_r = r;
+                }
+
+                if (loop_max_r > best_max_r)
+                {
+                    best_max_r = loop_max_r;
                     loop_index = i;
                     num_samples = wire_data[i].number_of_points;
                 }

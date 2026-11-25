@@ -49,6 +49,14 @@ uniform vec3 uViewPos;
 uniform DirLight uDirLight;
 uniform PointLight uPointLight;
 
+/* A light that follows the camera: uFillDir is the direction toward the camera, in world space. Diffuse
+   only, and casts no shadow. 0 intensity switches it off. */
+uniform vec3 uFillDir;
+uniform float uFillIntensity;
+/* Where the camera's light shines its highlight from: toward it, in world space. Up and to the left of the
+   camera, so a highlight on a rounded surface sits off its centre, as in Adobe Acrobat. */
+uniform vec3 uFillSpecDir;
+
 uniform vec3 uSkyColorHorizon;
 uniform vec3 uSkyColorZenith;
 
@@ -70,6 +78,7 @@ const float kNormalEpsilon = 1e-5;
 /* Set so a lit 0.75 grey draws about mid-grey, as Adobe Acrobat draws it */
 const float kDiffuseStrength = 0.45;
 const float kSpecularStrength = 0.65;
+const float kFillFalloff = 3.0;
 const float kShadedSaturation = 1.03;
 const float kShadedGamma = 0.99;
 
@@ -152,6 +161,43 @@ vec3 calcDirDiffuse(DirLight light, vec3 normal, vec3 diffuseContrib)
         return vec3(0.0);
 
     return diff * diffuseContrib * light.color * light.intensity * shadowFactor * kDiffuseStrength * uDiffuseWeight;
+}
+
+/* Calculate diffuse lighting from the light that follows the camera, so what faces the viewer is lit
+   however the model is turned, as Adobe Acrobat's CAD lighting does */
+vec3 calcFillDiffuse(vec3 normal, vec3 diffuseContrib)
+{
+    if (uFillIntensity <= 0.0)
+        return vec3(0.0);
+
+    /* A surface turning away from the camera darkens faster than the cosine of the angle: Adobe Acrobat's
+       does, to dark grey near 90 degrees. kFillFalloff is the power of the cosine, set against the ball
+       bearings of a model drawn in Acrobat (red channel at 0, .25, .5, .7 and .85 of a ball's radius:
+       Acrobat 223 204 188 171 151, here 212 204 191 175 152). */
+    float diff = pow(max(dot(normal, normalize(uFillDir)), 0.0), kFillFalloff);
+
+    return diff * diffuseContrib * uFillIntensity * kDiffuseStrength * uDiffuseWeight;
+}
+
+/* Calculate specular lighting from the camera's light: the highlight, which needs no shadow */
+vec3 calcFillSpecular(vec3 normal, vec3 specularContrib, float shininess)
+{
+    if (uFillIntensity <= 0.0)
+        return vec3(0.0);
+
+    vec3 L = normalize(uFillSpecDir);
+    vec3 V = normalize(uViewPos - FragPos);
+
+    if (dot(normal, L) <= 0.0)
+        return vec3(0.0);
+
+    vec3 R = 2.0 * dot(normal, L) * normal - L;
+
+    /* A broad highlight, a fifth of a ball's radius across at shininess 1, as Acrobat draws it; the sun's
+       exponent (128 there) gives a spot too small to see */
+    float power = shininess <= 1.0 ? mix(4.0, 16.0, clamp(shininess, 0.0, 1.0)) : min(shininess, 32.0);
+
+    return specularContrib * pow(max(dot(R, V), 0.0), power) * kSpecularStrength * 1.8;
 }
 
 /* Calculate specular lighting from a directional light (sun) */
@@ -401,10 +447,12 @@ void main()
         vec3 diffuseTerm = calcDirDiffuse(uDirLight, normal, diffuseContrib);
         diffuseTerm += calcPointDiffuse(uPointLight, normal, FragPos,
             diffuseContrib);
+        diffuseTerm += calcFillDiffuse(normal, diffuseContrib);
         vec3 specularTerm = calcDirSpecular(uDirLight, normal, specularContrib,
             shininess);
         specularTerm += calcPointSpecular(uPointLight, normal, FragPos,
             specularContrib, shininess);
+        specularTerm += calcFillSpecular(normal, specularContrib, shininess);
 
           /* Final color: for vertex-material shading, use material channels directly.
               Multiplying by vertex Color can desaturate intended PRC diffuse colors. */
@@ -439,10 +487,12 @@ void main()
     vec3 diffuseTerm = calcDirDiffuse(uDirLight, normal, diffuseContrib);
     diffuseTerm += calcPointDiffuse(uPointLight, normal, FragPos,
         diffuseContrib);
+    diffuseTerm += calcFillDiffuse(normal, diffuseContrib);
     vec3 specularTerm = calcDirSpecular(uDirLight, normal, specularContrib,
         uMaterial.shininess);
     specularTerm += calcPointSpecular(uPointLight, normal, FragPos,
         specularContrib, uMaterial.shininess);
+    specularTerm += calcFillSpecular(normal, specularContrib, uMaterial.shininess);
 
     /* Final color.  Tint is ambient */
     //vec3 color = 0.1 * uMaterial.tint + ambientTerm + diffuseTerm * Color + specularTerm;

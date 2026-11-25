@@ -37,6 +37,17 @@
 #define SHADOW_MAP_TEXTURE_UNIT 8
 #define COMPOSITE_TEXTURE_UNIT 9
 
+/* How strongly the light that follows the camera shines by default (see Lighting.fill_intensity). Set so a
+   0.69 grey face looking at the camera draws at about 185 of 255 with the sun on, as Adobe Acrobat draws it
+   (measured on a ball bearing model: Acrobat 184 to 192, here 176 to 192 at 2.5 with the ambient turned down). */
+static const float kDefaultFillIntensity = 2.5f;
+
+/* Where the camera's light shines, the ambient light is turned down to this fraction of the weight set, so
+   a colour with no blue in it (a pure yellow, say) is not lifted toward white by an ambient colour of white
+   that the file gives: with it Acrobat's yellow (208, 208, 64) is matched within 8 at a fill of 2.5. The
+   fraction is reached at a fill of kDefaultFillIntensity, and is reached gradually below it. */
+static const float kAmbientWithFill = 0.55f;
+
 static const Vertex kPlaneVertices[] = {
     Vertex{
         Vector3{-0.5f, 0.0f, -0.5f},
@@ -1354,7 +1365,7 @@ Scene::Scene() : _products(nullptr), _nproducts(0),
                  _groundHeight(-10.0f), _groundSize(Vector2(100.0f, 100.0f)), _enableGround(false),
                  _shadowShader(nullptr), _shadowMap(nullptr),
                  _compositeShader(nullptr), _compositor(nullptr),
-                 _fullbright(false), _ambientWeight(1.0f), _diffuseWeight(1.0f),
+                 _fullbright(false), _ambientWeight(1.0f), _diffuseWeight(1.0f), _fillIntensity(kDefaultFillIntensity),
                  _normalDebugMode(0), _backfaceCull(false),
                  _enableBloom(true), _bloom(nullptr),
                  _enableToneMapping(true), _enableMotion(true),
@@ -1388,12 +1399,20 @@ void Scene::renderModels(Camera *camera) const
     /* Lighting */
     _meshShader->setDirLight(_dirLight);
     _meshShader->setPointLight(_pointLight);
+    /* The fill light shines from the camera: toward it is against the way the camera looks */
+    {
+        /* Its highlight shines from up and to the left of the camera, as Adobe Acrobat's does: on a ball it
+           sits up and to the left of the ball's centre */
+        const Vector3 toward_highlight = -camera->front() * 0.58f + camera->up() * 0.52f - camera->right() * 0.62f;
+
+        _meshShader->setFillLight(-camera->front(), toward_highlight, _fillIntensity);
+    }
     _meshShader->setSkyColorHorizon(_skybox->horizonColor());
     _meshShader->setSkyColorZenith(_skybox->zenithColor());
 
     _meshShader->setWireframe(_wireframe);
     _meshShader->setFullbright(_fullbright);
-    _meshShader->setAmbientWeight(_ambientWeight);
+    _meshShader->setAmbientWeight(_ambientWeight * (1.0f - (1.0f - kAmbientWithFill) * clamp(_fillIntensity / kDefaultFillIntensity, 0.0f, 1.0f)));
     _meshShader->setDiffuseWeight(_diffuseWeight);
     _meshShader->setDebugMode(_normalDebugMode);
 
@@ -1416,7 +1435,12 @@ void Scene::renderModels(Camera *camera) const
     root.render(_meshShader);
 
     /* Markup text last and with no depth test, so a label is never behind a lead line or the model */
+    /* A label's quads face the camera whichever way round they are wound, so back-face culling must not
+       reach them, or the labels vanish when it is on */
+    glDisable(GL_CULL_FACE);
     root.renderText(_meshShader);
+    if (_backfaceCull)
+        glEnable(GL_CULL_FACE);
 
     /* Render ground */
     if (_enableGround && 0)

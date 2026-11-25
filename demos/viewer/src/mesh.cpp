@@ -114,6 +114,9 @@ void MeshShader::load()
     uPointLight_position = _shader.getUniformLocation("uPointLight.position");
     uPointLight_color = _shader.getUniformLocation("uPointLight.color");
     uPointLight_intensity = _shader.getUniformLocation("uPointLight.intensity");
+    uFillDir = _shader.getUniformLocation("uFillDir");
+    uFillIntensity = _shader.getUniformLocation("uFillIntensity");
+    uFillSpecDir = _shader.getUniformLocation("uFillSpecDir");
     uSkyColorHorizon = _shader.getUniformLocation("uSkyColorHorizon");
     uSkyColorZenith = _shader.getUniformLocation("uSkyColorZenith");
 
@@ -145,6 +148,7 @@ MeshShader::MeshShader() : uModel(-1), uView(-1), uProjection(-1), uViewport(-1)
                            uViewPos(-1),
                            uDirLight_direction(-1), uDirLight_color(-1), uDirLight_intensity(-1),
                            uPointLight_position(-1), uPointLight_color(-1), uPointLight_intensity(-1),
+                           uFillDir(-1), uFillSpecDir(-1), uFillIntensity(-1),
                            uMaterial_diffuse(-1), uMaterial_specular(-1), uMaterial_shininess(-1), uMaterial_tint(-1),
                            uMaterial_diffuseMap(-1), uMaterial_hasDiffuseMap(-1), uIsLine(-1), uEnableShadows(-1),
                            uWireframe(-1), uFullbright(-1), uAmbientWeight(-1), uDiffuseWeight(-1),

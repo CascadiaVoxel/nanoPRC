@@ -104,6 +104,7 @@ typedef struct prc_uint32_pair_s
       a level or two), so cost is roughly linear in boundary cell count, not
       3^depth */
 #define PRC_TRIM_BOUNDARY_SUBDIVIDE_MAX_DEPTH 7
+#define VERTEX_COINCIDENCE_TOLERANCE 1e-7
 
 /* A standard type for curve sampling */
 typedef prc_vec3(*curve_func)(prc_context *ctx, void *params, double input);

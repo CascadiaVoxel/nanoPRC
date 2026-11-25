@@ -479,7 +479,7 @@ prc_sample_loop(prc_context *ctx, prc_nano_brep_ref_data *brep_ref_data,
 
             for (s = 1; s < loop_samples->num_samples; s++)
             {
-                if (prc_vec_dist_between_two_points(first, loop_samples->samples[s]) > CURVE_PRECISION)
+                if (prc_vec_dist_between_two_points(first, loop_samples->samples[s]) > VERTEX_COINCIDENCE_TOLERANCE)
                 {
                     all_coincide = 0;
                     break;

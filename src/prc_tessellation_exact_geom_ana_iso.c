@@ -3608,12 +3608,29 @@ prc_tessellate_compressed_face(prc_context *ctx, prc_data *data, uint32_t shell_
                 goto free_loops;
             }
 
+            /* Find the one with the largest radius */
             uint32_t loop_index = 0;
             uint32_t num_samples = wire_data[0].number_of_points;
-            for (uint32_t i = 1; i < ana_face->trim_loop_count; i++)
+            double best_max_r = -1.0;
+
+            for (uint32_t i = 0; i < ana_face->trim_loop_count; i++)
             {
-                if (wire_data[i].number_of_points > num_samples)
+                if (wire_data[i].number_of_points < 2)
+                    continue;
+
+                double loop_max_r = 0.0;
+                for (uint32_t j = 0; j < wire_data[i].number_of_points; j++)
                 {
+                    prc_vec3 canonical_pt = prc_exact_geom_apply_transform(ctx,
+                        &inv_geom_matrix, wire_data[i].points[j]);
+                    double r = sqrt(canonical_pt.x * canonical_pt.x + canonical_pt.y * canonical_pt.y);
+                    if (r > loop_max_r)
+                        loop_max_r = r;
+                }
+
+                if (loop_max_r > best_max_r)
+                {
+                    best_max_r = loop_max_r;
                     loop_index = i;
                     num_samples = wire_data[i].number_of_points;
                 }

@@ -32,6 +32,40 @@ prc_get_hcg_line_data(prc_context *ctx, prc_hcg_line *data,
     return code;
 }
 
+/* The length below which two points of a circle are the same point, or a
+   radius is zero. It goes with the size of the circle (its largest distance
+   between two of the points known) and with the size of the coordinates, which
+   are stored to about seven figures, not with a fixed number of model units:
+   a fixed number takes every arc of a model drawn in metres, whose radii are
+   a few hundredths, for a point. */
+static double
+prc_circle_tolerance(const prc_hcg_circle_information *info)
+{
+    const prc_vec3 *points[4];
+    uint32_t count = 0;
+    uint32_t i, j;
+    double size = 0.0;
+    double coordinates = 0.0;
+
+    if (info->has_center)
+        points[count++] = &info->center;
+    if (info->has_start_end_points)
+    {
+        points[count++] = &info->start_point;
+        points[count++] = &info->end_point;
+    }
+    if (info->has_middle_of_arc_point)
+        points[count++] = &info->middle_of_arc_point;
+
+    for (i = 0; i < count; i++)
+    {
+        coordinates = fmax(coordinates, fmax(fabs(points[i]->x), fmax(fabs(points[i]->y), fabs(points[i]->z))));
+        for (j = i + 1; j < count; j++)
+            size = fmax(size, prc_vec_dist_between_two_points(*points[i], *points[j]));
+    }
+    return fmax(1e-6 * size, 1e-7 * coordinates);
+}
+
 static void
 prc_compute_hcg_circle_theta(prc_hcg_circle_information *info)
 {
@@ -41,6 +75,7 @@ prc_compute_hcg_circle_theta(prc_hcg_circle_information *info)
     prc_vec3 cross_vec;
     double dot_se;
     double signed_angle;
+    double tolerance = prc_circle_tolerance(info);
 
     info->theta = 0.0;
 
@@ -94,14 +129,22 @@ prc_compute_hcg_circle_theta(prc_hcg_circle_information *info)
 
     if (info->is_arc_of_zero_pi_or_twopi)
     {
+        /* A half circle: its center is the midpoint of start and end and its
+           normal is set from the middle of the arc (prc_get_hcg_circle_data).
+           Any other arc of zero, pi or two pi has no plane to sweep in */
+        if (info->has_middle_of_arc_point &&
+            prc_vec_dist_between_two_points(info->start_point, info->end_point) > tolerance)
+        {
+            info->theta = PRC_PI;
+        }
         return;
     }
 
     prc_vec_sub(info->start_point, info->center, &start_rel);
     prc_vec_sub(info->end_point, info->center, &end_rel);
 
-    if (prc_vec_length_sqrt(start_rel) <= CURVE_PRECISION ||
-        prc_vec_length_sqrt(end_rel) <= CURVE_PRECISION)
+    if (prc_vec_length_sqrt(start_rel) <= tolerance ||
+        prc_vec_length_sqrt(end_rel) <= tolerance)
     {
         return;
     }
@@ -126,7 +169,7 @@ prc_compute_hcg_circle_theta(prc_hcg_circle_information *info)
         double mid_dot;
 
         prc_vec_sub(info->middle_of_arc_point, info->center, &mid_rel);
-        if (prc_vec_length_sqrt(mid_rel) > CURVE_PRECISION)
+        if (prc_vec_length_sqrt(mid_rel) > tolerance)
         {
             prc_vec_normalize(&mid_rel);
             prc_vec_cross(start_rel, mid_rel, &mid_cross);
@@ -251,11 +294,12 @@ prc_get_hcg_circle_data(prc_context *ctx, prc_hcg_circle *hcg_circle,
     if (!info->has_center && !info->is_full_circle && info->has_start_end_points)
     {
         prc_vec3 midpoint;
+        double tolerance = prc_circle_tolerance(info);
 
-        if (prc_vec_dist_between_two_points(info->start_point, info->end_point) <= CURVE_PRECISION)
+        if (prc_vec_dist_between_two_points(info->start_point, info->end_point) <= tolerance)
         {
             if (info->has_middle_of_arc_point &&
-                prc_vec_dist_between_two_points(info->start_point, info->middle_of_arc_point) > CURVE_PRECISION)
+                prc_vec_dist_between_two_points(info->start_point, info->middle_of_arc_point) > tolerance)
             {
                 /* Full circle: the opposite point is the arc midpoint and the center is
                    at the midpoint between the repeated start/end and that opposite point. */
@@ -273,10 +317,23 @@ prc_get_hcg_circle_data(prc_context *ctx, prc_hcg_circle *hcg_circle,
         else if (info->has_middle_of_arc_point)
         {
             /* Half-circle: the circle center lies at the midpoint of the diameter endpoints. */
+            prc_vec3 start_rel, mid_rel, plane_normal;
+
             prc_vec_avg(info->start_point, info->end_point, &midpoint);
             info->center = midpoint;
             info->has_center = 1;
             info->is_arc_of_zero_pi_or_twopi = 1;
+
+            /* The arc runs from start through its middle to end, so its
+               normal is start x middle, taken from the center */
+            prc_vec_sub(info->start_point, info->center, &start_rel);
+            prc_vec_sub(info->middle_of_arc_point, info->center, &mid_rel);
+            prc_vec_cross(start_rel, mid_rel, &plane_normal);
+            if (prc_vec_length_sqrt(plane_normal) > tolerance * prc_vec_length_sqrt(start_rel))
+            {
+                info->normal = plane_normal;
+                info->has_normal = 1;
+            }
         }
     }
 
@@ -290,7 +347,7 @@ prc_get_hcg_circle_data(prc_context *ctx, prc_hcg_circle *hcg_circle,
         prc_vec3 radius_vec;
 
         prc_vec_sub(info->middle_of_arc_point, info->center, &radius_vec);
-        if (prc_vec_length_sqrt(radius_vec) > CURVE_PRECISION)
+        if (prc_vec_length_sqrt(radius_vec) > prc_circle_tolerance(info))
         {
             prc_vec3 start = info->center;
             prc_vec3 end = info->center;

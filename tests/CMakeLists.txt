@@ -281,3 +281,7 @@ add_executable(test_helix_start_direction tests/unit/test_helix_start_direction.
 target_link_libraries(test_helix_start_direction prc_static)
 target_include_directories(test_helix_start_direction PRIVATE tests)
 add_test(NAME test_helix_start_direction COMMAND test_helix_start_direction)
+add_executable(test_circle_arc_sweep tests/unit/test_circle_arc_sweep.c)
+target_link_libraries(test_circle_arc_sweep prc_static)
+target_include_directories(test_circle_arc_sweep PRIVATE tests)
+add_test(NAME test_circle_arc_sweep COMMAND test_circle_arc_sweep)

@@ -903,14 +903,25 @@ prc_convert_ana_loops_to_std_loops(prc_context *ctx, prc_topo_face *synthetic_fa
     return 0;
 }
 
-/* Decompress the compressed NURBs control points */
-static int
+/* Stored control-net numbers (the corner-to-neighbour steps and the interior
+ * offsets) are integers in units of PRC_NURBS_NET_UNIT_FACTOR x NURBS_tolerance,
+ * where NURBS_tolerance = brep_data_compressed_tolerance / 5.  The factor is
+ * measured, not stated by the text (07-base-entities.adoc names the tolerance
+ * only): it keeps the radius/weight ratio of a rational circle constant across
+ * every row of a real file's net, and it matches the corner-assignment test on
+ * the IsoNURBS faces of prc-db. */
+#define PRC_NURBS_NET_UNIT_FACTOR 100.0
+
+/* Decompress the compressed NURBs control points.  Rational points are
+ * returned weighted (x*w, y*w, z*w, w), the form the evaluator expects. */
+int
 prc_decompress_control_points(prc_context *ctx, uint32_t num_ctrl_u,
     uint32_t num_ctrl_v, prc_compressed_control_points *comp_cp,
     uint8_t is_rational, prc_compressed_weights *comp_weights,
     double nurbs_tolerance, prc_control_points_nurbs_surf *output_p)
 {
     uint32_t i, j;
+    const double net_unit = PRC_NURBS_NET_UNIT_FACTOR * nurbs_tolerance;
 
     /* Step 1: Initialize baseline starting pointer corner cell matrix index */
     output_p[0].x = comp_cp->p00.x;
@@ -920,9 +931,9 @@ prc_decompress_control_points(prc_context *ctx, uint32_t num_ctrl_u,
     /* Step 2: Accumulate the first V row data points (i = 0, j > 0) */
     for (j = 1; j < num_ctrl_v; j++)
     {
-        output_p[j].x = output_p[j - 1].x + comp_cp->ccpt_in_v[j - 1].x;
-        output_p[j].y = output_p[j - 1].y + comp_cp->ccpt_in_v[j - 1].y;
-        output_p[j].z = output_p[j - 1].z + comp_cp->ccpt_in_v[j - 1].z;
+        output_p[j].x = output_p[j - 1].x + comp_cp->ccpt_in_v[j - 1].x * net_unit;
+        output_p[j].y = output_p[j - 1].y + comp_cp->ccpt_in_v[j - 1].y * net_unit;
+        output_p[j].z = output_p[j - 1].z + comp_cp->ccpt_in_v[j - 1].z * net_unit;
     }
 
     /* Step 3: Accumulate the first U column data points (i > 0, j = 0) */
@@ -930,9 +941,9 @@ prc_decompress_control_points(prc_context *ctx, uint32_t num_ctrl_u,
     {
         uint32_t curr_idx = i * num_ctrl_v;
         uint32_t prev_idx = (i - 1) * num_ctrl_v;
-        output_p[curr_idx].x = output_p[prev_idx].x + comp_cp->ccpt_in_u[i - 1].x;
-        output_p[curr_idx].y = output_p[prev_idx].y + comp_cp->ccpt_in_u[i - 1].y;
-        output_p[curr_idx].z = output_p[prev_idx].z + comp_cp->ccpt_in_u[i - 1].z;
+        output_p[curr_idx].x = output_p[prev_idx].x + comp_cp->ccpt_in_u[i - 1].x * net_unit;
+        output_p[curr_idx].y = output_p[prev_idx].y + comp_cp->ccpt_in_u[i - 1].y * net_unit;
+        output_p[curr_idx].z = output_p[prev_idx].z + comp_cp->ccpt_in_u[i - 1].z * net_unit;
     }
 
     /* Step 4: Core Matrix Loop - Evaluate types on localized tangent surfaces */
@@ -995,20 +1006,20 @@ prc_decompress_control_points(prc_context *ctx, uint32_t num_ctrl_u,
                 if (type == 1)
                 {
                     /* Type 1: Planar deviation matches plane, unpack only vertical Z vector */
-                    local_z = (double)cp_int->Pijz;
+                    local_z = (double)cp_int->Pijz * net_unit;
                 }
                 else if (type == 2)
                 {
                     /* Type 2: Unpack explicit localized X and Y shifts */
-                    local_x = (double)cp_int->Pijx;
-                    local_y = (double)cp_int->Pijy;
+                    local_x = (double)cp_int->Pijx * net_unit;
+                    local_y = (double)cp_int->Pijy * net_unit;
                 }
                 else if (type == 3)
                 {
                     /* Type 3: Read full 3D deviations vector explicitly */
-                    local_x = (double)cp_int->Pijx;
-                    local_y = (double)cp_int->Pijy;
-                    local_z = (double)cp_int->Pijz;
+                    local_x = (double)cp_int->Pijx * net_unit;
+                    local_y = (double)cp_int->Pijy * net_unit;
+                    local_z = (double)cp_int->Pijz * net_unit;
                 }
 
                 /* Project local coordinate coordinates back into world 3D space configuration mapping */
@@ -1037,6 +1048,18 @@ prc_decompress_control_points(prc_context *ctx, uint32_t num_ctrl_u,
         else
         {
             output_p[i].w = 1.0; /* Non-rational implicit fallback state boundary */
+        }
+    }
+
+    /* Step 6: the stored points are unweighted; the evaluator divides by
+     * sum(basis * w) and so needs weighted points. */
+    if (is_rational && comp_weights)
+    {
+        for (i = 0; i < total_points; i++)
+        {
+            output_p[i].x *= output_p[i].w;
+            output_p[i].y *= output_p[i].w;
+            output_p[i].z *= output_p[i].w;
         }
     }
     return 0;

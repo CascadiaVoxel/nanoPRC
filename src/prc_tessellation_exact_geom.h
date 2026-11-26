@@ -136,6 +136,16 @@ typedef struct prc_loop_samples_s
     uint8_t is_point_loop;
 } prc_loop_samples;
 
+/* Marks the outer loop of a planar face from how its loops nest in uv; with allow_regions
+   set, loops that no other loop contains are all marked outer (separate regions of one face)
+   instead of failing. prc_triangulate_planar_regions triangulates the result: each outer
+   loop with the loops inside it as its holes. The caller frees *verts_out and *triangles_out */
+int prc_assign_outer_loop_by_nesting(prc_context *ctx, uint32_t num_loops, prc_loop_samples *loop_samples,
+    int allow_regions);
+int prc_triangulate_planar_regions(prc_context *ctx, uint32_t num_loops, prc_loop_samples *loop_samples,
+    prc_vec2 **verts_out, uint32_t *num_verts_out,
+    uint32_t **triangles_out, uint32_t *num_triangles_out);
+
 typedef struct prc_coedge_samples_s
 {
     uint32_t num_samples;

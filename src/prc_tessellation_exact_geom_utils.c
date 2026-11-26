@@ -579,29 +579,36 @@ prc_refine_point_on_surface(prc_context *ctx, surface_func eval_func, void *surf
     return eval_func(ctx, surface_params, u, v);
 }
 
-/* Minimizes the squared distance from point to surface_eval_func(u,v) via coarse grid
-   sampling followed by Gauss-Newton refinement (prc_refine_point_on_surface).
+/* Minimizes the squared distance from point to surface_eval_func(u,v) via a coarse
+   grid of coarse_u x coarse_v samples followed by Gauss-Newton refinement
+   (prc_refine_point_on_surface). A surface that winds many times in one direction
+   (a thread, a coil) needs a grid with several samples per turn, or the nearest
+   grid sample is on the wrong turn and the refinement converges there.
    out_u/out_v are optional (pass NULL to ignore) and report the (u,v) found, for
    callers that need the surface parameter itself rather than just the projected point */
 prc_vec3
-prc_project_point_onto_surface(prc_context *ctx, surface_func eval_func, void *surface_params,
+prc_project_point_onto_surface_grid(prc_context *ctx, surface_func eval_func, void *surface_params,
     double min_u, double max_u, double min_v, double max_v, prc_vec3 point,
-    double *out_u, double *out_v)
+    uint32_t coarse_u, uint32_t coarse_v, double *out_u, double *out_v)
 {
-    const uint32_t coarse_samples = 32;
     double best_u = min_u, best_v = min_v, best_dist_sq = -1.0;
     uint32_t i, j;
     double u, v;
 
-    for (i = 0; i < coarse_samples; i++)
+    if (coarse_u < 2)
+        coarse_u = 2;
+    if (coarse_v < 2)
+        coarse_v = 2;
+
+    for (i = 0; i < coarse_u; i++)
     {
-        u = min_u + (max_u - min_u) * ((double)i / (double)(coarse_samples - 1));
-        for (j = 0; j < coarse_samples; j++)
+        u = min_u + (max_u - min_u) * ((double)i / (double)(coarse_u - 1));
+        for (j = 0; j < coarse_v; j++)
         {
             prc_vec3 p;
             double dx, dy, dz, dist_sq;
 
-            v = min_v + (max_v - min_v) * ((double)j / (double)(coarse_samples - 1));
+            v = min_v + (max_v - min_v) * ((double)j / (double)(coarse_v - 1));
             p = eval_func(ctx, surface_params, u, v);
             dx = p.x - point.x; dy = p.y - point.y; dz = p.z - point.z;
             dist_sq = dx * dx + dy * dy + dz * dz;
@@ -616,4 +623,14 @@ prc_project_point_onto_surface(prc_context *ctx, surface_func eval_func, void *s
 
     return prc_refine_point_on_surface(ctx, eval_func, surface_params,
         min_u, max_u, min_v, max_v, point, best_u, best_v, out_u, out_v);
+}
+
+/* The 32 x 32 grid used for every surface type that does not ask for more */
+prc_vec3
+prc_project_point_onto_surface(prc_context *ctx, surface_func eval_func, void *surface_params,
+    double min_u, double max_u, double min_v, double max_v, prc_vec3 point,
+    double *out_u, double *out_v)
+{
+    return prc_project_point_onto_surface_grid(ctx, eval_func, surface_params,
+        min_u, max_u, min_v, max_v, point, 32, 32, out_u, out_v);
 }

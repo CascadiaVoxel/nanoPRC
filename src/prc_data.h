@@ -2610,6 +2610,11 @@ struct prc_surf_nurbs_s
     double *knot_vector_v; /* Array of size (highest_index_of_knots_v+1) */
     uint32_t knot_type;
     uint32_t surface_form;
+    /* Not part of the NURBS table: set from the is_closed_in_u/v flags of a compressed NURBS.
+       A NURBS read uncompressed leaves them 0, and its closure is found by evaluation
+       (prc_nurbs_surface_is_closed) */
+    uint8_t closed_in_u;
+    uint8_t closed_in_v;
 };
 /* Table 297 — PRC_TYPE_SURF_Cone */
 struct prc_surf_cone_s

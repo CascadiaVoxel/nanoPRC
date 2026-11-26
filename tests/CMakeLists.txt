@@ -297,3 +297,7 @@ add_executable(test_compressed_nurbs_net_scale tests/unit/test_compressed_nurbs_
 target_link_libraries(test_compressed_nurbs_net_scale prc_static)
 target_include_directories(test_compressed_nurbs_net_scale PRIVATE tests)
 add_test(NAME test_compressed_nurbs_net_scale COMMAND test_compressed_nurbs_net_scale)
+add_executable(test_nurbs_closed_wrap tests/unit/test_nurbs_closed_wrap.c)
+target_link_libraries(test_nurbs_closed_wrap prc_static)
+target_include_directories(test_nurbs_closed_wrap PRIVATE tests)
+add_test(NAME test_nurbs_closed_wrap COMMAND test_nurbs_closed_wrap)

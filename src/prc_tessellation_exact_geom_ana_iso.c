@@ -1253,6 +1253,8 @@ prc_create_nurbs_from_compressed_nurbs(prc_context *ctx,
     nurbs->tag = PRC_TYPE_SURF_NURBS;
     nurbs->is_rational = is_rational;
     nurbs->surface_form = KEPRCBsplineSurfaceFormUnspecified;
+    nurbs->closed_in_u = is_closed_in_u;
+    nurbs->closed_in_v = is_closed_in_v;
 
     /* COMPUTE THESE FROM THE COMPRESSED NURBS DATA */
     nurbs->du = degree_in_u; /* Restricted to range 1 <= degree <= 25 */

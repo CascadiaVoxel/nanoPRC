@@ -3735,9 +3735,14 @@ prc_assign_loop_inner_outer(prc_context *ctx, prc_topo_face *topo_face, uint8_t 
 
         case PRC_TYPE_SURF_NURBS:
         {
-            /* NURBS loops are never periodic/wrapping (see prc_get_
-               surface_data), so like Plane this is always plain
-               point-in-polygon nesting. */
+            /* A NURBS surface that closes on itself (see prc_nurbs_surface_is_closed)
+               has loops that wind round it, like a cylinder's; those divide the
+               surface along the closed axis rather than nesting, and are handled
+               by prc_tessellate_surface via each loop's wind_u/wind_v. Otherwise,
+               like Plane, this is plain point-in-polygon nesting. */
+            if (any_wraps)
+                break;
+
             return prc_assign_outer_loop_by_nesting(ctx, num_loops, loop_samples);
         }
 
@@ -3861,13 +3866,48 @@ prc_normalize_periodic_loop_phase(prc_loop_samples *loop_samples, uint32_t loop_
     }
 }
 
+/* The unwrap and phase code above works in angles with a period of 2*pi. A NURBS surface
+   closed along one parameter has the period (hi - lo) in that parameter, so a loop's samples
+   are rescaled to an angle, unwrapped there (which sets the loop's wind count), and scaled
+   back. */
+static void
+prc_unwrap_closed_nurbs_loop(prc_loop_samples *loop_samples, uint32_t loop_idx,
+    uint8_t use_y_component, double lo, double hi)
+{
+    prc_loop_samples *curr_loop = &loop_samples[loop_idx];
+    double to_angle;
+    uint32_t j;
+
+    if (hi <= lo)
+        return;
+    to_angle = (2.0 * PRC_PI) / (hi - lo);
+
+    for (j = 0; j < curr_loop->num_samples; j++)
+    {
+        double *c = use_y_component ? &curr_loop->uv_samples[j].y : &curr_loop->uv_samples[j].x;
+        *c = (*c - lo) * to_angle;
+    }
+
+    if (use_y_component)
+        curr_loop->wind_v = prc_unwrap_angular_component(curr_loop->uv_samples, curr_loop->num_samples, 1);
+    else
+        curr_loop->wind_u = prc_unwrap_angular_component(curr_loop->uv_samples, curr_loop->num_samples, 0);
+    prc_normalize_periodic_loop_phase(loop_samples, loop_idx, use_y_component);
+
+    for (j = 0; j < curr_loop->num_samples; j++)
+    {
+        double *c = use_y_component ? &curr_loop->uv_samples[j].y : &curr_loop->uv_samples[j].x;
+        *c = lo + *c / to_angle;
+    }
+}
+
 /* Based upon surface type, map the 3D points to the UV surface storing
    the values in loop_samples structure. At this point, the loops are samples of
    the path in 3D space on the surface. We will move this to the uv parametric
    space. The loops at this point have the same start and end point and are
    sampled at a sufficient approximation with all the coedge samples placed in
    a single loop */
-static int
+int
 prc_map_loops_to_surface(prc_context *ctx, prc_topo_face *topo_face, uint8_t orientation,
     prc_type_surf *surface, uint32_t num_loops, prc_loop_samples *loop_samples)
 {
@@ -4744,6 +4784,8 @@ prc_map_loops_to_surface(prc_context *ctx, prc_topo_face *topo_face, uint8_t ori
         double max_v = nurbs->knot_vector_v[nurbs->highest_index_of_knots_v - nurbs->dv];
         prc_vec3 test_xyz;
         double u, v;
+        int closed_u = prc_nurbs_surface_is_closed(ctx, nurbs, 0);
+        int closed_v = prc_nurbs_surface_is_closed(ctx, nurbs, 1);
 
         nurbs_eval_params.surface_params = (void *)nurbs;
 
@@ -4788,6 +4830,13 @@ prc_map_loops_to_surface(prc_context *ctx, prc_topo_face *topo_face, uint8_t ori
                     used_fallback);
 #endif
             }
+
+            /* On a surface that closes on itself the loop may cross the seam, or go once
+               round it; unwrap it the way the analytic periodic surfaces are */
+            if (closed_u)
+                prc_unwrap_closed_nurbs_loop(loop_samples, k, 0, min_u, max_u);
+            if (closed_v)
+                prc_unwrap_closed_nurbs_loop(loop_samples, k, 1, min_v, max_v);
         }
         break;
     }

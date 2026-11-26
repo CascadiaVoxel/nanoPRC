@@ -132,8 +132,12 @@ prc_parse_misc_transform(prc_context *ctx, prc_bit_state *bit_state, prc_misc_tr
             prc_parse_3d_transform(ctx, bit_state, &data->cartesian);
             break;
         case PRC_TYPE_MISC_GeneralTransformation:
-            prc_parse_general_transform(ctx, bit_state, &data->general_transformation);
+        {
+            int code = prc_parse_general_transform(ctx, bit_state, &data->general_transformation);
+            if (code < 0)
+                return code;
             break;
+        }
         default:
             prc_error(ctx, PRC_ERROR_PARSE, "Parsing error in prc_parse_misc_transform\n");
             return PRC_ERROR_PARSE;
@@ -142,7 +146,7 @@ prc_parse_misc_transform(prc_context *ctx, prc_bit_state *bit_state, prc_misc_tr
 }
 
 /* Table 83 */
-void
+int
 prc_parse_general_transform(prc_context *ctx, prc_bit_state *bit_state,  prc_misc_general_trans *data)
 {
     /* As of now, this type is part of an abstract type and the tag has already been read */
@@ -150,6 +154,9 @@ prc_parse_general_transform(prc_context *ctx, prc_bit_state *bit_state,  prc_mis
     {
         data->general_transform[k] = prc_bitread_double(ctx, bit_state);
     }
+    /* No tag, so no schema code: a schema for this type is found by type. Its
+       extension sits right after the 16 doubles. */
+    return prc_consume_type_schema(ctx, bit_state, PRC_TYPE_MISC_GeneralTransformation);
 }
 
 /* Table 87 */
@@ -805,6 +812,17 @@ prc_consume_schema_extension(prc_context *ctx, prc_bit_state *bit_state,
         return code;
     }
     return 0;
+}
+
+/* Run the schema extension for a type that has no tag, if the file declares one. */
+int
+prc_consume_type_schema(prc_context *ctx, prc_bit_state *bit_state, prc_unsigned_int type)
+{
+    int code = prc_check_for_schema(ctx, type);
+
+    if (code <= 0)
+        return 0;
+    return prc_consume_schema_extension(ctx, bit_state, code);
 }
 
 /* Some types dont have tags but can have schemas. The data for these types is stored at the end and must be read (prior to the user data) */

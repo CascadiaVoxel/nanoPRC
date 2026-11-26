@@ -44,6 +44,9 @@ prc_parse_transformation(prc_context *ctx, prc_bit_state *bit_state, prc_misc_tr
         {
             data->general_transformation.general_transform[k] = prc_bitread_double(ctx, bit_state);
         }
+        code = prc_consume_type_schema(ctx, bit_state, PRC_TYPE_MISC_GeneralTransformation);
+        if (code < 0)
+            return code;
     }
     else if (data->transformation_type == PRC_TYPE_MISC_CartesianTransformation)
     {

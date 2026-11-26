@@ -261,7 +261,9 @@ prc_parse_ri_coordinate_system(prc_context *ctx, prc_bit_state *bit_state, prc_r
     }
     else if (data->transform.transformation_type == PRC_TYPE_MISC_GeneralTransformation)
     {
-        prc_parse_general_transform(ctx, bit_state, &data->transform.general_transformation);
+        code = prc_parse_general_transform(ctx, bit_state, &data->transform.general_transformation);
+        if (code < 0)
+            return code;
     }
     else
     {

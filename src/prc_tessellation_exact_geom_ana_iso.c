@@ -980,10 +980,23 @@ prc_decompress_control_points(prc_context *ctx, uint32_t num_ctrl_u,
             prc_interior_compressed_control_points *cp_int = &comp_cp->ccpt_interior[interior_idx++];
             uint32_t type = cp_int->type;
 
-            /* Force fallback to basic absolute vector evaluations if edge constraints collapse */
+            /* If one of U, V or N is too short to give a local frame (a collapsed
+               edge of the net, as in a Bezier patch with a degenerate side), the
+               frame cannot be built: dividing by that length gave NaN control
+               points. The stored values (none for type 0, else the three of
+               type 3) are then plain x, y, z. */
             if (len_u < 1e-12 || len_v < 1e-12 || len_n < 1e-12)
             {
-                type = 3;
+                output_p[idx_ij].x = PlaneOrigin.x;
+                output_p[idx_ij].y = PlaneOrigin.y;
+                output_p[idx_ij].z = PlaneOrigin.z;
+                if (type != 0)
+                {
+                    output_p[idx_ij].x += (double)cp_int->Pijx * net_unit;
+                    output_p[idx_ij].y += (double)cp_int->Pijy * net_unit;
+                    output_p[idx_ij].z += (double)cp_int->Pijz * net_unit;
+                }
+                continue;
             }
 
             if (type == 0)

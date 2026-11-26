@@ -680,6 +680,8 @@ prc_approximate_objects_exact_geom(prc_context *ctx, prc_api_data data_in, uint3
     uint32_t num_shells, num_faces, num_wires;
     uint32_t i, j;
 
+    *num_tessellations = 0;
+
     /* Lets figure out if we are doing a curve or a triangle tessellation */
     prc_topo *topo = &data->file_struct[file_index].geometry->exact_geometry.topo_contexts[topo_index].bodies[body_index];
 
@@ -695,12 +697,17 @@ prc_approximate_objects_exact_geom(prc_context *ctx, prc_api_data data_in, uint3
         return PRC_ERROR_INTERNAL;
     }
 
-    /* If we have faces and shells allocate accordingly. If we have a wire also 
+    /* If we have faces and shells allocate accordingly. If we have a wire also
        allocate */
     if (num_wires == 1)
     {
         num_faces = 1;
         num_shells = 1;
+    }
+
+    if (num_shells == 0)
+    {
+        return 0; /* Nothing to do */
     }
 
     /* Allocate shells and faces */

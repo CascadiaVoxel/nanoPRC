@@ -235,8 +235,11 @@ prc_get_hcg_circle_data(prc_context *ctx, prc_hcg_circle *hcg_circle,
         {
             info->has_center = 1;
             info->center = hcg_circle->particular_circle.center.point;
-            info->has_normal = 1;
             info->normal = hcg_circle->particular_circle.normal_plane.point;
+            if (prc_vec_normalize_sqrt(&info->normal) == 0)
+            {
+                info->has_normal = 1;
+            }
         }
         else
         {
@@ -277,18 +280,21 @@ prc_get_hcg_circle_data(prc_context *ctx, prc_hcg_circle *hcg_circle,
         prc_vec_sub(info->end_point, info->center, &v2);
 
         /* Normal = (Start - Center) x (End - Center) */
-        prc_vec_cross(v1, v2, &computed_normal);
-
-        /* If the long-arc bit is set (> pi), invert the coordinate system direction */
-        if (info->circle_angle_bit)
+        if (prc_vec_normalize_sqrt(&v1) == 0 && prc_vec_normalize_sqrt(&v2) == 0)
         {
-            computed_normal.x = -computed_normal.x;
-            computed_normal.y = -computed_normal.y;
-            computed_normal.z = -computed_normal.z;
+            prc_vec_cross(v1, v2, &computed_normal);
+            if (prc_vec_normalize_sqrt(&computed_normal) == 0)
+            {
+                if (info->circle_angle_bit)
+                {
+                    computed_normal.x = -computed_normal.x;
+                    computed_normal.y = -computed_normal.y;
+                    computed_normal.z = -computed_normal.z;
+                }
+                info->normal = computed_normal;
+                info->has_normal = 1;
+            }
         }
-
-        info->normal = computed_normal;
-        info->has_normal = 1;
     }
 
     if (!info->has_center && !info->is_full_circle && info->has_start_end_points)
@@ -328,11 +334,14 @@ prc_get_hcg_circle_data(prc_context *ctx, prc_hcg_circle *hcg_circle,
                normal is start x middle, taken from the center */
             prc_vec_sub(info->start_point, info->center, &start_rel);
             prc_vec_sub(info->middle_of_arc_point, info->center, &mid_rel);
-            prc_vec_cross(start_rel, mid_rel, &plane_normal);
-            if (prc_vec_length_sqrt(plane_normal) > tolerance * prc_vec_length_sqrt(start_rel))
+            if (prc_vec_normalize_sqrt(&start_rel) == 0 && prc_vec_normalize_sqrt(&mid_rel) == 0)
             {
-                info->normal = plane_normal;
-                info->has_normal = 1;
+                prc_vec_cross(start_rel, mid_rel, &plane_normal);
+                if (prc_vec_normalize_sqrt(&plane_normal) == 0)
+                {
+                    info->normal = plane_normal;
+                    info->has_normal = 1;
+                }
             }
         }
     }
@@ -463,6 +472,15 @@ prc_evaluate_circle_compressed(prc_context *ctx, void *params, double input)
     if (input == 1)
     {
         return info->end_point;
+    }
+
+    /* Degenerate or zero-angle arc: fall back to a straight chord between endpoints */
+    if (!info->has_normal || info->theta == 0.0)
+    {
+        output.x = (1.0 - input) * info->start_point.x + input * info->end_point.x;
+        output.y = (1.0 - input) * info->start_point.y + input * info->end_point.y;
+        output.z = (1.0 - input) * info->start_point.z + input * info->end_point.z;
+        return output;
     }
 
     /* Get the basis vectors for our parameterization */

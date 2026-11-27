@@ -1060,11 +1060,11 @@ prc_tessellate_planar_face_from_loops(prc_context *ctx, prc_data *data, uint32_t
     uint32_t v, t;
     int code;
 
-    code = prc_triangulate_planar_loops(ctx, num_loops, loop_samples,
+    code = prc_triangulate_planar_regions(ctx, num_loops, loop_samples,
         &poly_verts, &poly_num_verts, &poly_triangles, &poly_num_triangles);
     if (code < 0)
     {
-        prc_error(ctx, code, "Failed in prc_triangulate_planar_loops\n");
+        prc_error(ctx, code, "Failed in prc_triangulate_planar_regions\n");
         return code;
     }
 
@@ -1599,6 +1599,124 @@ prc_uv_point_in_polygon(prc_vec2 point, uint32_t num_verts, const prc_vec2 *vert
     return inside;
 }
 
+
+/* Triangulates a planar face whose loops make more than one region: each loop
+   marked outer is triangulated with the loops inside it as its holes, and the
+   pieces are joined. With a single outer loop this is prc_triangulate_planar_loops.
+   (A loop inside a hole, an island, is given to the outer loop that holds it
+   and so is treated as a hole too.) */
+int
+prc_triangulate_planar_regions(prc_context *ctx, uint32_t num_loops, prc_loop_samples *loop_samples,
+    prc_vec2 **verts_out, uint32_t *num_verts_out,
+    uint32_t **triangles_out, uint32_t *num_triangles_out)
+{
+    uint32_t num_outer = 0;
+    uint32_t o, k, r;
+    prc_vec2 **region_verts;
+    uint32_t *region_nv;
+    uint32_t **region_tris;
+    uint32_t *region_nt;
+    prc_loop_samples *subset;
+    uint32_t total_v = 0, total_t = 0, pos_v = 0, pos_t = 0;
+    int code = 0;
+
+    for (k = 0; k < num_loops; k++)
+    {
+        if (loop_samples[k].is_outer_loop)
+            num_outer++;
+    }
+    if (num_outer <= 1)
+        return prc_triangulate_planar_loops(ctx, num_loops, loop_samples,
+            verts_out, num_verts_out, triangles_out, num_triangles_out);
+
+    region_verts = (prc_vec2 **)prc_calloc(ctx, num_outer, sizeof(prc_vec2 *));
+    region_nv = (uint32_t *)prc_calloc(ctx, num_outer, sizeof(uint32_t));
+    region_tris = (uint32_t **)prc_calloc(ctx, num_outer, sizeof(uint32_t *));
+    region_nt = (uint32_t *)prc_calloc(ctx, num_outer, sizeof(uint32_t));
+    subset = (prc_loop_samples *)prc_calloc(ctx, num_loops, sizeof(prc_loop_samples));
+    if (region_verts == NULL || region_nv == NULL || region_tris == NULL || region_nt == NULL || subset == NULL)
+    {
+        prc_free(ctx, region_verts);
+        prc_free(ctx, region_nv);
+        prc_free(ctx, region_tris);
+        prc_free(ctx, region_nt);
+        prc_free(ctx, subset);
+        prc_error(ctx, PRC_ERROR_MEMORY, "Failed to allocate regions in prc_triangulate_planar_regions\n");
+        return PRC_ERROR_MEMORY;
+    }
+
+    r = 0;
+    for (o = 0; o < num_loops && code >= 0; o++)
+    {
+        uint32_t n = 1;
+
+        if (!loop_samples[o].is_outer_loop)
+            continue;
+
+        subset[0] = loop_samples[o];
+        for (k = 0; k < num_loops; k++)
+        {
+            /* A hole belongs to the outer loop whose polygon holds its first sample */
+            if (k == o || loop_samples[k].is_outer_loop || loop_samples[k].num_samples == 0)
+                continue;
+            if (loop_samples[o].num_samples > 3 &&
+                prc_uv_point_in_polygon(loop_samples[k].uv_samples[0],
+                    loop_samples[o].num_samples - 1, loop_samples[o].uv_samples))
+                subset[n++] = loop_samples[k];
+        }
+        code = prc_triangulate_planar_loops(ctx, n, subset,
+            &region_verts[r], &region_nv[r], &region_tris[r], &region_nt[r]);
+        if (code >= 0)
+        {
+            total_v += region_nv[r];
+            total_t += region_nt[r];
+        }
+        r++;
+    }
+
+    if (code >= 0)
+    {
+        *verts_out = (prc_vec2 *)prc_calloc(ctx, total_v, sizeof(prc_vec2));
+        *triangles_out = (uint32_t *)prc_calloc(ctx, total_t * 3, sizeof(uint32_t));
+        if (*verts_out == NULL || *triangles_out == NULL)
+        {
+            prc_free(ctx, *verts_out);
+            prc_free(ctx, *triangles_out);
+            *verts_out = NULL;
+            *triangles_out = NULL;
+            prc_error(ctx, PRC_ERROR_MEMORY, "Failed to allocate joined regions in prc_triangulate_planar_regions\n");
+            code = PRC_ERROR_MEMORY;
+        }
+        else
+        {
+            for (k = 0; k < r; k++)
+            {
+                uint32_t i;
+
+                memcpy(*verts_out + pos_v, region_verts[k], region_nv[k] * sizeof(prc_vec2));
+                for (i = 0; i < region_nt[k] * 3; i++)
+                    (*triangles_out)[pos_t * 3 + i] = region_tris[k][i] + pos_v;
+                pos_v += region_nv[k];
+                pos_t += region_nt[k];
+            }
+            *num_verts_out = total_v;
+            *num_triangles_out = total_t;
+            code = 0;
+        }
+    }
+
+    for (k = 0; k < num_outer; k++)
+    {
+        prc_free(ctx, region_verts[k]);
+        prc_free(ctx, region_tris[k]);
+    }
+    prc_free(ctx, region_verts);
+    prc_free(ctx, region_nv);
+    prc_free(ctx, region_tris);
+    prc_free(ctx, region_nt);
+    prc_free(ctx, subset);
+    return code;
+}
 
 /* Whether uv point q lies inside the region a face's loop(s) bound.
    Non-wrapping loops use point-in-polygon nesting (inside an outer loop,
@@ -3467,9 +3585,16 @@ prc_split_cone_apex_runs(prc_context *ctx, prc_type_surf *surface, uint32_t *num
 /* Finds the loop whose uv polygon contains a sample point from every other
    loop and marks it as the outer one (the rest are holes). Only meaningful
    when every loop is a genuine simple closed polygon in uv space (i.e. none
-   of them wind around a periodic axis -- see wind_u/wind_v) */
-static int
-prc_assign_outer_loop_by_nesting(prc_context *ctx, uint32_t num_loops, prc_loop_samples *loop_samples)
+   of them wind around a periodic axis -- see wind_u/wind_v).
+
+   When no loop contains all the others and allow_regions is set (a planar
+   face), the face is taken to be several separate regions, as when a writer
+   merges coplanar end caps into one face: every loop that no other loop
+   contains is marked outer, and prc_triangulate_planar_regions gives each
+   its own holes */
+int
+prc_assign_outer_loop_by_nesting(prc_context *ctx, uint32_t num_loops, prc_loop_samples *loop_samples,
+    int allow_regions)
 {
     uint32_t candidate, other;
     int outer_found = 0;
@@ -3497,6 +3622,32 @@ prc_assign_outer_loop_by_nesting(prc_context *ctx, uint32_t num_loops, prc_loop_
             loop_samples[candidate].is_outer_loop = 1;
             outer_found = 1;
         }
+    }
+
+    if (!outer_found && allow_regions)
+    {
+        uint32_t depth_zero = 0;
+
+        for (candidate = 0; candidate < num_loops; candidate++)
+        {
+            int contained = 0;
+
+            for (other = 0; other < num_loops && !contained; other++)
+            {
+                if (other == candidate || loop_samples[candidate].num_samples == 0)
+                    continue;
+                if (loop_samples[other].num_samples > 3 &&
+                    prc_uv_point_in_polygon(loop_samples[candidate].uv_samples[0],
+                        loop_samples[other].num_samples, loop_samples[other].uv_samples))
+                    contained = 1;
+            }
+            if (!contained)
+            {
+                loop_samples[candidate].is_outer_loop = 1;
+                depth_zero++;
+            }
+        }
+        outer_found = depth_zero > 0;
     }
 
     if (!outer_found)
@@ -3576,7 +3727,7 @@ prc_assign_loop_inner_outer(prc_context *ctx, prc_topo_face *topo_face, uint8_t 
             if (any_wraps)
                 break;
 
-            return prc_assign_outer_loop_by_nesting(ctx, num_loops, loop_samples);
+            return prc_assign_outer_loop_by_nesting(ctx, num_loops, loop_samples, 0);
         }
 
         /* For a Torus or the sphere we could have concentric wrapping rings. We must
@@ -3703,7 +3854,7 @@ prc_assign_loop_inner_outer(prc_context *ctx, prc_topo_face *topo_face, uint8_t 
                 }
                 break;
             }
-            return prc_assign_outer_loop_by_nesting(ctx, num_loops, loop_samples);
+            return prc_assign_outer_loop_by_nesting(ctx, num_loops, loop_samples, 0);
         }
 
         case PRC_TYPE_SURF_Cylindrical:
@@ -3723,9 +3874,10 @@ prc_assign_loop_inner_outer(prc_context *ctx, prc_topo_face *topo_face, uint8_t 
 
         case PRC_TYPE_SURF_Plane:
         {
-            /* In the case of a plane, there is definitely one loop that
-               is the outer boundary and all the others are holes. */
-            return prc_assign_outer_loop_by_nesting(ctx, num_loops, loop_samples);
+            /* In the case of a plane, there is one loop that is the outer
+               boundary and all the others are holes, unless the loops are
+               disjoint regions of one face (see prc_assign_outer_loop_by_nesting) */
+            return prc_assign_outer_loop_by_nesting(ctx, num_loops, loop_samples, 1);
         }
 
         case PRC_TYPE_SURF_Offset:
@@ -3743,7 +3895,7 @@ prc_assign_loop_inner_outer(prc_context *ctx, prc_topo_face *topo_face, uint8_t 
             if (any_wraps)
                 break;
 
-            return prc_assign_outer_loop_by_nesting(ctx, num_loops, loop_samples);
+            return prc_assign_outer_loop_by_nesting(ctx, num_loops, loop_samples, 0);
         }
 
         case PRC_TYPE_SURF_Blend02:

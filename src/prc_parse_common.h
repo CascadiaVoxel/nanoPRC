@@ -39,7 +39,8 @@ int prc_parse_content_base_tess_data(prc_context *ctx, prc_bit_state *bit_state,
 int prc_parse_user_data(prc_context *ctx, prc_bit_state *bit_state, prc_user_data *data);
 int prc_parse_cart_trans(prc_context *ctx, prc_bit_state *bit_state, prc_cart_transformation *data);
 void prc_parse_3d_transform(prc_context* ctx, prc_bit_state* bit_state, prc_trans_3d *data);
-void prc_parse_general_transform(prc_context *ctx, prc_bit_state *bit_state, prc_misc_general_trans *data);
+int prc_consume_type_schema(prc_context *ctx, prc_bit_state *bit_state, prc_unsigned_int type);
+int prc_parse_general_transform(prc_context *ctx, prc_bit_state *bit_state, prc_misc_general_trans *data);
 int prc_parse_misc_transform(prc_context *ctx, prc_bit_state *bit_state, prc_misc_transformation *data);
 int prc_parse_base_with_graphics(prc_context *ctx, prc_bit_state *bit_state, uint8_t parent_is_RI, void *RIparent, prc_base_with_graphics *data);
 prc_unique_id prc_get_compressed_unique_id(prc_context *ctx, prc_bit_state *bit_state);

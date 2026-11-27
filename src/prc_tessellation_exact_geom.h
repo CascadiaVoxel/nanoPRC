@@ -144,6 +144,7 @@ typedef struct prc_loop_samples_s
    loop with the loops inside it as its holes. The caller frees *verts_out and *triangles_out */
 int prc_assign_outer_loop_by_nesting(prc_context *ctx, uint32_t num_loops, prc_loop_samples *loop_samples,
     int allow_regions);
+void prc_mark_loops_by_nesting_depth(uint32_t num_loops, prc_loop_samples *loop_samples);
 int prc_triangulate_planar_regions(prc_context *ctx, uint32_t num_loops, prc_loop_samples *loop_samples,
     prc_vec2 **verts_out, uint32_t *num_verts_out,
     uint32_t **triangles_out, uint32_t *num_triangles_out);

@@ -86,6 +86,8 @@ typedef struct prc_uint32_pair_s
 #define CYLINDRICAL_MAX_SAMPLES 128
 #define EXTRUSION_SURFACE_PRECISION 1e-1
 #define EXTRUSION_MAX_SAMPLES 128
+#define RULED_SURFACE_PRECISION 1e-1
+#define RULED_MAX_SAMPLES 128
 #define REVOLUTION_SURFACE_PRECISION 1e-1
 #define REVOLUTION_MAX_SAMPLES 128
 #define PLANE_MAX_SAMPLES 4
@@ -236,6 +238,7 @@ int prc_choose_loop_curve_directions(const prc_vec3 *start, const prc_vec3 *end,
 int prc_decompress_control_points(prc_context *ctx, uint32_t num_ctrl_u, uint32_t num_ctrl_v, prc_compressed_control_points *comp_cp, uint8_t is_rational, prc_compressed_weights *comp_weights, double nurbs_tolerance, prc_control_points_nurbs_surf *output_p);
 
 /* Utility prototypes */
+prc_vec3 prc_project_point_onto_surface_grid(prc_context *ctx, surface_func eval_func, void *surface_params, double min_u, double max_u, double min_v, double max_v, prc_vec3 point, uint32_t coarse_u, uint32_t coarse_v, double *out_u, double *out_v);
 prc_vec3 prc_project_point_onto_surface(prc_context *ctx, surface_func eval_func, void *surface_params, double min_u, double max_u, double min_v, double max_v, prc_vec3 point, double *out_u, double *out_v);
 prc_vec3 prc_refine_point_on_surface(prc_context *ctx, surface_func eval_func, void *surface_params, double min_u, double max_u, double min_v, double max_v, prc_vec3 point, double u0, double v0, double *out_u, double *out_v);
 prc_vec3 prc_project_point_onto_curve(prc_context *ctx, curve_func eval_func, void *curve_params, double min_u, double max_u, prc_vec3 point);

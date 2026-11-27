@@ -4786,6 +4786,16 @@ prc_map_loops_to_surface(prc_context *ctx, prc_topo_face *topo_face, uint8_t ori
         double u, v;
         int closed_u = prc_nurbs_surface_is_closed(ctx, nurbs, 0);
         int closed_v = prc_nurbs_surface_is_closed(ctx, nurbs, 1);
+        /* A thread or coil winds many times along one direction; the grid needs
+           several samples per control point there, or the nearest sample lies
+           on the wrong turn. Never fewer than the 32 used for other surfaces. */
+        uint32_t coarse_u = 4 * (nurbs->highest_index_of_control_points_u + 1);
+        uint32_t coarse_v = 4 * (nurbs->highest_index_of_control_points_v + 1);
+
+        if (coarse_u < 32) coarse_u = 32;
+        if (coarse_v < 32) coarse_v = 32;
+        if (coarse_u > 2048) coarse_u = 2048;
+        if (coarse_v > 2048) coarse_v = 2048;
 
         nurbs_eval_params.surface_params = (void *)nurbs;
 
@@ -4799,8 +4809,8 @@ prc_map_loops_to_surface(prc_context *ctx, prc_topo_face *topo_face, uint8_t ori
 
                 if (j == 0)
                 {
-                    prc_project_point_onto_surface(ctx, prc_evaluate_surf_nurbs, &nurbs_eval_params,
-                        min_u, max_u, min_v, max_v, curr_loop->samples[j], &u, &v);
+                    prc_project_point_onto_surface_grid(ctx, prc_evaluate_surf_nurbs, &nurbs_eval_params,
+                        min_u, max_u, min_v, max_v, curr_loop->samples[j], coarse_u, coarse_v, &u, &v);
                 }
                 else
                 {
@@ -4813,8 +4823,8 @@ prc_map_loops_to_surface(prc_context *ctx, prc_topo_face *topo_face, uint8_t ori
                     if (prc_vec_dist_between_two_points(test_xyz, curr_loop->samples[j]) > 1e-6)
                     {
                         used_fallback = 1;
-                        prc_project_point_onto_surface(ctx, prc_evaluate_surf_nurbs, &nurbs_eval_params,
-                            min_u, max_u, min_v, max_v, curr_loop->samples[j], &u, &v);
+                        prc_project_point_onto_surface_grid(ctx, prc_evaluate_surf_nurbs, &nurbs_eval_params,
+                            min_u, max_u, min_v, max_v, curr_loop->samples[j], coarse_u, coarse_v, &u, &v);
                     }
                 }
 

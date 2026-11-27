@@ -385,6 +385,27 @@ prc_get_surface_data(prc_context *ctx, prc_type_surf *surface,
             sampling_info->start_v = curve_sampling_info.start;
             sampling_info->end_u = 1;
             sampling_info->end_v = curve_sampling_info.end;
+
+            {
+                uint8_t curve_periodic = 0;
+                double curve_period = 0.0;
+
+                prc_get_curve_periodicity(ctx, &ruled->first_curve, &curve_periodic, &curve_period);
+
+                /* u runs along the ruling, a straight line between the two
+                   curves; v runs along the curves. Without these the sample
+                   counts stayed zero and the grid asked for a 0 x 0 allocation. */
+                sampling_info->num_samples_u = RULED_MAX_SAMPLES;
+                sampling_info->num_samples_v = RULED_MAX_SAMPLES;
+                sampling_info->u_periodic = params.swap_uv ? curve_periodic : 0;
+                sampling_info->v_periodic = params.swap_uv ? 0 : curve_periodic;
+                sampling_info->u_linear = params.swap_uv ? 0 : 1;
+                sampling_info->v_linear = params.swap_uv ? 1 : 0;
+                sampling_info->u_period = params.swap_uv ? curve_period : 0.0;
+                sampling_info->v_period = params.swap_uv ? 0.0 : curve_period;
+                sampling_info->precision_u = RULED_SURFACE_PRECISION;
+                sampling_info->precision_v = RULED_SURFACE_PRECISION;
+            }
             break;
         }
 

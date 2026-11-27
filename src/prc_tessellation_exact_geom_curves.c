@@ -1148,6 +1148,7 @@ prc_evaluate_crv_nurbs(prc_context *ctx, void *params, double u)
         output.z = z / weight_sum;
     }
 
+#if PRC_DEBUG_TESSELLATION_TRACE
     if (output.x > 400.0 || output.y > 400.0 || output.x < -400.0 || output.y < -400.0)
     {
         fprintf(stderr,
@@ -1165,6 +1166,7 @@ prc_evaluate_crv_nurbs(prc_context *ctx, void *params, double u)
                 N[i], N[i] * (nurbs->is_rational ? cp->w : 1.0));
         }
     }
+#endif
 
     return output;
 }

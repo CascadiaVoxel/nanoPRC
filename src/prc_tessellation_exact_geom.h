@@ -60,8 +60,16 @@ typedef struct prc_uint32_pair_s
     uint32_t b;
 } prc_uint32_pair;
 
-#define PRC_DEBUG_EARCLIP 1
-#define CHECK_SURFACE_PROJECTION 1
+/* Diagnostic output of the exact geometry tessellation. All of it is off; set one to 1 to get it.
+   PRC_DEBUG_EARCLIP: the ring state when ear clipping is stuck, and the loops sampled.
+   CHECK_SURFACE_PROJECTION: after each loop is projected onto its surface, evaluates it back and
+   prints every sample (about 100,000 lines for a model with 200 NURBS faces).
+   PRC_DEBUG_TORUS_TRIM: the trimmed grid and the torus loop mapping.
+   PRC_DEBUG_TESSELLATION_TRACE: the remaining prints, to stdout and stderr. */
+#define PRC_DEBUG_EARCLIP 0
+#define CHECK_SURFACE_PROJECTION 0
+#define PRC_DEBUG_TORUS_TRIM 0
+#define PRC_DEBUG_TESSELLATION_TRACE 0
 
 #define ANA_CURVE_SAMPLE 4
 

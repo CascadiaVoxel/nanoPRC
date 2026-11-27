@@ -22,7 +22,6 @@
 #include <math.h>
 #include <string.h>
 
-#define PRC_DEBUG_TORUS_TRIM 1
 
 /* One node of the circular doubly-linked-list polygon used for ear clipping.
       uv is a plain surface parameter (u, v), not a screen coordinate */
@@ -244,7 +243,7 @@ prc_sample_coedge(prc_context *ctx, prc_nano_brep_ref_data *brep_ref_data,
                     prc_error(ctx, code, "Error in prc_sample_curve\n");
                     return code;
                 }
-#if 1
+#if PRC_DEBUG_TESSELLATION_TRACE
                 /* Print the curve samples for debug */
                 fprintf(stderr, "prc_sample_coedge: num_samples=%u\n", wire_samples.number_of_points);
                 for (uint32_t i = 0; i < wire_samples.number_of_points; i++)
@@ -376,7 +375,7 @@ prc_sample_loop(prc_context *ctx, prc_nano_brep_ref_data *brep_ref_data,
         }
     }
 
-#ifdef PRC_DEBUG_EARCLIP
+#if PRC_DEBUG_EARCLIP
     fprintf(stderr, "prc_sample_loop: num_coedges=%u\n", num_coedges);
     for (k = 0; k < num_coedges; k++)
     {
@@ -578,7 +577,7 @@ prc_tri_is_ear(const prc_tri_vertex *verts, uint32_t idx)
 /* Define PRC_DEBUG_EARCLIP to dump the ring state (each vertex's uv, whether
    it is reflex, and whichever other vertex is blocking it as an ear) when
    ear clipping cannot make progress */
-#ifdef PRC_DEBUG_EARCLIP
+#if PRC_DEBUG_EARCLIP
 static void
 prc_tri_debug_dump_ring(prc_context *ctx, const prc_tri_vertex *verts, uint32_t head, uint32_t ring_count)
 {
@@ -700,7 +699,7 @@ prc_tri_earclip(prc_context *ctx, prc_tri_vertex *verts, uint32_t head,
 
         if (best == (uint32_t)-1)
         {
-#ifdef PRC_DEBUG_EARCLIP
+#if PRC_DEBUG_EARCLIP
             prc_tri_debug_dump_ring(ctx, verts, cur, remaining);
 #endif
             /* No ear anywhere in a full pass means the ring is degenerate
@@ -2129,6 +2128,7 @@ prc_build_periodic_outer_loop(prc_context *ctx, uint32_t num_loops, prc_loop_sam
         /* Explicitly link the duplicate final end cap */
         combined[combined_count] = combined[0];
 
+#if PRC_DEBUG_TESSELLATION_TRACE
         /* === DUAL-WRAP PERIODIC SEAM CLOSURE DIAGNOSTIC === */
         fprintf(stderr, "=== CRITICAL SEAM DEBUG (num_wrap == 2) ===\n");
         fprintf(stderr, "Loop A Total Samples: %u, Loop B Total Samples: %u\n", count_a, count_b);
@@ -2139,6 +2139,7 @@ prc_build_periodic_outer_loop(prc_context *ctx, uint32_t num_loops, prc_loop_sam
         fprintf(stderr, "Loop B End (Shifted):    (%.9f, %.9f)\n", combined[combined_count - 1].x, combined[combined_count - 1].y);
         fprintf(stderr, "Final Cap Ring Point:    (%.9f, %.9f)\n", combined[combined_count].x, combined[combined_count].y);
         /* ==================================================== */
+#endif
     }
     else /* num_wrap == 1: close against the surface's natural domain edge */
     {
@@ -2719,7 +2720,7 @@ prc_tessellate_trimmed_face(prc_context *ctx, prc_data *data, uint32_t shell_ind
         }
     }
 
-#ifdef PRC_DEBUG_TORUS_TRIM
+#if PRC_DEBUG_TORUS_TRIM
     fprintf(stderr, "=== TRIMMED GRID DEBUG ===\n");
     fprintf(stderr, "Grid samples: u=%u (wrap=%u), v=%u (wrap=%u) | cells: u=%u, v=%u\n",
         grid.vertex_samples_u, grid.wrap_u, grid.vertex_samples_v, grid.wrap_v,
@@ -2886,7 +2887,7 @@ prc_tessellate_trimmed_face(prc_context *ctx, prc_data *data, uint32_t shell_ind
                 cell_count_u, cell_count_v, raw_inside_count, eroded_inside_count);
         }
 
-#ifdef PRC_DEBUG_TORUS_TRIM
+#if PRC_DEBUG_TORUS_TRIM
         {
             uint32_t raw_cnt = 0, eroded_cnt = 0;
             for (uint32_t c = 0; c < cell_count_u * cell_count_v; c++) {
@@ -3033,6 +3034,7 @@ prc_tessellate_trimmed_face(prc_context *ctx, prc_data *data, uint32_t shell_ind
         return code;
     }
 
+#if PRC_DEBUG_TESSELLATION_TRACE
     if (has_wrapping_loop)
     {
         uint32_t count_a = (loop_samples[0].num_samples > 0) ? (loop_samples[0].num_samples - 1) : 0;
@@ -3046,6 +3048,9 @@ prc_tessellate_trimmed_face(prc_context *ctx, prc_data *data, uint32_t shell_ind
         fprintf(stderr, "==================================\n");
     }
 
+#endif
+
+#if PRC_DEBUG_TESSELLATION_TRACE
     /* ====================================================================
     DIAGNOSTIC DEBUG: Print the unrolled polygon shape right before ear-clipping
     ==================================================================== */
@@ -3061,6 +3066,8 @@ prc_tessellate_trimmed_face(prc_context *ctx, prc_data *data, uint32_t shell_ind
         }
         fprintf(stderr, "========================================================\n");
     }
+
+#endif
 
     /* Assemble: [true outer ring] + [traced kept-grid outline(s), holes] +
        [any additional non-wrapping loop not already the outer boundary,
@@ -3137,10 +3144,13 @@ prc_tessellate_trimmed_face(prc_context *ctx, prc_data *data, uint32_t shell_ind
         return code;
     }
 
+#if PRC_DEBUG_TESSELLATION_TRACE
     fprintf(stderr, "=== MESH CONFIGURATION VERIFICATION ===\n");
     fprintf(stderr, "Number of kept regular grid triangles: %u\n", num_kept_triangles);
     fprintf(stderr, "Number of boundary loop vertices for ear-clipping: %u\n", fringe_poly_num_verts);
     fprintf(stderr, "========================================\n");
+
+#endif
 
     tolerance = (sampling_info->precision_u > sampling_info->precision_v) ?
         sampling_info->precision_u : sampling_info->precision_v;
@@ -4495,7 +4505,7 @@ prc_map_loops_to_surface(prc_context *ctx, prc_topo_face *topo_face, uint8_t ori
 #endif
             }
         }
-#ifdef PRC_DEBUG_TORUS_TRIM
+#if PRC_DEBUG_TORUS_TRIM
         fprintf(stderr, "=== TORUS UV MAPPING DEBUG ===\n");
         fprintf(stderr, "Torus major_radius=%.6f, minor_radius=%.6f, has_transform=%u, is_identity=%u\n",
             major_radius, minor_radius, torus->has_transform, torus->exact_geom_transform.is_identity);

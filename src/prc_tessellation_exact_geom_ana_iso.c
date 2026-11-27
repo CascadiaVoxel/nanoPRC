@@ -1006,9 +1006,21 @@ prc_decompress_control_points(prc_context *ctx, uint32_t num_ctrl_u,
                 output_p[idx_ij].y = PlaneOrigin.y;
                 output_p[idx_ij].z = PlaneOrigin.z;
             }
+            else if (type == 3)
+            {
+                /* Type 3: x, y, z in the world axes, added to the plane
+                 * prediction.  Types 1 and 2 are in the local frame below, but
+                 * the type-3 values of real files (mower_carb, teapot of
+                 * prc-db) are world-axis offsets; this is also why a
+                 * degenerate frame, which has no local axes, always uses it. */
+                output_p[idx_ij].x = PlaneOrigin.x + (double)cp_int->Pijx * net_unit;
+                output_p[idx_ij].y = PlaneOrigin.y + (double)cp_int->Pijy * net_unit;
+                output_p[idx_ij].z = PlaneOrigin.z + (double)cp_int->Pijz * net_unit;
+            }
             else
             {
-                /* Transform plane orientation system metrics to locate target */
+                /* Types 1 and 2: offsets in the local frame (x along U,
+                 * y along N x U, z along N) */
                 prc_vec3 unit_u = { U.x / len_u, U.y / len_u, U.z / len_u };
                 prc_vec3 unit_n = { N.x / len_n, N.y / len_n, N.z / len_n };
                 prc_vec3 cross_nu;
@@ -1026,13 +1038,6 @@ prc_decompress_control_points(prc_context *ctx, uint32_t num_ctrl_u,
                     /* Type 2: Unpack explicit localized X and Y shifts */
                     local_x = (double)cp_int->Pijx * net_unit;
                     local_y = (double)cp_int->Pijy * net_unit;
-                }
-                else if (type == 3)
-                {
-                    /* Type 3: Read full 3D deviations vector explicitly */
-                    local_x = (double)cp_int->Pijx * net_unit;
-                    local_y = (double)cp_int->Pijy * net_unit;
-                    local_z = (double)cp_int->Pijz * net_unit;
                 }
 
                 /* Project local coordinate coordinates back into world 3D space configuration mapping */

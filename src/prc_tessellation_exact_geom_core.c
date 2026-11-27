@@ -4187,6 +4187,68 @@ prc_unwrap_closed_nurbs_loop(prc_loop_samples *loop_samples, uint32_t loop_idx,
     }
 }
 
+/* A band of a surface that is periodic on both axes (a torus) is bounded by two loops that
+   each wind once round the same axis, one winding the opposite way to the other. The side test
+   (prc_wrapping_loop_side) takes the positive one to bound the band from below on the other
+   axis and the negative one from above, so the band is the stretch from one to the other, and
+   the two must be written as one stretch of that axis, inside the grid's domain [0, period).
+   Each loop's other-axis coordinate was reduced on its own, so one can come out below 0 and
+   the other at 0, which is not a stretch of the domain at all and keeps no grid point. This
+   moves the lower loop into [0, period) and lifts the upper one by whole periods until it is
+   not below it. Only a pair is handled; any other number of such loops is left as it is.
+   loops_wind_u says which axis the loops wind round; period is that of the other axis. */
+static void
+prc_lift_wrapping_band(prc_loop_samples *loop_samples, uint32_t num_loops, int loops_wind_u, double period)
+{
+    uint32_t k, j;
+    uint32_t lower = num_loops, upper = num_loops;
+    uint32_t count = 0;
+    double b_lower, b_upper, shift_lower, shift_upper;
+
+    if (period <= 0.0)
+        return;
+
+    for (k = 0; k < num_loops; k++)
+    {
+        int32_t along = loops_wind_u ? loop_samples[k].wind_u : loop_samples[k].wind_v;
+        int32_t across = loops_wind_u ? loop_samples[k].wind_v : loop_samples[k].wind_u;
+
+        if (along == 0 || across != 0 || loop_samples[k].num_samples == 0)
+            continue;
+        count++;
+        if (along > 0)
+            lower = k;
+        else
+            upper = k;
+    }
+    if (count != 2 || lower == num_loops || upper == num_loops)
+        return;
+
+    b_lower = loops_wind_u ? loop_samples[lower].uv_samples[0].y : loop_samples[lower].uv_samples[0].x;
+    b_upper = loops_wind_u ? loop_samples[upper].uv_samples[0].y : loop_samples[upper].uv_samples[0].x;
+
+    shift_lower = -period * floor(b_lower / period);
+    b_lower += shift_lower;
+    shift_upper = period * ceil((b_lower - b_upper - 1e-9) / period);
+    if (shift_lower == 0.0 && shift_upper == 0.0)
+        return;
+
+    for (j = 0; j < loop_samples[lower].num_samples; j++)
+    {
+        if (loops_wind_u)
+            loop_samples[lower].uv_samples[j].y += shift_lower;
+        else
+            loop_samples[lower].uv_samples[j].x += shift_lower;
+    }
+    for (j = 0; j < loop_samples[upper].num_samples; j++)
+    {
+        if (loops_wind_u)
+            loop_samples[upper].uv_samples[j].y += shift_upper;
+        else
+            loop_samples[upper].uv_samples[j].x += shift_upper;
+    }
+}
+
 /* Based upon surface type, map the 3D points to the UV surface storing
    the values in loop_samples structure. At this point, the loops are samples of
    the path in 3D space on the surface. We will move this to the uv parametric
@@ -4629,6 +4691,10 @@ prc_map_loops_to_surface(prc_context *ctx, prc_topo_face *topo_face, uint8_t ori
 #endif
             }
         }
+
+        /* Two loops that each go once round the torus bound a band of it */
+        prc_lift_wrapping_band(loop_samples, num_loops, 1, 2.0 * PRC_PI / fabs(v_coeff_a));
+        prc_lift_wrapping_band(loop_samples, num_loops, 0, 2.0 * PRC_PI / fabs(u_coeff_a));
 #ifdef PRC_DEBUG_TORUS_TRIM
         fprintf(stderr, "=== TORUS UV MAPPING DEBUG ===\n");
         fprintf(stderr, "Torus major_radius=%.6f, minor_radius=%.6f, has_transform=%u, is_identity=%u\n",

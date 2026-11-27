@@ -67,10 +67,10 @@ typedef struct prc_uint32_pair_s
 
 #define CURVE_SAMPLES 32
 #define SURFACE_SAMPLES 32
-/* Temporarily loosened for debugging (was 1e-3) to get a coarser boundary
-   loop mesh while diagnosing the periodic-loop trim work -- restore before
-   shipping */
-#define LOOP_DEGENERACY_TEST 1e-6
+/* How far apart the end of one coedge and the start of the next may be before the loop is taken to
+   be broken. At 1e-6 the loops of some real files were all taken as broken, and a face with no
+   unbroken loop is drawn as its whole surface */
+#define LOOP_DEGENERACY_TEST 1e-3
 #define CURVE_PRECISION 1e-1
 #define SURFACE_PRECISION 1e-4
 #define SURFACE_MAX_SAMPLES 1024
@@ -197,6 +197,8 @@ typedef struct prc_surface_params_s
 int prc_get_surface_data(prc_context *ctx, prc_type_surf *surface, prc_surface_sampling_info *sampling_info);
 
 /* Core prototypes */
+/* Whether the coedges of a loop meet end to start within tol (see its definition) */
+int prc_loop_coedges_chain(const prc_coedge_samples *coedge_samples, uint32_t num_coedges, double tol);
 int prc_tessellate_surface(prc_context *ctx, prc_data *data, uint32_t shell_index, uint32_t face_index, prc_topo_face *topo_face, uint8_t orientation, prc_nano_brep_ref_data *brep_ref_data, prc_topo_context *topo_context);
 
 /* Surfaces prototypes */

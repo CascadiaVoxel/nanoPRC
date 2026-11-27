@@ -289,6 +289,38 @@ prc_sample_coedge(prc_context *ctx, prc_nano_brep_ref_data *brep_ref_data,
     return 0;
 }
 
+/* Whether the coedges of a loop meet end to start, within tol: each coedge but the last starts
+   where the one before it ended, and the last ends where the first started. (The last coedge's own
+   start is not compared with the one before it. A loop of one coedge always chains.) */
+int
+prc_loop_coedges_chain(const prc_coedge_samples *coedge_samples, uint32_t num_coedges, double tol)
+{
+    prc_vec3 first_prev, last_prev;
+    uint32_t k;
+
+    if (num_coedges == 0 || coedge_samples[0].num_samples == 0)
+        return 1;
+    first_prev = coedge_samples[0].samples[0];
+    last_prev = coedge_samples[0].samples[coedge_samples[0].num_samples - 1];
+    for (k = 1; k < num_coedges; k++)
+    {
+        prc_vec3 first = coedge_samples[k].samples[0];
+        prc_vec3 last = coedge_samples[k].samples[coedge_samples[k].num_samples - 1];
+
+        if (k < num_coedges - 1)
+        {
+            if (prc_vec_dist_between_two_points(first, last_prev) > tol)
+                return 0;
+            last_prev = last;
+        }
+        else if (prc_vec_dist_between_two_points(first_prev, last) > tol)
+        {
+            return 0;
+        }
+    }
+    return 1;
+}
+
 static int
 prc_sample_loop(prc_context *ctx, prc_nano_brep_ref_data *brep_ref_data,
     prc_topo_face *topo_face, prc_ptr_topology *loop,
@@ -351,29 +383,9 @@ prc_sample_loop(prc_context *ctx, prc_nano_brep_ref_data *brep_ref_data,
     }
 
     /* Check that we don't have a degenerate loop */
-    prc_vec3 first_prev = coedge_samples[0].samples[0];
-    prc_vec3 last_prev = coedge_samples[0].samples[coedge_samples[0].num_samples - 1];
-    for (k = 1; k < num_coedges; k++)
+    if (!prc_loop_coedges_chain(coedge_samples, num_coedges, LOOP_DEGENERACY_TEST))
     {
-        prc_vec3 first = coedge_samples[k].samples[0];
-        prc_vec3 last = coedge_samples[k].samples[coedge_samples[k].num_samples - 1];
-
-        if (k < num_coedges - 1)
-        {
-            if (prc_vec_dist_between_two_points(first, last_prev) > LOOP_DEGENERACY_TEST)
-            {
-                *loop_degenerate = 1;
-            }
-            last_prev = last;
-        }
-        else
-        {
-            /* Last coedge */
-            if (prc_vec_dist_between_two_points(first_prev, last) > LOOP_DEGENERACY_TEST)
-            {
-                *loop_degenerate = 1;
-            }
-        }
+        *loop_degenerate = 1;
     }
 
 #ifdef PRC_DEBUG_EARCLIP

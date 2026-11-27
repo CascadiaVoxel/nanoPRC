@@ -92,7 +92,7 @@ static Camera _camera;
 static Product *_selectedProduct = nullptr;
 
 static void run(Config &config, SDL_Window *window, const char *file, bool headless = false, const char *output_file = NULL, bool memoryLeakCheck = false, bool exactGeomOnly = false);
-static bool debugMenu(float time, float deltaTime);
+static void debugMenu(float time, float deltaTime);
 
 struct PickResult
 {
@@ -986,7 +986,6 @@ static void run(Config &config, SDL_Window *window, const char *file, bool headl
 
     float time = SDL_GetTicks() / 1000.0f;
     float lastTime, deltaTime;
-    bool mouse_over_debug = false;
     int32_t view_index = -1;
 
     double camZCenter;
@@ -1101,11 +1100,18 @@ static void run(Config &config, SDL_Window *window, const char *file, bool headl
                 }
                 break;
             case SDL_EVENT_MOUSE_WHEEL:
-                curr_mat = _scene.models()[0].model();
-                mouse_wheel_delta = evt.wheel.y;
+                /* A wheel turn over a menu scrolls the menu, not the model */
+                if (!ImGui::GetIO().WantCaptureMouse)
+                {
+                    curr_mat = _scene.models()[0].model();
+                    mouse_wheel_delta = evt.wheel.y;
+                }
                 break;
             case SDL_EVENT_MOUSE_BUTTON_DOWN:
-                if (evt.button.button == SDL_BUTTON_LEFT)
+                /* A press on a menu, a popup or a widget belongs to the menu.
+                   ImGui has already seen this event, so its answer is current.
+                   Only a press that starts in the scene turns the model. */
+                if (evt.button.button == SDL_BUTTON_LEFT && !ImGui::GetIO().WantCaptureMouse)
                 {
                     curr_mat = _scene.models()[0].model();
                     mouseDown = true;
@@ -1118,7 +1124,7 @@ static void run(Config &config, SDL_Window *window, const char *file, bool headl
                     int dy = (int)evt.button.y - mouseY_buttondown;
                     int dragPixels = std::abs(dx) + std::abs(dy);
                     SDL_Keymod mod = SDL_GetModState();
-                    if ((mod & SDL_KMOD_CTRL) && !mouse_over_debug && dragPixels <= 3)
+                    if (mouseDown && (mod & SDL_KMOD_CTRL) && dragPixels <= 3)
                     {
                         if (Product::cpuPickStorageLimited())
                         {
@@ -1163,7 +1169,7 @@ static void run(Config &config, SDL_Window *window, const char *file, bool headl
 
         /* This is an arcball or trackball implementation for rotating the 3D part
            with the mouse. Math from Ken Shoemake 1992 */
-        if ((mouseDown && mouseMoved && !mouse_over_debug) || mouse_wheel_delta != 0)
+        if ((mouseDown && mouseMoved) || mouse_wheel_delta != 0)
         {
             Matrix4 mat;
 
@@ -1264,7 +1270,7 @@ static void run(Config &config, SDL_Window *window, const char *file, bool headl
 
         glViewport(0, 0, _scene.width(), _scene.height());
 
-        mouse_over_debug = debugMenu(time, deltaTime);
+        debugMenu(time, deltaTime);
         drawNormalDebugOverlay();
         drawTrianglePickOverlay();
 
@@ -1555,12 +1561,9 @@ static void DrawTree(Product &prod)
     ImGui::PopID();
 }
 
-static bool debugMenu(float time, float deltaTime)
+static void debugMenu(float time, float deltaTime)
 {
     /* Debug menu */
-    ImGuiIO &io = ImGui::GetIO();
-    bool mouse_used = 0;
-
     ImGui::Begin("Debug");
 
     if (ImGui::BeginTabBar("Tabs"))
@@ -1776,22 +1779,6 @@ static bool debugMenu(float time, float deltaTime)
         ImGui::EndTabBar();
     }
 
-    //bool isHovered = ImGui::IsItemHovered();
-    //bool isFocused = ImGui::IsItemFocused();
-    ImVec2 mousePositionAbsolute = ImGui::GetMousePos();
-
-    /* Get the window rectangle */
-    ImVec2 windowPositionAbsolute = ImGui::GetWindowPos();
-    ImVec2 windowSize = ImGui::GetWindowSize();
-
-    /* Check if the mouse is over the window */
-    bool isMouseOverWindow = (mousePositionAbsolute.x >= windowPositionAbsolute.x) &&
-        (mousePositionAbsolute.x <= windowPositionAbsolute.x + windowSize.x) &&
-        (mousePositionAbsolute.y >= windowPositionAbsolute.y) &&
-        (mousePositionAbsolute.y <= windowPositionAbsolute.y + windowSize.y);
-    bool mouse_down = ImGui::IsMouseDown(ImGuiMouseButton_Left);
-    mouse_used = mouse_down && isMouseOverWindow;
-
     ImGui::End();
 
     DrawSelectedProductAttributesWindow();
@@ -1812,6 +1799,4 @@ static bool debugMenu(float time, float deltaTime)
     sky->setHorizonColor(_atmosphere.skyColorHorizon);
     sky->setZenithColor(_atmosphere.skyColorZenith);
     sky->setSunTightness(_atmosphere.sunTightness);
-
-    return mouse_used;
 }

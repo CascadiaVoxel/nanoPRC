@@ -103,6 +103,31 @@ fan(prc_context *ctx, prc_surf_cone *cone, double apex_v, double sweep, int open
     return code;
 }
 
+/* A sector's arc as it comes out of the apex detour removal: closed by one straight jump from its last
+   sample back to its first, every sample at v = 0. `start` rotates where the loop begins. Fills
+   pos/uv with n + 1 samples (the first repeated at the end) */
+static void
+chord_loop(prc_loop_samples *loop, prc_vec3 *pos, prc_vec2 *uv, uint32_t start, double v_wobble)
+{
+    uint32_t i, n = SEGMENTS + 1;
+
+    for (i = 0; i < n; i++)
+    {
+        uint32_t k = (start + i) % n;
+        double u = PI * (double)k / (double)SEGMENTS;
+
+        uv[i].x = u;
+        uv[i].y = (i == 3) ? v_wobble : 0.0;
+        pos[i].x = cos(u); pos[i].y = sin(u); pos[i].z = 0.0;
+    }
+    uv[n] = uv[0];
+    pos[n] = pos[0];
+    memset(loop, 0, sizeof *loop);
+    loop->num_samples = n + 1;
+    loop->samples = pos;
+    loop->uv_samples = uv;
+}
+
 int
 main(void)
 {
@@ -111,6 +136,10 @@ main(void)
     prc_exact_geom_tess_data *tess = NULL;
     prc_exact_geom_tess *part = NULL;
     double apex_v, area = 0.0, expect;
+    prc_loop_samples loop, arc_out;
+    prc_vec3 pos[SEGMENTS + 2];
+    prc_vec2 luv[SEGMENTS + 2];
+    int allocated = 0;
     uint32_t t, i;
     int all_use_apex = 1;
 
@@ -170,6 +199,56 @@ main(void)
     prc_free(ctx, tess->triangles);
     prc_free(ctx, tess);
     free(part);
+
+    /* A sector closed by a chord: the arc comes back open, starting at u = 0 and ending at pi, whichever
+       sample the loop begins at */
+    chord_loop(&loop, pos, luv, 0, 0.0);
+    PRC_ASSERT_EQ(prc_cone_sector_arc(ctx, &loop, &arc_out, &allocated), 1);
+    PRC_ASSERT(allocated);
+    PRC_ASSERT_EQ(arc_out.num_samples, SEGMENTS + 1);
+    PRC_ASSERT(fabs(arc_out.uv_samples[0].x) < 1e-12);
+    PRC_ASSERT(fabs(arc_out.uv_samples[SEGMENTS].x - PI) < 1e-12);
+    prc_free(ctx, arc_out.samples);
+    prc_free(ctx, arc_out.uv_samples);
+
+    chord_loop(&loop, pos, luv, 5, 0.0);
+    PRC_ASSERT_EQ(prc_cone_sector_arc(ctx, &loop, &arc_out, &allocated), 1);
+    PRC_ASSERT(allocated);
+    PRC_ASSERT(fabs(arc_out.uv_samples[0].x) < 1e-12);
+    PRC_ASSERT(fabs(arc_out.uv_samples[SEGMENTS].x - PI) < 1e-12);
+    prc_free(ctx, arc_out.samples);
+    prc_free(ctx, arc_out.uv_samples);
+
+    /* A loop that wanders in v is not a sector arc */
+    chord_loop(&loop, pos, luv, 0, 0.5);
+    PRC_ASSERT_EQ(prc_cone_sector_arc(ctx, &loop, &arc_out, &allocated), 0);
+    PRC_ASSERT(!allocated);
+
+    /* A loop with its ends apart is already open: returned as it is, nothing allocated */
+    chord_loop(&loop, pos, luv, 0, 0.0);
+    loop.num_samples = SEGMENTS + 1;
+    PRC_ASSERT_EQ(prc_cone_sector_arc(ctx, &loop, &arc_out, &allocated), 1);
+    PRC_ASSERT(!allocated);
+    PRC_ASSERT(arc_out.samples == pos);
+
+    /* A loop that goes all the way round has no jump bigger than the rest */
+    {
+        uint32_t i;
+
+        for (i = 0; i <= SEGMENTS; i++)
+        {
+            double u = 2.0 * PI * (double)i / (double)SEGMENTS;
+
+            luv[i].x = u; luv[i].y = 0.0;
+            pos[i].x = cos(u); pos[i].y = sin(u); pos[i].z = 0.0;
+        }
+        memset(&loop, 0, sizeof loop);
+        loop.num_samples = SEGMENTS + 1;
+        loop.samples = pos;
+        loop.uv_samples = luv;
+        PRC_ASSERT_EQ(prc_cone_sector_arc(ctx, &loop, &arc_out, &allocated), 0);
+        PRC_ASSERT(!allocated);
+    }
 
     PRC_ASSERT_EQ(prc_api_release_context(ctx), 0);
     PRC_TEST_END;

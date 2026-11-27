@@ -206,6 +206,10 @@ int prc_tessellate_cone_apex_fan_face(prc_context *ctx, prc_data *data, uint32_t
     surface_func surface_eval_func, prc_surface_params *surf_params,
     const prc_surface_sampling_info *sampling_info,
     const prc_loop_samples *point_loop, const prc_loop_samples *wrap_loop, int open_arc);
+/* Finds the arc of a cone sector in a loop: either an open loop (returned as it is, nothing allocated) or one
+   closed by a single straight jump in u at one v, returned as an open arc starting after the jump, in
+   arc_out->samples and ->uv_samples (prc_free them when *allocated is set). Returns 0 if neither */
+int prc_cone_sector_arc(prc_context *ctx, const prc_loop_samples *loop, prc_loop_samples *arc_out, int *allocated);
 int prc_tessellate_surface(prc_context *ctx, prc_data *data, uint32_t shell_index, uint32_t face_index, prc_topo_face *topo_face, uint8_t orientation, prc_nano_brep_ref_data *brep_ref_data, prc_topo_context *topo_context);
 
 /* Surfaces prototypes */

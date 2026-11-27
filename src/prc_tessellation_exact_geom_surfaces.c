@@ -263,6 +263,78 @@ prc_evaluate_surf_nurbs(prc_context *ctx, void *params, double u, double v)
     return output;
 }
 
+/* A surface that closes on itself along one parameter (a ring, a thread's profile) has the
+   same points at the start and the end of that parameter's domain. A compressed NURBS says
+   so; for any other the two ends are compared at 9 places along the other parameter, to
+   1e-6 of the size of the control net (an uncompressed NURBS stores doubles, so a surface
+   that really closes does so to rounding) */
+int
+prc_nurbs_surface_is_closed(prc_context *ctx, prc_surf_nurbs *nurbs, int axis)
+{
+    prc_surface_params params;
+    uint32_t i, count;
+    double min_u, max_u, min_v, max_v;
+    double lo[3], hi[3], diag, tol;
+    int k;
+
+    if (axis == 0 ? nurbs->closed_in_u : nurbs->closed_in_v)
+        return 1;
+
+    memset(&params, 0, sizeof params);
+    params.surface_params = nurbs;
+    min_u = nurbs->knot_vector_u[nurbs->du];
+    max_u = nurbs->knot_vector_u[nurbs->highest_index_of_knots_u - nurbs->du];
+    min_v = nurbs->knot_vector_v[nurbs->dv];
+    max_v = nurbs->knot_vector_v[nurbs->highest_index_of_knots_v - nurbs->dv];
+
+    count = (nurbs->highest_index_of_control_points_u + 1) * (nurbs->highest_index_of_control_points_v + 1);
+    for (k = 0; k < 3; k++)
+    {
+        lo[k] = 1e300;
+        hi[k] = -1e300;
+    }
+    for (i = 0; i < count; i++)
+    {
+        double c[3];
+
+        c[0] = nurbs->p[i].x; c[1] = nurbs->p[i].y; c[2] = nurbs->p[i].z;
+        for (k = 0; k < 3; k++)
+        {
+            if (c[k] < lo[k]) lo[k] = c[k];
+            if (c[k] > hi[k]) hi[k] = c[k];
+        }
+    }
+    diag = sqrt((hi[0] - lo[0]) * (hi[0] - lo[0]) + (hi[1] - lo[1]) * (hi[1] - lo[1]) +
+        (hi[2] - lo[2]) * (hi[2] - lo[2]));
+    tol = 1e-6 * diag;
+    if (tol <= 0.0)
+        return 0;
+
+    for (i = 0; i < 9; i++)
+    {
+        double t = (double)i / 8.0;
+        prc_vec3 a, b;
+        double dx, dy, dz;
+
+        if (axis == 0)
+        {
+            double v = min_v + (max_v - min_v) * t;
+            a = prc_evaluate_surf_nurbs(ctx, &params, min_u, v);
+            b = prc_evaluate_surf_nurbs(ctx, &params, max_u, v);
+        }
+        else
+        {
+            double u = min_u + (max_u - min_u) * t;
+            a = prc_evaluate_surf_nurbs(ctx, &params, u, min_v);
+            b = prc_evaluate_surf_nurbs(ctx, &params, u, max_v);
+        }
+        dx = a.x - b.x; dy = a.y - b.y; dz = a.z - b.z;
+        if (sqrt(dx * dx + dy * dy + dz * dz) > tol)
+            return 0;
+    }
+    return 1;
+}
+
 /* This one uses a base curve */
 prc_vec3
 prc_evaluate_surf_extrusion(prc_context *ctx, void *params, double u, double v)

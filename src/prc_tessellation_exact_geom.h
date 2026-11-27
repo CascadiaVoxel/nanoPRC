@@ -86,6 +86,8 @@ typedef struct prc_uint32_pair_s
 #define CYLINDRICAL_MAX_SAMPLES 128
 #define EXTRUSION_SURFACE_PRECISION 1e-1
 #define EXTRUSION_MAX_SAMPLES 128
+#define RULED_SURFACE_PRECISION 1e-1
+#define RULED_MAX_SAMPLES 128
 #define REVOLUTION_SURFACE_PRECISION 1e-1
 #define REVOLUTION_MAX_SAMPLES 128
 #define PLANE_MAX_SAMPLES 4
@@ -202,6 +204,12 @@ prc_vec3 prc_evaluate_surf_torus(prc_context *ctx, void *params, double u, doubl
 prc_vec3 prc_evaluate_surf_revolution(prc_context *ctx, void *params, double u, double v);
 prc_vec3 prc_evaluate_surf_extrusion(prc_context *ctx, void *params, double u, double v);
 prc_vec3 prc_evaluate_surf_nurbs(prc_context *ctx, void *params, double u, double v);
+/* axis 0 = u, 1 = v: whether the surface closes on itself along that parameter, from the flag
+   of a compressed NURBS or else from evaluating both ends of its domain */
+int prc_nurbs_surface_is_closed(prc_context *ctx, prc_surf_nurbs *nurbs, int axis);
+/* Maps the 3D samples of the loops of a face to the uv space of its surface, setting each loop's uv_samples
+   and wind_u/wind_v. topo_face and orientation are not read. uv_samples are allocated here */
+int prc_map_loops_to_surface(prc_context *ctx, prc_topo_face *topo_face, uint8_t orientation, prc_type_surf *surface, uint32_t num_loops, prc_loop_samples *loop_samples);
 prc_vec3 prc_evaluate_surf_plane(prc_context *ctx, void *params, double u, double v);
 prc_vec3 prc_evaluate_surf_cylinder(prc_context *ctx, void *params, double u, double v);
 prc_vec3 prc_evaluate_surf_sphere(prc_context *ctx, void *params, double u, double v);
@@ -240,6 +248,7 @@ int prc_choose_loop_curve_directions(const prc_vec3 *start, const prc_vec3 *end,
 int prc_decompress_control_points(prc_context *ctx, uint32_t num_ctrl_u, uint32_t num_ctrl_v, prc_compressed_control_points *comp_cp, uint8_t is_rational, prc_compressed_weights *comp_weights, double nurbs_tolerance, prc_control_points_nurbs_surf *output_p);
 
 /* Utility prototypes */
+prc_vec3 prc_project_point_onto_surface_grid(prc_context *ctx, surface_func eval_func, void *surface_params, double min_u, double max_u, double min_v, double max_v, prc_vec3 point, uint32_t coarse_u, uint32_t coarse_v, double *out_u, double *out_v);
 prc_vec3 prc_project_point_onto_surface(prc_context *ctx, surface_func eval_func, void *surface_params, double min_u, double max_u, double min_v, double max_v, prc_vec3 point, double *out_u, double *out_v);
 prc_vec3 prc_refine_point_on_surface(prc_context *ctx, surface_func eval_func, void *surface_params, double min_u, double max_u, double min_v, double max_v, prc_vec3 point, double u0, double v0, double *out_u, double *out_v);
 prc_vec3 prc_project_point_onto_curve(prc_context *ctx, curve_func eval_func, void *curve_params, double min_u, double max_u, prc_vec3 point);

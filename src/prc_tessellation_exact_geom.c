@@ -234,6 +234,17 @@ prc_get_surface_data(prc_context *ctx, prc_type_surf *surface,
             sampling_info->v_linear = (nurbs->dv <= 1) ? 1 : 0;
             sampling_info->u_period = 0;
             sampling_info->v_period = 0;
+            /* A surface that closes on itself wraps: its period is the whole domain */
+            if (prc_nurbs_surface_is_closed(ctx, nurbs, 0))
+            {
+                sampling_info->u_periodic = 1;
+                sampling_info->u_period = domain.max_uv.x - domain.min_uv.x;
+            }
+            if (prc_nurbs_surface_is_closed(ctx, nurbs, 1))
+            {
+                sampling_info->v_periodic = 1;
+                sampling_info->v_period = domain.max_uv.y - domain.min_uv.y;
+            }
             sampling_info->precision_u = NURBS_SURFACE_PRECISION;
             sampling_info->precision_v = NURBS_SURFACE_PRECISION;
             sampling_info->max_samples_u = NURBS_MAX_SAMPLES;

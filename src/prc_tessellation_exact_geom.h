@@ -194,6 +194,12 @@ prc_vec3 prc_evaluate_surf_torus(prc_context *ctx, void *params, double u, doubl
 prc_vec3 prc_evaluate_surf_revolution(prc_context *ctx, void *params, double u, double v);
 prc_vec3 prc_evaluate_surf_extrusion(prc_context *ctx, void *params, double u, double v);
 prc_vec3 prc_evaluate_surf_nurbs(prc_context *ctx, void *params, double u, double v);
+/* axis 0 = u, 1 = v: whether the surface closes on itself along that parameter, from the flag
+   of a compressed NURBS or else from evaluating both ends of its domain */
+int prc_nurbs_surface_is_closed(prc_context *ctx, prc_surf_nurbs *nurbs, int axis);
+/* Maps the 3D samples of the loops of a face to the uv space of its surface, setting each loop's uv_samples
+   and wind_u/wind_v. topo_face and orientation are not read. uv_samples are allocated here */
+int prc_map_loops_to_surface(prc_context *ctx, prc_topo_face *topo_face, uint8_t orientation, prc_type_surf *surface, uint32_t num_loops, prc_loop_samples *loop_samples);
 prc_vec3 prc_evaluate_surf_plane(prc_context *ctx, void *params, double u, double v);
 prc_vec3 prc_evaluate_surf_cylinder(prc_context *ctx, void *params, double u, double v);
 prc_vec3 prc_evaluate_surf_sphere(prc_context *ctx, void *params, double u, double v);

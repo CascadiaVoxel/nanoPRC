@@ -2243,14 +2243,18 @@ prc_build_periodic_outer_loop(prc_context *ctx, uint32_t num_loops, prc_loop_sam
    across all of them would be wrong. Winding/normal convention mirrors
    prc_tessellate_planar_face_from_loops (orientation 1 keeps the loop's own
    sample order, 0 swaps the last two indices) */
-static int
+int
 prc_tessellate_cone_apex_fan_face(prc_context *ctx, prc_data *data, uint32_t shell_index,
     uint32_t face_index, uint32_t geom_count, uint8_t orientation,
     surface_func surface_eval_func, prc_surface_params *surf_params,
     const prc_surface_sampling_info *sampling_info,
-    const prc_loop_samples *point_loop, const prc_loop_samples *wrap_loop)
+    const prc_loop_samples *point_loop, const prc_loop_samples *wrap_loop, int open_arc)
 {
-    uint32_t count = (wrap_loop->num_samples > 0) ? (wrap_loop->num_samples - 1) : 0;
+    /* A loop that goes round the cone repeats its first sample at the end and the fan closes on
+       itself. An open arc (a sector of the cone, whose two edges to the apex were taken out as
+       the point loop) keeps every sample and the fan stops at the last one */
+    uint32_t count = (wrap_loop->num_samples > 0) ? (wrap_loop->num_samples - (open_arc ? 0 : 1)) : 0;
+    uint32_t num_fan_triangles = open_arc ? (count > 0 ? count - 1 : 0) : count;
     prc_exact_geom_tess_data *tess_data;
     prc_vec3 apex_position;
     uint32_t i;
@@ -2273,8 +2277,8 @@ prc_tessellate_cone_apex_fan_face(prc_context *ctx, prc_data *data, uint32_t she
 
     tess_data->number_of_vertices = count * 2;   /* shared boundary ring + one apex copy per triangle */
     tess_data->vertices = (prc_exact_geom_vertex *)prc_calloc(ctx, tess_data->number_of_vertices, sizeof(prc_exact_geom_vertex));
-    tess_data->number_of_triangles = count;
-    tess_data->triangles = (uint32_t *)prc_calloc(ctx, count * 3, sizeof(uint32_t));
+    tess_data->number_of_triangles = num_fan_triangles;
+    tess_data->triangles = (uint32_t *)prc_calloc(ctx, num_fan_triangles * 3, sizeof(uint32_t));
     if (tess_data->vertices == NULL || tess_data->triangles == NULL)
     {
         prc_error(ctx, PRC_ERROR_MEMORY, "Allocation failure in prc_tessellate_cone_apex_fan_face\n");
@@ -2313,6 +2317,9 @@ prc_tessellate_cone_apex_fan_face(prc_context *ctx, prc_data *data, uint32_t she
         tess_data->vertices[apex_idx].normal[0] = (float)normal.x;
         tess_data->vertices[apex_idx].normal[1] = (float)normal.y;
         tess_data->vertices[apex_idx].normal[2] = (float)normal.z;
+
+        if (i >= num_fan_triangles)
+            continue;   /* the last sample of an open arc starts no triangle */
 
         if (orientation == 0)
         {
@@ -3726,6 +3733,16 @@ prc_assign_loop_inner_outer(prc_context *ctx, prc_topo_face *topo_face, uint8_t 
         {
             if (any_wraps)
                 break;
+
+            /* A cone trimmed to a sector has the apex as a point loop, which lies in no polygon,
+               and an open arc, which encloses nothing: the arc is the outer loop and the
+               tessellation (prc_tessellate_cone_apex_fan_face) fans it from the apex */
+            if (surface_type == PRC_TYPE_SURF_Cone && num_loops == 2 &&
+                loop_samples[0].is_point_loop != loop_samples[1].is_point_loop)
+            {
+                loop_samples[loop_samples[0].is_point_loop ? 1 : 0].is_outer_loop = 1;
+                break;
+            }
 
             return prc_assign_outer_loop_by_nesting(ctx, num_loops, loop_samples, 0);
         }
@@ -5920,7 +5937,7 @@ prc_tessellate_surface(prc_context *ctx, prc_data *data, uint32_t shell_index,
        through to the general grid+clip path below like before */
     if (surface.surface_type == PRC_TYPE_SURF_Cone && num_loops == 2 && loop_samples != NULL)
     {
-        uint32_t point_idx = (uint32_t)-1, wrap_idx = (uint32_t)-1;
+        uint32_t point_idx = (uint32_t)-1, wrap_idx = (uint32_t)-1, arc_idx = (uint32_t)-1;
 
         for (k = 0; k < num_loops; k++)
         {
@@ -5928,13 +5945,24 @@ prc_tessellate_surface(prc_context *ctx, prc_data *data, uint32_t shell_index,
                 point_idx = k;
             else if (loop_samples[k].wind_u != 0)
                 wrap_idx = k;
+            else
+                arc_idx = k;
         }
+
+        /* The other loop goes round the cone, or is an open arc of it: a sector, with its two
+           edges to the apex taken out as the point loop (prc_split_cone_apex_runs) */
+        if (wrap_idx == (uint32_t)-1 && arc_idx != (uint32_t)-1 && loop_samples[arc_idx].num_samples >= 2 &&
+            prc_vec_dist_between_two_points(loop_samples[arc_idx].samples[0],
+                loop_samples[arc_idx].samples[loop_samples[arc_idx].num_samples - 1]) > VERTEX_COINCIDENCE_TOLERANCE)
+            wrap_idx = arc_idx;
+        else
+            arc_idx = (uint32_t)-1;
 
         if (point_idx != (uint32_t)-1 && wrap_idx != (uint32_t)-1)
         {
             code = prc_tessellate_cone_apex_fan_face(ctx, data, shell_index, face_index,
                 geom_count, orientation, surface_eval_func, &surf_params, &sampling_info,
-                &loop_samples[point_idx], &loop_samples[wrap_idx]);
+                &loop_samples[point_idx], &loop_samples[wrap_idx], arc_idx != (uint32_t)-1);
             for (j = 0; j < num_loops; j++)
             {
                 if (loop_samples[j].samples != NULL)

@@ -197,6 +197,15 @@ typedef struct prc_surface_params_s
 int prc_get_surface_data(prc_context *ctx, prc_type_surf *surface, prc_surface_sampling_info *sampling_info);
 
 /* Core prototypes */
+/* Tessellates a cone trimmed to its apex (point_loop) and one loop: a fan of triangles from the apex to
+   the loop's samples. A loop that goes round the cone repeats its first sample at its end and the
+   fan closes; with open_arc set the loop is an arc (a sector of the cone) and the fan stops at its
+   last sample. The face goes in data->exact_geom_tess_part[geom_count].shells[shell_index].faces[face_index] */
+int prc_tessellate_cone_apex_fan_face(prc_context *ctx, prc_data *data, uint32_t shell_index,
+    uint32_t face_index, uint32_t geom_count, uint8_t orientation,
+    surface_func surface_eval_func, prc_surface_params *surf_params,
+    const prc_surface_sampling_info *sampling_info,
+    const prc_loop_samples *point_loop, const prc_loop_samples *wrap_loop, int open_arc);
 int prc_tessellate_surface(prc_context *ctx, prc_data *data, uint32_t shell_index, uint32_t face_index, prc_topo_face *topo_face, uint8_t orientation, prc_nano_brep_ref_data *brep_ref_data, prc_topo_context *topo_context);
 
 /* Surfaces prototypes */

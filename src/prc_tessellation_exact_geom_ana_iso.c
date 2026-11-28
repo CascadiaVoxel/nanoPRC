@@ -825,7 +825,7 @@ prc_convert_compressed_loop_to_std_loop(prc_context *ctx, prc_ana_face_trim_loop
        (non-ana) B-rep loops that carry the same bit */
     synthetic_loop->topo->topo_loop->loop_orientation = ana_loop->loop_surface_orientation;
 
-#if 1
+#if PRC_DEBUG_TESSELLATION_TRACE
     printf("=== ANA LOOP DEBUG (curve_count=%u, loop_orient=%u) ===\n",
         curve_count, ana_loop->loop_surface_orientation);
     for (j = 0; j < curve_count; j++)

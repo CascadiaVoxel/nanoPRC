@@ -2371,14 +2371,89 @@ prc_build_periodic_outer_loop(prc_context *ctx, uint32_t num_loops, prc_loop_sam
    across all of them would be wrong. Winding/normal convention mirrors
    prc_tessellate_planar_face_from_loops (orientation 1 keeps the loop's own
    sample order, 0 swaps the last two indices) */
-static int
+/* The loop of a cone cut down to a sector (the apex as a point loop, and the arc of the base circle
+   between the two edges that ran to it). When the apex detour was taken out, the arc was left
+   closed by a straight jump from its last sample to its first, so the loop reads as a closed polygon
+   of zero area in uv (every sample is at one v). This finds the arc: the loop's samples in order
+   from the one after that jump, as an open arc in *arc_out (whose arrays are the caller's to free).
+   Returns 1 if the loop is such an arc, whether open already (its ends are apart, and it is
+   returned as it is, with no arrays allocated) or closed by one jump, and 0 if not. */
+int
+prc_cone_sector_arc(prc_context *ctx, const prc_loop_samples *loop, prc_loop_samples *arc_out, int *allocated)
+{
+    uint32_t n = loop->num_samples;
+    uint32_t count, i, jump = 0, k;
+    double biggest = 0.0, second = 0.0;
+
+    *allocated = 0;
+    if (n < 4 || loop->wind_u != 0 || loop->wind_v != 0 || loop->is_point_loop)
+        return 0;
+
+    if (prc_vec_dist_between_two_points(loop->samples[0], loop->samples[n - 1]) > VERTEX_COINCIDENCE_TOLERANCE)
+    {
+        *arc_out = *loop;
+        return 1;
+    }
+
+    /* Closed: it must lie at one v, and have one jump in u much larger than every other step */
+    count = n - 1;
+    for (i = 1; i < count; i++)
+    {
+        if (fabs(loop->uv_samples[i].y - loop->uv_samples[0].y) > 1e-6)
+            return 0;
+    }
+    for (i = 0; i < count; i++)
+    {
+        /* The loop's own segments, the last one running on to the repeated first sample */
+        double step = fabs(loop->uv_samples[i + 1].x - loop->uv_samples[i].x);
+
+        if (step > biggest)
+        {
+            second = biggest;
+            biggest = step;
+            jump = i;
+        }
+        else if (step > second)
+        {
+            second = step;
+        }
+    }
+    if (biggest <= 4.0 * second)
+        return 0;
+
+    memset(arc_out, 0, sizeof *arc_out);
+    arc_out->num_samples = count;
+    arc_out->samples = (prc_vec3 *)prc_calloc(ctx, count, sizeof(prc_vec3));
+    arc_out->uv_samples = (prc_vec2 *)prc_calloc(ctx, count, sizeof(prc_vec2));
+    if (arc_out->samples == NULL || arc_out->uv_samples == NULL)
+    {
+        prc_free(ctx, arc_out->samples);
+        prc_free(ctx, arc_out->uv_samples);
+        return 0;
+    }
+    for (k = 0; k < count; k++)
+    {
+        uint32_t from = (jump + 1 + k) % count;
+
+        arc_out->samples[k] = loop->samples[from];
+        arc_out->uv_samples[k] = loop->uv_samples[from];
+    }
+    *allocated = 1;
+    return 1;
+}
+
+int
 prc_tessellate_cone_apex_fan_face(prc_context *ctx, prc_data *data, uint32_t shell_index,
     uint32_t face_index, uint32_t geom_count, uint8_t orientation,
     surface_func surface_eval_func, prc_surface_params *surf_params,
     const prc_surface_sampling_info *sampling_info,
-    const prc_loop_samples *point_loop, const prc_loop_samples *wrap_loop)
+    const prc_loop_samples *point_loop, const prc_loop_samples *wrap_loop, int open_arc)
 {
-    uint32_t count = (wrap_loop->num_samples > 0) ? (wrap_loop->num_samples - 1) : 0;
+    /* A loop that goes round the cone repeats its first sample at the end and the fan closes on
+       itself. An open arc (a sector of the cone, whose two edges to the apex were taken out as
+       the point loop) keeps every sample and the fan stops at the last one */
+    uint32_t count = (wrap_loop->num_samples > 0) ? (wrap_loop->num_samples - (open_arc ? 0 : 1)) : 0;
+    uint32_t num_fan_triangles = open_arc ? (count > 0 ? count - 1 : 0) : count;
     prc_exact_geom_tess_data *tess_data;
     prc_vec3 apex_position;
     uint32_t i;
@@ -2401,8 +2476,8 @@ prc_tessellate_cone_apex_fan_face(prc_context *ctx, prc_data *data, uint32_t she
 
     tess_data->number_of_vertices = count * 2;   /* shared boundary ring + one apex copy per triangle */
     tess_data->vertices = (prc_exact_geom_vertex *)prc_calloc(ctx, tess_data->number_of_vertices, sizeof(prc_exact_geom_vertex));
-    tess_data->number_of_triangles = count;
-    tess_data->triangles = (uint32_t *)prc_calloc(ctx, count * 3, sizeof(uint32_t));
+    tess_data->number_of_triangles = num_fan_triangles;
+    tess_data->triangles = (uint32_t *)prc_calloc(ctx, num_fan_triangles * 3, sizeof(uint32_t));
     if (tess_data->vertices == NULL || tess_data->triangles == NULL)
     {
         prc_error(ctx, PRC_ERROR_MEMORY, "Allocation failure in prc_tessellate_cone_apex_fan_face\n");
@@ -2441,6 +2516,9 @@ prc_tessellate_cone_apex_fan_face(prc_context *ctx, prc_data *data, uint32_t she
         tess_data->vertices[apex_idx].normal[0] = (float)normal.x;
         tess_data->vertices[apex_idx].normal[1] = (float)normal.y;
         tess_data->vertices[apex_idx].normal[2] = (float)normal.z;
+
+        if (i >= num_fan_triangles)
+            continue;   /* the last sample of an open arc starts no triangle */
 
         if (orientation == 0)
         {
@@ -3860,6 +3938,16 @@ prc_assign_loop_inner_outer(prc_context *ctx, prc_topo_face *topo_face, uint8_t 
         {
             if (any_wraps)
                 break;
+
+            /* A cone trimmed to a sector has the apex as a point loop, which lies in no polygon,
+               and an open arc, which encloses nothing: the arc is the outer loop and the
+               tessellation (prc_tessellate_cone_apex_fan_face) fans it from the apex */
+            if (surface_type == PRC_TYPE_SURF_Cone && num_loops == 2 &&
+                loop_samples[0].is_point_loop != loop_samples[1].is_point_loop)
+            {
+                loop_samples[loop_samples[0].is_point_loop ? 1 : 0].is_outer_loop = 1;
+                break;
+            }
 
             return prc_assign_outer_loop_by_nesting(ctx, num_loops, loop_samples, 0);
         }
@@ -6120,7 +6208,7 @@ prc_tessellate_surface(prc_context *ctx, prc_data *data, uint32_t shell_index,
        through to the general grid+clip path below like before */
     if (surface.surface_type == PRC_TYPE_SURF_Cone && num_loops == 2 && loop_samples != NULL)
     {
-        uint32_t point_idx = (uint32_t)-1, wrap_idx = (uint32_t)-1;
+        uint32_t point_idx = (uint32_t)-1, wrap_idx = (uint32_t)-1, arc_idx = (uint32_t)-1;
 
         for (k = 0; k < num_loops; k++)
         {
@@ -6128,13 +6216,32 @@ prc_tessellate_surface(prc_context *ctx, prc_data *data, uint32_t shell_index,
                 point_idx = k;
             else if (loop_samples[k].wind_u != 0)
                 wrap_idx = k;
+            else
+                arc_idx = k;
         }
+
+        /* The other loop goes round the cone, or is an arc of it: a sector, with its two
+           edges to the apex taken out as the point loop (prc_split_cone_apex_runs) */
+        prc_loop_samples sector_arc = { 0 };
+        int sector_arc_allocated = 0;
+
+        if (wrap_idx == (uint32_t)-1 && arc_idx != (uint32_t)-1 &&
+            prc_cone_sector_arc(ctx, &loop_samples[arc_idx], &sector_arc, &sector_arc_allocated))
+            wrap_idx = arc_idx;
+        else
+            arc_idx = (uint32_t)-1;
 
         if (point_idx != (uint32_t)-1 && wrap_idx != (uint32_t)-1)
         {
             code = prc_tessellate_cone_apex_fan_face(ctx, data, shell_index, face_index,
                 geom_count, orientation, surface_eval_func, &surf_params, &sampling_info,
-                &loop_samples[point_idx], &loop_samples[wrap_idx]);
+                &loop_samples[point_idx], arc_idx != (uint32_t)-1 ? &sector_arc : &loop_samples[wrap_idx],
+                arc_idx != (uint32_t)-1);
+            if (sector_arc_allocated)
+            {
+                prc_free(ctx, sector_arc.samples);
+                prc_free(ctx, sector_arc.uv_samples);
+            }
             for (j = 0; j < num_loops; j++)
             {
                 if (loop_samples[j].samples != NULL)

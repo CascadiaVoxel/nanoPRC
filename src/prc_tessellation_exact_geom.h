@@ -75,10 +75,10 @@ typedef struct prc_uint32_pair_s
 
 #define CURVE_SAMPLES 32
 #define SURFACE_SAMPLES 32
-/* Temporarily loosened for debugging (was 1e-3) to get a coarser boundary
-   loop mesh while diagnosing the periodic-loop trim work -- restore before
-   shipping */
-#define LOOP_DEGENERACY_TEST 1e-6
+/* How far apart the end of one coedge and the start of the next may be before the loop is taken to
+   be broken. At 1e-6 the loops of some real files were all taken as broken, and a face with no
+   unbroken loop is drawn as its whole surface */
+#define LOOP_DEGENERACY_TEST 1e-3
 #define CURVE_PRECISION 1e-1
 #define SURFACE_PRECISION 1e-4
 #define SURFACE_MAX_SAMPLES 1024
@@ -206,6 +206,8 @@ typedef struct prc_surface_params_s
 int prc_get_surface_data(prc_context *ctx, prc_type_surf *surface, prc_surface_sampling_info *sampling_info);
 
 /* Core prototypes */
+/* Whether the coedges of a loop meet end to start within tol (see its definition) */
+int prc_loop_coedges_chain(const prc_coedge_samples *coedge_samples, uint32_t num_coedges, double tol);
 /* Tessellates a cone trimmed to its apex (point_loop) and one loop: a fan of triangles from the apex to
    the loop's samples. A loop that goes round the cone repeats its first sample at its end and the
    fan closes; with open_arc set the loop is an arc (a sector of the cone) and the fan stops at its

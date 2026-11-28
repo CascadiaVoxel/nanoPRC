@@ -152,6 +152,7 @@ typedef struct prc_loop_samples_s
    loop with the loops inside it as its holes. The caller frees *verts_out and *triangles_out */
 int prc_assign_outer_loop_by_nesting(prc_context *ctx, uint32_t num_loops, prc_loop_samples *loop_samples,
     int allow_regions);
+void prc_mark_loops_by_nesting_depth(uint32_t num_loops, prc_loop_samples *loop_samples);
 int prc_triangulate_planar_regions(prc_context *ctx, uint32_t num_loops, prc_loop_samples *loop_samples,
     prc_vec2 **verts_out, uint32_t *num_verts_out,
     uint32_t **triangles_out, uint32_t *num_triangles_out);
@@ -205,6 +206,19 @@ typedef struct prc_surface_params_s
 int prc_get_surface_data(prc_context *ctx, prc_type_surf *surface, prc_surface_sampling_info *sampling_info);
 
 /* Core prototypes */
+/* Tessellates a cone trimmed to its apex (point_loop) and one loop: a fan of triangles from the apex to
+   the loop's samples. A loop that goes round the cone repeats its first sample at its end and the
+   fan closes; with open_arc set the loop is an arc (a sector of the cone) and the fan stops at its
+   last sample. The face goes in data->exact_geom_tess_part[geom_count].shells[shell_index].faces[face_index] */
+int prc_tessellate_cone_apex_fan_face(prc_context *ctx, prc_data *data, uint32_t shell_index,
+    uint32_t face_index, uint32_t geom_count, uint8_t orientation,
+    surface_func surface_eval_func, prc_surface_params *surf_params,
+    const prc_surface_sampling_info *sampling_info,
+    const prc_loop_samples *point_loop, const prc_loop_samples *wrap_loop, int open_arc);
+/* Finds the arc of a cone sector in a loop: either an open loop (returned as it is, nothing allocated) or one
+   closed by a single straight jump in u at one v, returned as an open arc starting after the jump, in
+   arc_out->samples and ->uv_samples (prc_free them when *allocated is set). Returns 0 if neither */
+int prc_cone_sector_arc(prc_context *ctx, const prc_loop_samples *loop, prc_loop_samples *arc_out, int *allocated);
 int prc_tessellate_surface(prc_context *ctx, prc_data *data, uint32_t shell_index, uint32_t face_index, prc_topo_face *topo_face, uint8_t orientation, prc_nano_brep_ref_data *brep_ref_data, prc_topo_context *topo_context);
 
 /* Surfaces prototypes */

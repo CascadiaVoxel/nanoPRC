@@ -633,6 +633,34 @@ prc_tri_debug_dump_ring(prc_context *ctx, const prc_tri_vertex *verts, uint32_t 
 }
 #endif /* PRC_DEBUG_EARCLIP */
 
+/* The signed area (times 2, counter-clockwise positive) of the ring of `count` vertices
+   from head, and the square of its larger extent */
+static void
+prc_tri_ring_stats(const prc_tri_vertex *verts, uint32_t head, uint32_t count, double *area2_out, double *ext2_out)
+{
+    uint32_t cur = head;
+    uint32_t i;
+    double area2 = 0.0;
+    double x0 = verts[head].uv.x, x1 = x0, y0 = verts[head].uv.y, y1 = y0;
+    double ext;
+
+    for (i = 0; i < count; i++)
+    {
+        prc_vec2 a = verts[cur].uv;
+        prc_vec2 b = verts[verts[cur].next].uv;
+
+        area2 += a.x * b.y - b.x * a.y;
+        if (a.x < x0) x0 = a.x;
+        if (a.x > x1) x1 = a.x;
+        if (a.y < y0) y0 = a.y;
+        if (a.y > y1) y1 = a.y;
+        cur = verts[cur].next;
+    }
+    ext = (x1 - x0) > (y1 - y0) ? (x1 - x0) : (y1 - y0);
+    *area2_out = area2;
+    *ext2_out = ext * ext;
+}
+
 /* Standard ear-clipping triangulation of the ring starting at head, which
    must be CCW (prc_tri_eliminate_hole guarantees this even with holes
    bridged in). Allocates and returns the triangle index array */
@@ -644,6 +672,7 @@ prc_tri_earclip(prc_context *ctx, prc_tri_vertex *verts, uint32_t head,
     uint32_t *triangles;
     uint32_t tri_index = 0;
     uint32_t cur = head;
+    int clipped_to_nothing = 0;
 
     if (ring_count < 3)
     {
@@ -703,7 +732,50 @@ prc_tri_earclip(prc_context *ctx, prc_tri_vertex *verts, uint32_t head,
 #ifdef PRC_DEBUG_EARCLIP
             prc_tri_debug_dump_ring(ctx, verts, cur, remaining);
 #endif
-            /* No ear anywhere in a full pass means the ring is degenerate
+            /* The clipping can leave a few vertices that hold no area (repeated or
+               collinear boundary samples, or a sliver wound the wrong way). When what
+               is left encloses no positive area, all of the polygon is already
+               triangulated and the rest is dropped */
+            double area2, ext2;
+            uint32_t drop = (uint32_t)-1;
+            uint32_t scan2 = cur;
+            uint32_t n2;
+
+            prc_tri_ring_stats(verts, cur, remaining, &area2, &ext2);
+            if (area2 <= 1e-9 * ext2)
+            {
+                clipped_to_nothing = 1;
+                break;
+            }
+
+            /* Otherwise a vertex that lies on the line through its neighbours (a
+               repeated sample, or a point on a straight run) has no corner to cut and
+               can block its neighbours' ears; drop one without a triangle and go on */
+            for (n2 = 0; n2 < remaining; n2++)
+            {
+                double cr = prc_tri_cross(verts[verts[scan2].prev].uv, verts[scan2].uv, verts[verts[scan2].next].uv);
+
+                if (fabs(cr) <= 1e-12 * ext2)
+                {
+                    drop = scan2;
+                    break;
+                }
+                scan2 = verts[scan2].next;
+            }
+            if (drop != (uint32_t)-1)
+            {
+                uint32_t pv = verts[drop].prev;
+                uint32_t nx = verts[drop].next;
+
+                verts[pv].next = nx;
+                verts[nx].prev = pv;
+                verts[drop].removed = 1;
+                remaining--;
+                cur = nx;
+                continue;
+            }
+
+            /* Otherwise no ear anywhere in a full pass means the ring is degenerate
                or self-intersecting */
             prc_free(ctx, triangles);
             prc_error(ctx, PRC_ERROR_INTERNAL, "Failed to triangulate planar loop boundary\n");
@@ -726,12 +798,15 @@ prc_tri_earclip(prc_context *ctx, prc_tri_vertex *verts, uint32_t head,
         }
     }
 
-    triangles[tri_index++] = verts[cur].prev;
-    triangles[tri_index++] = cur;
-    triangles[tri_index++] = verts[cur].next;
+    if (!clipped_to_nothing)
+    {
+        triangles[tri_index++] = verts[cur].prev;
+        triangles[tri_index++] = cur;
+        triangles[tri_index++] = verts[cur].next;
+    }
 
     *triangles_out = triangles;
-    *num_triangles_out = ring_count - 2;
+    *num_triangles_out = tri_index / 3;
 
     return 0;
 }
@@ -1600,11 +1675,66 @@ prc_uv_point_in_polygon(prc_vec2 point, uint32_t num_verts, const prc_vec2 *vert
 }
 
 
+/* Whether the uv polygon of loop `outer` holds the first sample of loop `inner` */
+static int
+prc_planar_loop_holds(const prc_loop_samples *outer, const prc_loop_samples *inner)
+{
+    if (outer->num_samples < 4 || inner->num_samples == 0)
+        return 0;
+    return prc_uv_point_in_polygon(inner->uv_samples[0], outer->num_samples - 1, outer->uv_samples);
+}
+
+/* The index of the innermost outer loop (smallest area) that holds loop k, or
+   num_loops if none does */
+static uint32_t
+prc_planar_hole_owner(uint32_t num_loops, const prc_loop_samples *loop_samples, uint32_t k)
+{
+    uint32_t o, owner = num_loops;
+    double owner_area = 0.0;
+
+    for (o = 0; o < num_loops; o++)
+    {
+        double area;
+
+        if (o == k || !loop_samples[o].is_outer_loop || !prc_planar_loop_holds(&loop_samples[o], &loop_samples[k]))
+            continue;
+        area = fabs(prc_uv_polygon_signed_area(loop_samples[o].num_samples - 1, loop_samples[o].uv_samples));
+        if (owner == num_loops || area < owner_area)
+        {
+            owner = o;
+            owner_area = area;
+        }
+    }
+    return owner;
+}
+
+/* Marks loops by how deeply they nest in uv: a loop that an even number of other loops
+   hold is outer, one that an odd number hold is a hole in the loop just outside it.
+   This is the rule for the polygons of a planar region, where an island inside a hole
+   is a region of its own. */
+void
+prc_mark_loops_by_nesting_depth(uint32_t num_loops, prc_loop_samples *loop_samples)
+{
+    uint32_t k, o;
+
+    for (k = 0; k < num_loops; k++)
+    {
+        uint32_t depth = 0;
+
+        for (o = 0; o < num_loops; o++)
+        {
+            if (o != k && prc_planar_loop_holds(&loop_samples[o], &loop_samples[k]))
+                depth++;
+        }
+        loop_samples[k].is_outer_loop = (depth % 2 == 0) ? 1 : 0;
+    }
+}
+
 /* Triangulates a planar face whose loops make more than one region: each loop
    marked outer is triangulated with the loops inside it as its holes, and the
    pieces are joined. With a single outer loop this is prc_triangulate_planar_loops.
-   (A loop inside a hole, an island, is given to the outer loop that holds it
-   and so is treated as a hole too.) */
+   A hole goes to the innermost outer loop that holds it, so an outer loop inside
+   a hole (an island) is a region of its own. */
 int
 prc_triangulate_planar_regions(prc_context *ctx, uint32_t num_loops, prc_loop_samples *loop_samples,
     prc_vec2 **verts_out, uint32_t *num_verts_out,
@@ -1656,12 +1786,10 @@ prc_triangulate_planar_regions(prc_context *ctx, uint32_t num_loops, prc_loop_sa
         subset[0] = loop_samples[o];
         for (k = 0; k < num_loops; k++)
         {
-            /* A hole belongs to the outer loop whose polygon holds its first sample */
+            /* A hole belongs to the innermost outer loop whose polygon holds its first sample */
             if (k == o || loop_samples[k].is_outer_loop || loop_samples[k].num_samples == 0)
                 continue;
-            if (loop_samples[o].num_samples > 3 &&
-                prc_uv_point_in_polygon(loop_samples[k].uv_samples[0],
-                    loop_samples[o].num_samples - 1, loop_samples[o].uv_samples))
+            if (prc_planar_hole_owner(num_loops, loop_samples, k) == o)
                 subset[n++] = loop_samples[k];
         }
         code = prc_triangulate_planar_loops(ctx, n, subset,
@@ -3196,7 +3324,13 @@ prc_tessellate_trimmed_face(prc_context *ctx, prc_data *data, uint32_t shell_ind
         idx++;
     }
 
-    code = prc_triangulate_planar_loops(ctx, combined_num_loops, combined_loops,
+    /* The outline the grid leaves round a trimmed region, and the outline of any hole in
+       it, nest inside the face's outer loop and inside each other: the fringe polygons are
+       the rings between consecutive levels, not one outer loop with every other loop a hole */
+    if (!has_wrapping_loop)
+        prc_mark_loops_by_nesting_depth(combined_num_loops, combined_loops);
+
+    code = prc_triangulate_planar_regions(ctx, combined_num_loops, combined_loops,
         &fringe_poly_verts, &fringe_poly_num_verts, &fringe_poly_triangles, &fringe_poly_num_triangles);
     prc_free(ctx, combined_loops);
     prc_free_loop_array(ctx, traced_loops, num_traced);
@@ -3211,7 +3345,7 @@ prc_tessellate_trimmed_face(prc_context *ctx, prc_data *data, uint32_t shell_ind
         prc_free(ctx, grid.verts);
         prc_free(ctx, cell_inside);
         prc_free(ctx, kept_triangles);
-        prc_error(ctx, code, "Failed in prc_triangulate_planar_loops\n");
+        prc_error(ctx, code, "Failed in prc_triangulate_planar_regions\n");
         return code;
     }
 
@@ -4141,6 +4275,68 @@ prc_unwrap_closed_nurbs_loop(prc_loop_samples *loop_samples, uint32_t loop_idx,
     }
 }
 
+/* A band of a surface that is periodic on both axes (a torus) is bounded by two loops that
+   each wind once round the same axis, one winding the opposite way to the other. The side test
+   (prc_wrapping_loop_side) takes the positive one to bound the band from below on the other
+   axis and the negative one from above, so the band is the stretch from one to the other, and
+   the two must be written as one stretch of that axis, inside the grid's domain [0, period).
+   Each loop's other-axis coordinate was reduced on its own, so one can come out below 0 and
+   the other at 0, which is not a stretch of the domain at all and keeps no grid point. This
+   moves the lower loop into [0, period) and lifts the upper one by whole periods until it is
+   not below it. Only a pair is handled; any other number of such loops is left as it is.
+   loops_wind_u says which axis the loops wind round; period is that of the other axis. */
+static void
+prc_lift_wrapping_band(prc_loop_samples *loop_samples, uint32_t num_loops, int loops_wind_u, double period)
+{
+    uint32_t k, j;
+    uint32_t lower = num_loops, upper = num_loops;
+    uint32_t count = 0;
+    double b_lower, b_upper, shift_lower, shift_upper;
+
+    if (period <= 0.0)
+        return;
+
+    for (k = 0; k < num_loops; k++)
+    {
+        int32_t along = loops_wind_u ? loop_samples[k].wind_u : loop_samples[k].wind_v;
+        int32_t across = loops_wind_u ? loop_samples[k].wind_v : loop_samples[k].wind_u;
+
+        if (along == 0 || across != 0 || loop_samples[k].num_samples == 0)
+            continue;
+        count++;
+        if (along > 0)
+            lower = k;
+        else
+            upper = k;
+    }
+    if (count != 2 || lower == num_loops || upper == num_loops)
+        return;
+
+    b_lower = loops_wind_u ? loop_samples[lower].uv_samples[0].y : loop_samples[lower].uv_samples[0].x;
+    b_upper = loops_wind_u ? loop_samples[upper].uv_samples[0].y : loop_samples[upper].uv_samples[0].x;
+
+    shift_lower = -period * floor(b_lower / period);
+    b_lower += shift_lower;
+    shift_upper = period * ceil((b_lower - b_upper - 1e-9) / period);
+    if (shift_lower == 0.0 && shift_upper == 0.0)
+        return;
+
+    for (j = 0; j < loop_samples[lower].num_samples; j++)
+    {
+        if (loops_wind_u)
+            loop_samples[lower].uv_samples[j].y += shift_lower;
+        else
+            loop_samples[lower].uv_samples[j].x += shift_lower;
+    }
+    for (j = 0; j < loop_samples[upper].num_samples; j++)
+    {
+        if (loops_wind_u)
+            loop_samples[upper].uv_samples[j].y += shift_upper;
+        else
+            loop_samples[upper].uv_samples[j].x += shift_upper;
+    }
+}
+
 /* Based upon surface type, map the 3D points to the UV surface storing
    the values in loop_samples structure. At this point, the loops are samples of
    the path in 3D space on the surface. We will move this to the uv parametric
@@ -4583,6 +4779,10 @@ prc_map_loops_to_surface(prc_context *ctx, prc_topo_face *topo_face, uint8_t ori
 #endif
             }
         }
+
+        /* Two loops that each go once round the torus bound a band of it */
+        prc_lift_wrapping_band(loop_samples, num_loops, 1, 2.0 * PRC_PI / fabs(v_coeff_a));
+        prc_lift_wrapping_band(loop_samples, num_loops, 0, 2.0 * PRC_PI / fabs(u_coeff_a));
 #ifdef PRC_DEBUG_TORUS_TRIM
         fprintf(stderr, "=== TORUS UV MAPPING DEBUG ===\n");
         fprintf(stderr, "Torus major_radius=%.6f, minor_radius=%.6f, has_transform=%u, is_identity=%u\n",
